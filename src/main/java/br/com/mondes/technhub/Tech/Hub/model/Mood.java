@@ -5,7 +5,9 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.springframework.data.annotation.CreatedDate;
 
+import java.time.LocalDateTime;
 import java.util.Date;
 
 @Getter
@@ -20,8 +22,9 @@ public class Mood {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @CreatedDate
     @Column(nullable = false)
-    private Date dataRegistro;
+    private LocalDateTime createdAt;
 
     @Column(nullable = false)
     private int humor; // 1 (ruim) a 5 (ótimo)
@@ -30,5 +33,4 @@ public class Mood {
     @JoinColumn(name = "pessoa_id")
     private Pessoa pessoa;
 
-    // Getters, setters e construtores omitidos por brevidade
 }

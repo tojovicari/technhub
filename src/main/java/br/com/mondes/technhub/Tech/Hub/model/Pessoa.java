@@ -5,8 +5,10 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.springframework.data.annotation.CreatedDate;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 
 @Getter
 @Setter
@@ -20,6 +22,10 @@ public class Pessoa {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @CreatedDate
+    @Column(nullable = false)
+    private LocalDateTime createdAt;
+
     @Column(nullable = false, length = 50)
     private String nome;
 
@@ -32,6 +38,4 @@ public class Pessoa {
     @ManyToOne
     @JoinColumn(name = "team_id")
     private Team team;
-
-    // Getters, setters e construtores omitidos por brevidade
 }

@@ -1,0 +1,9 @@
+br/com/mondes/technhub/Tech/Hub/model/Tarefa.class
+br/com/mondes/technhub/Tech/Hub/model/Projeto.class
+br/com/mondes/technhub/Tech/Hub/model/Pessoa.class
+br/com/mondes/technhub/Tech/Hub/TechHubApplication.class
+br/com/mondes/technhub/Tech/Hub/model/Impacto.class
+br/com/mondes/technhub/Tech/Hub/model/Team.class
+br/com/mondes/technhub/Tech/Hub/model/Mood.class
+br/com/mondes/technhub/Tech/Hub/model/Meeting.class
+br/com/mondes/technhub/Tech/Hub/model/Risco.class

@@ -37,8 +37,6 @@ public class Impacto {
     private boolean liderançaInformal;
 
     @ManyToOne
-    @JoinColumn(name = "risco_id")
-    private Risco risco;
-
-    // Getters, setters e construtores omitidos por brevidade
+    @JoinColumn(name = "pessoa_id")
+    private Pessoa pessoa;
 }

@@ -7,7 +7,10 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.springframework.data.annotation.CreatedDate;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Set;
 
 @Getter
 @Setter
@@ -15,7 +18,7 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 
 @Entity
-public class Risco {
+public class Projeto {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -25,17 +28,22 @@ public class Risco {
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 50)
+    private String nome;
+
+    @Column(nullable = false, length = 255)
     private String descricao;
 
     @Column(nullable = false)
-    private int probabilidade; // 1% a 100%
+    private LocalDate dataPrevista;
 
     @Column(nullable = false)
-    private int riscoSaida; // 1 (baixo) a 5 (muito alto)
+    private LocalDate dataRealizada;
 
-    @ManyToOne
-    @JoinColumn(name = "pessoa_id")
-    private Pessoa pessoa;
+    @Column(nullable = false)
+    private String status; // A definir (ex: Aberto, Em Andamento, Concluído, Cancelado)
+
+    @OneToMany(mappedBy = "projeto")
+    private Set<Tarefa> tarefas = new HashSet<>();
 
 }

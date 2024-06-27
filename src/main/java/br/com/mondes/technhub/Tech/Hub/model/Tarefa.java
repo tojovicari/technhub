@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.springframework.data.annotation.CreatedDate;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 @Getter
@@ -15,7 +16,7 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 
 @Entity
-public class Risco {
+public class Tarefa {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -25,17 +26,27 @@ public class Risco {
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 50)
+    private String titulo;
+
+    @Column(nullable = false, length = 255)
     private String descricao;
 
     @Column(nullable = false)
-    private int probabilidade; // 1% a 100%
+    private LocalDate dataPrevista;
 
     @Column(nullable = false)
-    private int riscoSaida; // 1 (baixo) a 5 (muito alto)
+    private LocalDate dataRealizada;
+
+    @Column(nullable = false)
+    private String status; // A definir (ex: Pendente, Em Andamento, Concluído, Cancelado)
 
     @ManyToOne
-    @JoinColumn(name = "pessoa_id")
-    private Pessoa pessoa;
+    @JoinColumn(name = "responsavel_id")
+    private Pessoa responsavel;
+
+    @ManyToOne
+    @JoinColumn(name = "projeto_id")
+    private Projeto projeto;
 
 }

@@ -5,7 +5,9 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.springframework.data.annotation.CreatedDate;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Getter
@@ -26,8 +28,10 @@ public class Team {
     @Column(nullable = false, length = 10)
     private String sigla;
 
-    @OneToMany(mappedBy = "time")
+    @OneToMany(mappedBy = "team")
     private List<Pessoa> pessoas;
 
-    // Getters, setters e construtores omitidos por brevidade
+    @CreatedDate
+    @Column(nullable = false)
+    private LocalDateTime createdAt;
 }
