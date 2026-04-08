@@ -48,6 +48,7 @@ Regra obrigatoria de boundary: modulos trocam dados somente por contratos versio
 - Ponto de entrada único para todos os clientes
 - Responsável por: autenticação (JWT/OAuth2), rate limiting, roteamento, logging centralizado
 - **Não contém lógica de negócio**
+- Executa validacao inicial de tenant e claims obrigatorias (`tenant_id`, `roles`, `permission_profile_ids`)
 
 ### 2. Integration Module
 - Responsável por toda comunicação com sistemas externos (JIRA, GitHub e futuros)
@@ -113,6 +114,27 @@ Regra obrigatoria de boundary: modulos trocam dados somente por contratos versio
 [API Gateway] ← polling ou push (SSE/WebSocket) → [Web App]
 ```
 
+## Fluxo de Autorizacao (Backend)
+
+```text
+Request -> API Gateway
+     -> valida JWT + tenant_id ativo
+     -> roteia para modulo dono
+Modulo dono
+     -> carrega permissoes efetivas (roles + profiles)
+     -> aplica policy RBAC/ABAC
+     -> aplica filtro tenant/team na query
+     -> permite ou retorna 403
+```
+
+Regras obrigatorias:
+- Nenhuma rota de escrita sem verificacao de permissao no backend
+- Nenhuma query sem predicado de tenant
+- Dados financeiros detalhados exigem permissao explicita (`cogs.read.detailed`)
+
+Contrato de referencia:
+- `docs/openapi/authorization-policy-v1.yaml`
+
 ---
 
 ## Decisões Arquiteturais
@@ -125,6 +147,7 @@ Regra obrigatoria de boundary: modulos trocam dados somente por contratos versio
 | Sync strategy | Pull + Push | Pull garante consistência; Push garante baixa latência |
 | Aggregations | Materialized views + async jobs | Evita queries pesadas em tempo real |
 | Multi-tenancy | Row-level security (por Team/Org) | Isolamento sem necessidade de múltiplos bancos |
+| Authorization model | RBAC + Permission Profiles + ABAC | Controle granular com governanca por tenant |
 
 ---
 

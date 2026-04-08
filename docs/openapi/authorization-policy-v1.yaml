@@ -1,0 +1,384 @@
+openapi: 3.0.3
+info:
+  title: CTO.ai Authorization Policy API
+  version: 1.0.0
+  description: |
+    Cross-module authorization contract for backend enforcement.
+    Defines policy simulation and route permission bindings for Core, SLA, Metrics, COGS, Integrations and IAM.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Authorization
+
+paths:
+  /authorization/policies/evaluate:
+    post:
+      tags: [Authorization]
+      summary: Evaluate if a subject can perform an action on a resource
+      operationId: evaluatePolicy
+      description: |
+        Backend policy engine endpoint (for services and admin tooling).
+        Must enforce tenant isolation before role/profile evaluation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyEvaluationRequest'
+      responses:
+        '200':
+          description: Policy evaluated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyEvaluationResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /authorization/routes/bindings:
+    get:
+      tags: [Authorization]
+      summary: List route-level permission bindings
+      operationId: listRouteBindings
+      parameters:
+        - in: query
+          name: module
+          required: false
+          schema:
+            type: string
+            enum: [iam, integrations, core, sla, metrics, cogs, dashboard]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteBindingsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /authorization/routes/bindings/{binding_id}:
+    patch:
+      tags: [Authorization]
+      summary: Update route binding metadata (admin use)
+      operationId: updateRouteBinding
+      parameters:
+        - in: path
+          name: binding_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRouteBindingRequest'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteBindingResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Binding not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            data: null
+            meta:
+              request_id: req_unauth
+              version: v1
+              timestamp: '2026-04-08T12:00:00Z'
+            error:
+              code: UNAUTHORIZED
+              message: Invalid or expired token
+    Forbidden:
+      description: Policy denied (permission, tenant, or scope)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            data: null
+            meta:
+              request_id: req_forbidden
+              version: v1
+              timestamp: '2026-04-08T12:00:00Z'
+            error:
+              code: FORBIDDEN
+              message: You do not have permission for this resource
+              details:
+                required_permission: core.task.write.team
+                reason: tenant_mismatch
+
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, version, timestamp]
+      properties:
+        request_id:
+          type: string
+        version:
+          type: string
+          example: v1
+        timestamp:
+          type: string
+          format: date-time
+
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    ErrorResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          nullable: true
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+
+    PolicyContext:
+      type: object
+      required: [subject_id, tenant_id]
+      properties:
+        subject_id:
+          type: string
+        tenant_id:
+          type: string
+        org_id:
+          type: string
+        team_ids:
+          type: array
+          items:
+            type: string
+        roles:
+          type: array
+          items:
+            type: string
+        permission_profile_ids:
+          type: array
+          items:
+            type: string
+
+    ResourceContext:
+      type: object
+      required: [resource_type, resource_id, tenant_id]
+      properties:
+        resource_type:
+          type: string
+          example: task
+        resource_id:
+          type: string
+        tenant_id:
+          type: string
+        team_id:
+          type: string
+        owner_id:
+          type: string
+        attributes:
+          type: object
+          additionalProperties: true
+
+    PolicyEvaluationRequest:
+      type: object
+      required: [action, required_permissions, subject, resource]
+      properties:
+        action:
+          type: string
+          example: core.task.update
+        required_permissions:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            example: core.task.write.team
+        any_of:
+          type: boolean
+          description: If true, any required permission grants access; else all required permissions are required.
+          default: true
+        subject:
+          $ref: '#/components/schemas/PolicyContext'
+        resource:
+          $ref: '#/components/schemas/ResourceContext'
+
+    PolicyEvaluationResult:
+      type: object
+      required: [allowed, decision]
+      properties:
+        allowed:
+          type: boolean
+        decision:
+          type: string
+          enum: [allow, deny]
+        reason:
+          type: string
+          enum: [granted, missing_permission, tenant_mismatch, scope_violation, resource_not_found]
+        granted_by:
+          type: string
+          enum: [role, permission_profile, direct_permission, none]
+        missing_permissions:
+          type: array
+          items:
+            type: string
+        matched_policies:
+          type: array
+          items:
+            type: string
+            example: core.task.write.team.policy.v1
+
+    PolicyEvaluationResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          $ref: '#/components/schemas/PolicyEvaluationResult'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    RouteBinding:
+      type: object
+      required: [id, module, method, path, tenant_enforced, required_permissions, any_of]
+      properties:
+        id:
+          type: string
+        module:
+          type: string
+          enum: [iam, integrations, core, sla, metrics, cogs, dashboard]
+        method:
+          type: string
+          enum: [GET, POST, PATCH, PUT, DELETE]
+        path:
+          type: string
+          example: /api/v1/core/tasks/{task_id}
+        tenant_enforced:
+          type: boolean
+        required_permissions:
+          type: array
+          items:
+            type: string
+        any_of:
+          type: boolean
+        abac_rules:
+          type: array
+          items:
+            type: string
+            example: task.tenant_id == ctx.tenant_id
+        active:
+          type: boolean
+
+    RouteBindingResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          $ref: '#/components/schemas/RouteBinding'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    RouteBindingsResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/RouteBinding'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    UpdateRouteBindingRequest:
+      type: object
+      properties:
+        required_permissions:
+          type: array
+          items:
+            type: string
+        any_of:
+          type: boolean
+        abac_rules:
+          type: array
+          items:
+            type: string
+        active:
+          type: boolean
+
+x-authorization-reference-bindings:
+  - id: rb_core_task_patch
+    module: core
+    method: PATCH
+    path: /api/v1/core/tasks/{task_id}
+    tenant_enforced: true
+    required_permissions:
+      - core.task.write
+      - core.task.write.team
+    any_of: true
+    abac_rules:
+      - task.tenant_id == ctx.tenant_id
+      - task.team_id in ctx.team_ids
+    active: true
+
+  - id: rb_cogs_detailed_read
+    module: cogs
+    method: GET
+    path: /api/v1/cogs/projects/{project_id}/summary
+    tenant_enforced: true
+    required_permissions:
+      - cogs.read.aggregated
+    any_of: true
+    abac_rules:
+      - project.tenant_id == ctx.tenant_id
+    active: true
+
+  - id: rb_integration_rotate_secret
+    module: integrations
+    method: PUT
+    path: /api/v1/integrations/connections/{connection_id}/secrets
+    tenant_enforced: true
+    required_permissions:
+      - integrations.connection.secret.rotate
+    any_of: true
+    abac_rules:
+      - connection.tenant_id == ctx.tenant_id
+    active: true

@@ -24,6 +24,25 @@ Org / Tenant
 
 ## Entidades
 
+### Tenant
+
+Representa um cliente isolado no sistema (fronteira principal de seguranca de dados).
+
+| Campo              | Tipo        | Descrição                                      |
+|--------------------|-------------|------------------------------------------------|
+| `id`               | UUID        | Identificador do tenant                        |
+| `name`             | string      | Nome do cliente/empresa                        |
+| `slug`             | string      | Chave unica para roteamento e contexto         |
+| `status`           | enum        | `active` \| `suspended` \| `archived`         |
+| `settings`         | JSONB       | Configuracoes do tenant                        |
+| `created_at`       | timestamp   |                                                |
+
+Regras:
+- Entidades de dominio devem estar vinculadas a um `tenant_id`.
+- Nao existe compartilhamento de registros entre tenants.
+
+---
+
 ### User
 
 Representa uma pessoa unificada entre JIRA e GitHub.
@@ -42,6 +61,7 @@ Representa uma pessoa unificada entre JIRA e GitHub.
 | `start_date`       | date        | Início na empresa                                |
 | `is_active`        | boolean     | Se está ativo                                    |
 | `team_ids`         | UUID[]      | Times que pertence                               |
+| `tenant_id`        | UUID        | FK -> Tenant                                      |
 
 **Regras:**
 - Unificação JIRA ↔ GitHub feita por `email` — campos de identity externos são opcionais
@@ -63,6 +83,7 @@ Agrupador de pessoas. Pode refletir o agrupamento da integração (JIRA project 
 | `project_ids`      | UUID[]      | Projetos sob responsabilidade do time |
 | `budget_quarterly` | decimal?    | Budget trimestral (para alertas COGS) |
 | `tags`             | string[]    | backend, platform, mobile, etc.       |
+| `tenant_id`        | UUID        | FK -> Tenant                           |
 
 ---
 
@@ -84,6 +105,7 @@ Unidade principal de organização. Mapeia para um JIRA Project e/ou repositóri
 | `sync_config`      | JSONB       | Frequência e opções de sync por connector      |
 | `custom_fields`    | JSONB       | Campos adicionais (flexível)                   |
 | `tags`             | string[]    |                                                |
+| `tenant_id`        | UUID        | FK -> Tenant                                   |
 
 ---
 
@@ -111,6 +133,7 @@ Agrupador temático de tasks. Representa uma iniciativa ou feature maior.
 | `actual_hours`       | decimal     | Calculado (soma das tasks)                       |
 | `actual_cost`        | decimal     | Calculado (soma dos COGS entries)                |
 | `health_score`       | decimal?    | 0–100, calculado pelo Analytics Engine           |
+| `tenant_id`          | UUID        | FK -> Tenant                                     |
 
 ---
 
@@ -145,6 +168,55 @@ Unidade de trabalho. Mapeia para uma JIRA Issue ou GitHub Issue/PR.
 | `related_pr_ids`   | string[]    | Hashes/números de PRs correlacionados (GitHub)             |
 | `tags`             | string[]    |                                                            |
 | `custom_fields`    | JSONB       |                                                            |
+| `tenant_id`        | UUID        | FK -> Tenant                                               |
+
+---
+
+### Permission
+
+Catalogo de permissoes atomicas do backend.
+
+| Campo              | Tipo        | Descrição                                      |
+|--------------------|-------------|------------------------------------------------|
+| `id`               | UUID        |                                                |
+| `key`              | string      | Ex: `core.task.write.team`                     |
+| `module`           | enum        | `iam` \| `core` \| `sla` \| `metrics` \| `cogs` |
+| `action`           | string      | read, write, delete, admin                     |
+| `scope_type`       | enum        | `tenant` \| `team` \| `project` \| `own`     |
+| `is_active`        | boolean     |                                                |
+
+---
+
+### PermissionProfile
+
+Grupo reutilizavel de permissoes, definido por tenant, para associacao rapida a usuarios.
+
+| Campo              | Tipo        | Descrição                                      |
+|--------------------|-------------|------------------------------------------------|
+| `id`               | UUID        |                                                |
+| `tenant_id`        | UUID        | FK -> Tenant                                   |
+| `name`             | string      | Ex: "Manager Operacional"                      |
+| `description`      | string?     |                                                |
+| `permission_keys`  | string[]    | Lista de permissoes atomicas                   |
+| `is_system`        | boolean     | Perfil padrao do sistema                       |
+| `is_active`        | boolean     |                                                |
+| `created_at`       | timestamp   |                                                |
+
+---
+
+### UserPermissionProfile
+
+Associacao N:N entre usuario e perfis de permissao no escopo do tenant.
+
+| Campo                  | Tipo        | Descrição                                  |
+|------------------------|-------------|--------------------------------------------|
+| `id`                   | UUID        |                                            |
+| `tenant_id`            | UUID        | FK -> Tenant                               |
+| `user_id`              | UUID        | FK -> User                                 |
+| `permission_profile_id`| UUID        | FK -> PermissionProfile                    |
+| `granted_by`           | UUID        | FK -> User (quem concedeu)                 |
+| `granted_at`           | timestamp   |                                            |
+| `expires_at`           | timestamp?  | Opcional para concessoes temporarias       |
 
 ---
 

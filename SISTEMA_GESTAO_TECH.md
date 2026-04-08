@@ -643,6 +643,14 @@ Payload exemplo (criar conexao):
 }
 ```
 
+Politica de credenciais para Integracoes:
+
+- Preferencia por `secret_ref` (Vault/KMS externo).
+- Quando armazenado no banco: apenas cifrado (AES-256-GCM + envelope encryption com KMS).
+- Campos de segredo sempre `writeOnly` em contratos API.
+- Rotacao de segredo por endpoint dedicado e auditado.
+- Proibido endpoint de leitura de segredo em texto plano.
+
 Evento publicado para Core:
 
 ```json
@@ -838,6 +846,8 @@ Nao pode persistir ou alterar dados de dominio.
 
 ## 13. Permissoes e Roles (RBAC + Escopo)
 
+Principio: toda requisicao e avaliada no contexto de tenant. Nao existe acesso cross-tenant.
+
 ### 13.1 Roles sugeridas
 
 - `org_admin`: governanca global, configuracao de modulos, acesso financeiro completo
@@ -847,6 +857,14 @@ Nao pode persistir ou alterar dados de dominio.
 - `engineer`: leitura/escrita restrita ao proprio escopo de trabalho
 - `finance_analyst`: leitura COGS e relatórios financeiros
 - `viewer`: somente leitura de dashboards permitidos
+
+### 13.1.1 Isolamento por Tenant (cliente)
+
+- Cada cliente e um `tenant_id` isolado logicamente.
+- Todo dado de dominio deve carregar `tenant_id` (ou `org_id` equivalente).
+- Toda consulta backend aplica filtro obrigatorio por tenant antes de qualquer outra regra.
+- Tokens de acesso devem conter `tenant_id` ativo; requisicao sem tenant valido retorna `403`.
+- Integracoes externas sao configuradas por tenant (nunca compartilhadas entre clientes).
 
 ### 13.2 Matriz de permissao por modulo (resumo)
 
@@ -867,19 +885,96 @@ Legenda: `RW` leitura e escrita, `R` somente leitura, `-` sem acesso.
 - Escopo por tenant/org e por team (`team_id`) em todas as queries.
 - Row-Level Security para dados sensiveis (principalmente COGS).
 - Auditoria de acesso para endpoints financeiros e administrativos.
-- Tokens JWT com claims: `sub`, `org_id`, `team_ids`, `roles`, `permissions_version`.
+- Tokens JWT com claims: `sub`, `tenant_id`, `org_id`, `team_ids`, `roles`, `permission_profile_ids`, `permissions_version`.
 
 Payload exemplo (claims JWT):
 
 ```json
 {
   "sub": "usr_8",
+  "tenant_id": "ten_1",
   "org_id": "org_1",
   "team_ids": ["team_a", "team_b"],
   "roles": ["tech_manager"],
+  "permission_profile_ids": ["pp_manager_default"],
   "permissions_version": 3
 }
 ```
+
+### 13.3.1 Perfis de Permissao (Permission Profiles)
+
+Perfis permitem criar grupos reutilizaveis de permissoes e associar a usuarios.
+
+- Entidade `PermissionProfile`
+  - `id`, `tenant_id`, `name`, `description`, `permissions[]`, `is_system`, `is_active`
+- Entidade `UserPermissionProfile`
+  - `user_id`, `tenant_id`, `permission_profile_id`, `granted_by`, `granted_at`
+
+Exemplo de perfil:
+
+```json
+{
+  "id": "pp_manager_default",
+  "tenant_id": "ten_1",
+  "name": "Manager Operacional",
+  "permissions": [
+    "core.task.read",
+    "core.task.write.team",
+    "sla.template.read",
+    "sla.instance.write",
+    "metrics.read.team",
+    "cogs.read.aggregated"
+  ],
+  "is_active": true
+}
+```
+
+APIs de administracao de perfis:
+
+- `POST /api/v1/iam/permission-profiles`
+- `PATCH /api/v1/iam/permission-profiles/{profile_id}`
+- `POST /api/v1/iam/users/{user_id}/permission-profiles`
+- `DELETE /api/v1/iam/users/{user_id}/permission-profiles/{profile_id}`
+
+### 13.3.2 Bloqueio Obrigatorio no Backend
+
+Nao confiar apenas no front-end. Toda rota protegida deve validar tenant + permissao no backend.
+
+Fluxo minimo por request:
+
+1. Validar token e extrair `tenant_id`, `sub`, `roles`, `permission_profile_ids`.
+2. Resolver permissoes efetivas (roles + perfis ativos no tenant).
+3. Aplicar policy por recurso/acao (RBAC + ABAC).
+4. Aplicar filtro de tenant/team na query.
+5. Se negar, responder `403 FORBIDDEN` com `required_permission`.
+
+Contrato OpenAPI transversal de autorizacao:
+
+- `docs/openapi/authorization-policy-v1.yaml`
+  - define avaliacao de policy (`/authorization/policies/evaluate`)
+  - define bindings de rota para permissoes (`/authorization/routes/bindings`)
+  - padroniza erro `403` e motivo da negacao (`tenant_mismatch`, `missing_permission`, etc.)
+
+Exemplo de policy binding (conceitual):
+
+```yaml
+route: PATCH /api/v1/core/tasks/{task_id}
+required_permissions:
+  - core.task.write
+  - core.task.write.team
+abac:
+  - task.tenant_id == ctx.tenant_id
+  - task.team_id in ctx.team_ids
+```
+
+Eventos de auditoria recomendados:
+
+- `iam.access.granted.v1`
+- `iam.access.denied.v1`
+- `iam.permission_profile.assigned.v1`
+- `iam.permission_profile.revoked.v1`
+- `integrations.secret.rotated.v1`
+- `integrations.secret.access.denied.v1`
 
 ### 13.4 Modelo de Policy (ABAC complementar)
 

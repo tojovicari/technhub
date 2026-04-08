@@ -41,6 +41,78 @@ O modulo de Integracoes publica dados para outros modulos por contratos versiona
 
 ---
 
+## Secrets e Chaves de API (Armazenamento Seguro)
+
+Quando o uso de `secret_ref` externo nao for possivel, o modulo pode armazenar credenciais no banco com protecao obrigatoria.
+
+### Regras obrigatorias
+
+- Secrets nunca em texto plano no banco
+- Secrets nunca retornam em respostas de API (campos `writeOnly`)
+- Secrets nunca aparecem em logs, traces ou mensagens de erro
+- Acesso de leitura de segredo restrito ao worker de integracoes em runtime
+
+### Estrategia recomendada (DB encrypted)
+
+1. Gerar DEK por registro de segredo
+2. Criptografar segredo com AES-256-GCM usando DEK
+3. Criptografar DEK com KMS/HSM (envelope encryption)
+4. Persistir no banco apenas:
+   - `ciphertext`
+   - `dek_encrypted`
+   - `key_id`
+   - `algo`
+   - `nonce`
+   - `tag`
+   - `rotated_at`
+5. Decriptar apenas em memoria volatil durante a chamada ao provider
+
+### Modelo de tabela sugerido
+
+```text
+integration_secrets
+- id
+- tenant_id
+- connection_id
+- secret_type
+- ciphertext (bytea)
+- dek_encrypted (bytea)
+- key_id
+- algo (aes-256-gcm)
+- nonce
+- auth_tag
+- version
+- rotated_at
+- created_at
+```
+
+### Rotacao e higiene operacional
+
+- Rotacao manual via `PUT /api/v1/integrations/connections/{connection_id}/secrets`
+- Rotacao automatica periodica (ex.: 90 dias)
+- Revogacao imediata em incidente
+- Sanitizacao de memoria apos uso (best effort)
+
+### Auditoria e deteccao de vazamento
+
+- Eventos de auditoria:
+  - `integrations.secret.created.v1`
+  - `integrations.secret.rotated.v1`
+  - `integrations.secret.access.denied.v1`
+- DLP em logs para bloquear padroes de token/chave
+- Alertas para tentativa de leitura nao autorizada
+
+### Politica de API
+
+- Endpoint de leitura de segredo bruto: proibido
+- Endpoints retornam apenas metadados:
+  - `secret_strategy`
+  - `secret_last_rotated_at`
+  - `secret_version`
+  - `secret_health`
+
+---
+
 ## Arquitetura do Módulo
 
 ```

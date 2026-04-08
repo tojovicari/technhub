@@ -1,0 +1,312 @@
+openapi: 3.0.3
+info:
+  title: CTO.ai IAM API
+  version: 1.0.0
+  description: Tenant-scoped IAM for roles, permission profiles, and user assignments.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: IAM
+paths:
+  /iam/permission-profiles:
+    post:
+      tags: [IAM]
+      summary: Create permission profile
+      operationId: createPermissionProfile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePermissionProfileRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionProfileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /iam/permission-profiles/{profile_id}:
+    patch:
+      tags: [IAM]
+      summary: Update permission profile
+      operationId: updatePermissionProfile
+      parameters:
+        - in: path
+          name: profile_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePermissionProfileRequest'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PermissionProfileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Not found
+
+  /iam/users/{user_id}/permission-profiles:
+    post:
+      tags: [IAM]
+      summary: Assign permission profile to user
+      operationId: assignPermissionProfile
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignPermissionProfileRequest'
+      responses:
+        '201':
+          description: Assigned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPermissionProfileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: User or profile not found
+
+  /iam/users/{user_id}/permission-profiles/{profile_id}:
+    delete:
+      tags: [IAM]
+      summary: Revoke permission profile from user
+      operationId: revokePermissionProfile
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: profile_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Revoked
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Assignment not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Missing/invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            data: null
+            meta:
+              request_id: req_unauth
+              version: v1
+              timestamp: '2026-04-08T12:00:00Z'
+            error:
+              code: UNAUTHORIZED
+              message: Invalid or expired token
+    Forbidden:
+      description: Missing permission or tenant mismatch
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            data: null
+            meta:
+              request_id: req_forbidden
+              version: v1
+              timestamp: '2026-04-08T12:00:00Z'
+            error:
+              code: FORBIDDEN
+              message: You do not have permission for this resource
+              details:
+                required_permission: iam.permission_profile.assign
+
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, version, timestamp]
+      properties:
+        request_id:
+          type: string
+        version:
+          type: string
+          example: v1
+        timestamp:
+          type: string
+          format: date-time
+
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    ErrorResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          nullable: true
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+
+    CreatePermissionProfileRequest:
+      type: object
+      required: [tenant_id, name, permission_keys]
+      properties:
+        tenant_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        permission_keys:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        is_active:
+          type: boolean
+          default: true
+
+    UpdatePermissionProfileRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        permission_keys:
+          type: array
+          items:
+            type: string
+        is_active:
+          type: boolean
+
+    PermissionProfile:
+      type: object
+      required: [id, tenant_id, name, permission_keys, is_active]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        permission_keys:
+          type: array
+          items:
+            type: string
+        is_system:
+          type: boolean
+        is_active:
+          type: boolean
+
+    PermissionProfileResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          $ref: '#/components/schemas/PermissionProfile'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    AssignPermissionProfileRequest:
+      type: object
+      required: [tenant_id, permission_profile_id]
+      properties:
+        tenant_id:
+          type: string
+        permission_profile_id:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+
+    UserPermissionProfile:
+      type: object
+      required: [id, tenant_id, user_id, permission_profile_id, granted_by, granted_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        permission_profile_id:
+          type: string
+        granted_by:
+          type: string
+        granted_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    UserPermissionProfileResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          $ref: '#/components/schemas/UserPermissionProfile'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true

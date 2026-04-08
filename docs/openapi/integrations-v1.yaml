@@ -1,0 +1,315 @@
+openapi: 3.0.3
+info:
+  title: CTO.ai Integrations API
+  version: 1.0.0
+  description: Tenant-scoped integration connections and sync jobs with secure secret handling.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Integrations
+paths:
+  /integrations/connections:
+    post:
+      tags: [Integrations]
+      summary: Create integration connection
+      operationId: createIntegrationConnection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConnectionRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /integrations/connections/{connection_id}/secrets:
+    put:
+      tags: [Integrations]
+      summary: Set or rotate provider credentials (write-only)
+      operationId: rotateConnectionSecret
+      description: Secret values are never returned in API responses.
+      parameters:
+        - in: path
+          name: connection_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateSecretRequest'
+      responses:
+        '204':
+          description: Secret rotated
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Connection not found
+
+  /integrations/sync-jobs:
+    post:
+      tags: [Integrations]
+      summary: Trigger sync job
+      operationId: createSyncJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSyncJobRequest'
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJobResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /integrations/sync-jobs/{job_id}:
+    get:
+      tags: [Integrations]
+      summary: Get sync job status
+      operationId: getSyncJob
+      parameters:
+        - in: path
+          name: job_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncJobResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Not found
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Missing/invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Missing permission or tenant mismatch
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, version, timestamp]
+      properties:
+        request_id:
+          type: string
+        version:
+          type: string
+          example: v1
+        timestamp:
+          type: string
+          format: date-time
+
+    ErrorBody:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    ErrorResponse:
+      type: object
+      properties:
+        data:
+          nullable: true
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+
+    CreateConnectionRequest:
+      type: object
+      required: [tenant_id, provider]
+      properties:
+        tenant_id:
+          type: string
+        provider:
+          type: string
+          enum: [jira, github]
+        scope:
+          type: object
+          additionalProperties: true
+        credentials:
+          oneOf:
+            - $ref: '#/components/schemas/VaultReferenceCredential'
+            - $ref: '#/components/schemas/InlineSecretCredential'
+      description: Use vault references when available. Inline secrets are encrypted at rest by server.
+
+    VaultReferenceCredential:
+      type: object
+      required: [auth_type, secret_ref]
+      properties:
+        auth_type:
+          type: string
+          enum: [oauth2, token, app]
+        secret_ref:
+          type: string
+          example: vault://integrations/jira/tenant_1
+
+    InlineSecretCredential:
+      type: object
+      required: [auth_type]
+      properties:
+        auth_type:
+          type: string
+          enum: [oauth2, token, app]
+        client_id:
+          type: string
+        client_secret:
+          type: string
+          format: password
+          writeOnly: true
+        access_token:
+          type: string
+          format: password
+          writeOnly: true
+        refresh_token:
+          type: string
+          format: password
+          writeOnly: true
+        private_key_pem:
+          type: string
+          format: password
+          writeOnly: true
+
+    Connection:
+      type: object
+      required: [id, tenant_id, provider, status, secret_strategy]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        provider:
+          type: string
+          enum: [jira, github]
+        status:
+          type: string
+          enum: [active, disabled, error]
+        secret_strategy:
+          type: string
+          enum: [vault_ref, db_encrypted]
+        secret_last_rotated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ConnectionResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/Connection'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    RotateSecretRequest:
+      type: object
+      required: [tenant_id]
+      properties:
+        tenant_id:
+          type: string
+        credentials:
+          oneOf:
+            - $ref: '#/components/schemas/VaultReferenceCredential'
+            - $ref: '#/components/schemas/InlineSecretCredential'
+
+    CreateSyncJobRequest:
+      type: object
+      required: [tenant_id, connection_id]
+      properties:
+        tenant_id:
+          type: string
+        connection_id:
+          type: string
+        mode:
+          type: string
+          enum: [full, incremental]
+          default: incremental
+
+    SyncJob:
+      type: object
+      required: [id, tenant_id, connection_id, status, created_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        connection_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, success, failed]
+        created_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        error_summary:
+          type: string
+          nullable: true
+
+    SyncJobResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/SyncJob'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true

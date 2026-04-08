@@ -51,7 +51,11 @@ cto_ai/
     ├── dora-metrics.md         ← DORA metrics e health metrics
     ├── cogs.md                 ← custo de engenharia (COGS)
     ├── roadmap.md              ← fases e milestones do projeto
-    └── tech-stack.md           ← decisões de tecnologia
+    ├── tech-stack.md           ← decisões de tecnologia
+    └── openapi/
+        ├── iam-v1.yaml         ← contratos IAM (roles, perfis e atribuições)
+        ├── integrations-v1.yaml← contratos integrações + rotação de secrets
+        └── authorization-policy-v1.yaml ← contrato transversal de autorização backend
 ```
 
 ---
