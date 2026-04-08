@@ -23,6 +23,8 @@ Centralizar dados fragmentados (JIRA, GitHub) em uma plataforma única que forne
 - **Extensibilidade**: Novas integrações sem refatorar core
 - **Observabilidade**: Logs e métricas em cada camada
 - **Composição**: Dashboards agregam múltiplos módulos
+- **Contract-First**: Troca entre módulos apenas por contratos de API/eventos versionados
+- **Data Ownership**: Cada domínio tem dono; nenhum módulo altera dados de outro diretamente
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -41,6 +43,38 @@ Centralizar dados fragmentados (JIRA, GitHub) em uma plataforma única que forne
        ↓ Storage / Cache (DB + Redis)
 ```
 
+### 2.1 Contratos Entre Módulos (Regra de Independência)
+
+Princípio central: modulo A nao escreve em tabelas/repositorios internos do modulo B.
+Toda interoperabilidade ocorre por interfaces estaveis.
+
+- **Canal permitido 1: API Contracts**
+  - REST/GraphQL com schema versionado (`v1`, `v2`)
+  - Contrato publicado (OpenAPI/GraphQL schema)
+  - Mudancas breaking apenas com deprecacao planejada
+
+- **Canal permitido 2: Event Contracts**
+  - Eventos de dominio versionados (`task.updated.v1`, `sla.breached.v1`)
+  - Payload com schema imutavel por versao
+  - Consumidores desacoplados do storage do produtor
+
+- **Proibicoes arquiteturais**
+  - Modulo de analytics atualizar tabela transacional do modulo de entidades
+  - Modulo de dashboard fazer query direta em banco de integracoes
+  - Reuso de tabela compartilhada entre modulos sem owner definido
+
+- **Padrão de ownership sugerido**
+  - Integracoes: dados brutos externos + estado de sync
+  - Entidades/Core: modelo canonico de dominio
+  - SLAs: regras, instancias e compliance
+  - Metrics/Analytics: agregacoes e series historicas
+  - COGS: custos e consolidacoes financeiras
+
+- **Governanca de contrato**
+  - Contract tests no CI para validar produtores e consumidores
+  - Compatibility check automatica para versoes de schema
+  - Changelog de contratos por modulo
+
 ---
 
 ## 3. Fases de Implementação
@@ -53,6 +87,7 @@ Centralizar dados fragmentados (JIRA, GitHub) em uma plataforma única que forne
   - Connector GitHub (issues, PRs, commits, branches)
   - Sync automático (configurável em frequência)
   - Deduplicação de dados
+  - Publicação de eventos versionados para Core (sem acesso direto ao banco de outros módulos)
 
 - [ ] **Entidades Base**
   - Projeto (agrupador principal)
@@ -60,12 +95,14 @@ Centralizar dados fragmentados (JIRA, GitHub) em uma plataforma única que forne
   - Épico (agrupador temático)
   - Usuário (do JIRA + GitHub, com unificação)
   - Status workflow
+  - API pública do Core para consumo por outros módulos
 
 - [ ] **Dashboard MVP**
   - Overview por projeto (todo, in progress, blocked, done)
   - Sprint burndown (se JIRA ativo)
   - PRs em aberto
   - Tempo médio de resolução
+  - Consumo apenas via API/BFF (sem query direta em storage interno de outros módulos)
 
 ---
 
@@ -533,6 +570,346 @@ Semana    | Fase 1 MVP            | Fase 2 Métricas    | Fase 3 COGS      | Fas
    - [ ] Validar fluxo end-to-end JIRA → Dashboard
    - [ ] Feedback loop rápido
    - [ ] Ajustar baseando em real feedback
+
+---
+
+## 12. Backend-First: Contratos e Payloads por Modulo
+
+### 12.1 Padrao de Contrato (comum a todos os modulos)
+
+Todos os contratos backend devem seguir padrao estavel e versionado.
+
+- API versionada: `/api/v1/...`
+- Eventos versionados: `modulo.entidade.acao.v1`
+- Correlation ID obrigatorio para rastreabilidade
+- Idempotency key obrigatoria para comandos de escrita assincrona
+
+Envelope padrao de API (response):
+
+```json
+{
+  "data": {},
+  "meta": {
+    "request_id": "req_123",
+    "version": "v1",
+    "timestamp": "2026-04-08T12:00:00Z"
+  },
+  "error": null
+}
+```
+
+Envelope padrao de evento:
+
+```json
+{
+  "event_name": "core.task.created.v1",
+  "event_id": "evt_123",
+  "correlation_id": "corr_456",
+  "occurred_at": "2026-04-08T12:00:00Z",
+  "producer": "core",
+  "schema_version": 1,
+  "payload": {}
+}
+```
+
+---
+
+### 12.2 Modulo Integracoes
+
+Responsabilidade: ingestao de JIRA/GitHub e publicacao para o Core via contratos.
+
+APIs principais:
+
+- `POST /api/v1/integrations/connections`
+  - cria conexao de provider
+- `POST /api/v1/integrations/sync-jobs`
+  - dispara sync manual
+- `GET /api/v1/integrations/sync-jobs/{job_id}`
+  - retorna estado de sync
+
+Payload exemplo (criar conexao):
+
+```json
+{
+  "provider": "jira",
+  "tenant_id": "ten_1",
+  "credentials": {
+    "auth_type": "oauth2",
+    "secret_ref": "vault://integrations/jira/tenant_1"
+  },
+  "scope": {
+    "project_keys": ["AUTH", "PLAT"]
+  }
+}
+```
+
+Evento publicado para Core:
+
+```json
+{
+  "event_name": "integration.task.synced.v1",
+  "payload": {
+    "source": "jira",
+    "source_id": "AUTH-123",
+    "project_key": "AUTH",
+    "title": "Fix login timeout",
+    "status": "in_progress",
+    "assignee_email": "dev@empresa.com",
+    "updated_at": "2026-04-08T11:58:00Z"
+  }
+}
+```
+
+---
+
+### 12.3 Modulo Core (Entidades Canonicas)
+
+Responsabilidade: ownership das entidades Project, Epic, Task, User, Team.
+
+APIs principais:
+
+- `POST /api/v1/core/tasks`
+- `PATCH /api/v1/core/tasks/{task_id}`
+- `GET /api/v1/core/tasks/{task_id}`
+- `GET /api/v1/core/projects/{project_id}`
+
+Payload exemplo (criar task):
+
+```json
+{
+  "project_id": "prj_1",
+  "epic_id": "epc_10",
+  "title": "Implementar endpoint de SLA",
+  "task_type": "feature",
+  "priority": "P1",
+  "assignee_id": "usr_8",
+  "source": "manual"
+}
+```
+
+Eventos publicados:
+
+- `core.task.created.v1`
+- `core.task.updated.v1`
+- `core.task.status_changed.v1`
+- `core.epic.updated.v1`
+
+Payload exemplo (status changed):
+
+```json
+{
+  "task_id": "tsk_55",
+  "previous_status": "in_progress",
+  "new_status": "done",
+  "changed_by": "usr_8",
+  "changed_at": "2026-04-08T15:30:00Z"
+}
+```
+
+---
+
+### 12.4 Modulo SLA
+
+Responsabilidade: templates, instancias de SLA, compliance e violacoes.
+
+APIs principais:
+
+- `POST /api/v1/slas/templates`
+- `POST /api/v1/slas/instances`
+- `GET /api/v1/slas/compliance?project_id=...&window=30d`
+
+Payload exemplo (template SLA):
+
+```json
+{
+  "name": "SLA Bugs Producao",
+  "applies_to": ["bug"],
+  "rules": {
+    "P0": { "target_minutes": 120, "warning_at_percent": 80 },
+    "P1": { "target_minutes": 480, "warning_at_percent": 80 }
+  },
+  "escalation_rule": {
+    "at_risk": ["team_lead"],
+    "breached": ["team_lead", "manager"]
+  }
+}
+```
+
+Eventos publicados:
+
+- `sla.instance.created.v1`
+- `sla.task.at_risk.v1`
+- `sla.task.breached.v1`
+
+Payload exemplo (breach):
+
+```json
+{
+  "task_id": "tsk_55",
+  "sla_instance_id": "sla_i_2",
+  "target_minutes": 120,
+  "actual_minutes": 173,
+  "breach_minutes": 53,
+  "project_id": "prj_1"
+}
+```
+
+---
+
+### 12.5 Modulo Metrics (DORA + Health)
+
+Responsabilidade: calculo assincrono e publicacao de snapshots de metricas.
+
+APIs principais:
+
+- `GET /api/v1/metrics/dora/scorecard?project_id=...&window=30d`
+- `GET /api/v1/metrics/health?scope=team&scope_id=...&window=7d`
+- `POST /api/v1/metrics/recompute-jobs`
+
+Payload exemplo (scorecard response):
+
+```json
+{
+  "project_id": "prj_1",
+  "window": "30d",
+  "dora": {
+    "deployment_frequency": { "value": 1.4, "unit": "deploys_per_day", "level": "elite" },
+    "lead_time": { "value": 18, "unit": "hours_p50", "level": "high" },
+    "mttr": { "value": 4.2, "unit": "hours", "level": "high" },
+    "change_failure_rate": { "value": 0.08, "unit": "ratio", "level": "high" }
+  }
+}
+```
+
+Eventos publicados:
+
+- `metrics.snapshot.created.v1`
+- `metrics.alert.triggered.v1`
+
+---
+
+### 12.6 Modulo COGS
+
+Responsabilidade: custos por task/epic/projeto e consolidacao financeira.
+
+APIs principais:
+
+- `POST /api/v1/cogs/entries`
+- `GET /api/v1/cogs/projects/{project_id}/summary?window=30d`
+- `GET /api/v1/cogs/epics/{epic_id}/roi`
+
+Payload exemplo (entry COGS):
+
+```json
+{
+  "period_date": "2026-04-08",
+  "user_id": "usr_8",
+  "project_id": "prj_1",
+  "task_id": "tsk_55",
+  "hours_worked": 4.5,
+  "hourly_rate": 65.0,
+  "overhead_rate": 1.25,
+  "category": "engineering",
+  "source": "timetracking"
+}
+```
+
+Eventos publicados:
+
+- `cogs.entry.created.v1`
+- `cogs.project.summary.updated.v1`
+- `cogs.epic.roi.updated.v1`
+
+---
+
+### 12.7 Modulo Dashboards/BFF
+
+Responsabilidade: composicao de dados para front-end, sem ownership de dominio.
+
+APIs principais:
+
+- `GET /api/v1/dashboard/executive?org_id=...&window=30d`
+- `GET /api/v1/dashboard/manager?team_id=...&window=7d`
+
+Regra: somente leitura via APIs dos modulos Core, SLA, Metrics e COGS.
+Nao pode persistir ou alterar dados de dominio.
+
+---
+
+## 13. Permissoes e Roles (RBAC + Escopo)
+
+### 13.1 Roles sugeridas
+
+- `org_admin`: governanca global, configuracao de modulos, acesso financeiro completo
+- `cto_exec`: visao executiva e financeira agregada
+- `tech_manager`: operacao de squads, SLA e planejamento
+- `staff_engineer`: leitura operacional ampla, sem dados financeiros sensiveis individuais
+- `engineer`: leitura/escrita restrita ao proprio escopo de trabalho
+- `finance_analyst`: leitura COGS e relatórios financeiros
+- `viewer`: somente leitura de dashboards permitidos
+
+### 13.2 Matriz de permissao por modulo (resumo)
+
+| Modulo | org_admin | cto_exec | tech_manager | staff_engineer | engineer | finance_analyst | viewer |
+|---|---|---|---|---|---|---|---|
+| Integracoes (configurar conexoes) | RW | R | R (time scope) | R | - | - | - |
+| Core (tasks/epics/projects) | RW | R | RW (time scope) | RW (project scope) | RW (own scope) | R | R |
+| SLA (templates/instancias) | RW | R | RW | R | R (own tasks) | R | R |
+| Metrics (DORA/health) | RW | R | R | R | R (team scope) | R | R |
+| COGS agregado | RW | R | R | R (sem custos individuais) | - | R | - |
+| COGS detalhado (hourly_rate por pessoa) | RW | R | R restrito | - | - | R | - |
+
+Legenda: `RW` leitura e escrita, `R` somente leitura, `-` sem acesso.
+
+### 13.3 Regras de autorizacao obrigatorias
+
+- Policy enforcement na API Gateway e no modulo dono do recurso.
+- Escopo por tenant/org e por team (`team_id`) em todas as queries.
+- Row-Level Security para dados sensiveis (principalmente COGS).
+- Auditoria de acesso para endpoints financeiros e administrativos.
+- Tokens JWT com claims: `sub`, `org_id`, `team_ids`, `roles`, `permissions_version`.
+
+Payload exemplo (claims JWT):
+
+```json
+{
+  "sub": "usr_8",
+  "org_id": "org_1",
+  "team_ids": ["team_a", "team_b"],
+  "roles": ["tech_manager"],
+  "permissions_version": 3
+}
+```
+
+### 13.4 Modelo de Policy (ABAC complementar)
+
+Além de RBAC, usar atributos para casos finos:
+
+- owner check: engenheiro pode editar task se `task.assignee_id == sub`
+- team boundary: manager acessa apenas projetos do proprio `team_id`
+- finance guard: somente roles aprovadas leem `hourly_rate`
+
+### 13.5 Contratos de erro de autorizacao
+
+Resposta padrao para proibicao de acesso:
+
+```json
+{
+  "data": null,
+  "meta": {
+    "request_id": "req_789",
+    "version": "v1",
+    "timestamp": "2026-04-08T12:10:00Z"
+  },
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "You do not have permission for this resource",
+    "details": {
+      "required_permission": "cogs.read.detailed"
+    }
+  }
+}
+```
 
 ---
 

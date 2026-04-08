@@ -5,6 +5,39 @@
 O módulo de integrações é o único ponto de contato com sistemas externos. Ele abstrai as particularidades de cada provider (JIRA, GitHub, etc.) e entrega dados normalizados para o core do sistema.
 
 **Nenhum outro módulo faz chamadas diretas a sistemas externos.**
+**Nenhum módulo consumidor acessa storage interno de integrações; consumo somente via contratos de API/eventos.**
+
+---
+
+## Contrato de Saida do Modulo
+
+O modulo de Integracoes publica dados para outros modulos por contratos versionados.
+
+- API de consulta (quando necessaria): endpoints versionados (`/api/v1/integrations/...`)
+- Eventos de sync: `integration.project.synced.v1`, `integration.task.synced.v1`, `integration.user.synced.v1`
+- Payloads imutaveis por versao
+- Campos adicionados de forma backward compatible
+- Breaking changes apenas em `v2+` com janela de deprecacao
+
+### Exemplo de Event Contract
+
+```json
+{
+  "event_name": "integration.task.synced.v1",
+  "event_id": "uuid",
+  "occurred_at": "2026-04-08T12:00:00Z",
+  "source": "jira",
+  "project_key": "AUTH",
+  "payload": {
+    "external_id": "AUTH-123",
+    "title": "Fix login timeout",
+    "status": "in_progress",
+    "assignee_email": "dev@company.com",
+    "updated_at": "2026-04-08T11:58:00Z"
+  },
+  "schema_version": 1
+}
+```
 
 ---
 

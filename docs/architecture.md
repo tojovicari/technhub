@@ -4,6 +4,8 @@
 
 O CTO.ai é dividido em camadas horizontais com responsabilidades bem definidas, permitindo que cada módulo evolua independentemente.
 
+Regra obrigatoria de boundary: modulos trocam dados somente por contratos versionados (API/eventos). Nenhum modulo le ou escreve diretamente no storage interno de outro modulo.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          Clientes                                    │
@@ -73,6 +75,13 @@ O CTO.ai é dividido em camadas horizontais com responsabilidades bem definidas,
 - Garante entrega de eventos mesmo com falha temporária de um serviço
 - Usado para: webhook events, domain events, alertas, scheduled jobs
 
+### Contratos Entre Modulos
+- API contracts versionados: REST/GraphQL (`v1`, `v2`), com schema publicado
+- Event contracts versionados: `domain.event_name.vN`, com payload estavel por versao
+- Contract tests obrigatorios para produtor e consumidor no CI
+- Alteracoes breaking exigem nova versao e plano de migracao
+- Proibido acesso cross-module ao banco (`SELECT`/`UPDATE` em schema de outro modulo)
+
 ### 6. Storage Layer
 - **PostgreSQL**: dados relacionais, JSONB para campos variáveis, materialized views para relatórios
 - **Redis**: cache de API, filas de retry, contadores de rate limit, estado de sync
@@ -111,6 +120,7 @@ O CTO.ai é dividido em camadas horizontais com responsabilidades bem definidas,
 | Decisão | Escolha | Justificativa |
 |---|---|---|
 | Comunicação entre módulos | Event-driven (Message Bus) | Desacoplamento e resiliência |
+| Boundary enforcement | Contract-first + storage ownership | Evita acoplamento e regressão entre módulos |
 | Modelo de dados | Relacional + JSONB | Consistência + flexibilidade para campos customizados |
 | Sync strategy | Pull + Push | Pull garante consistência; Push garante baixa latência |
 | Aggregations | Materialized views + async jobs | Evita queries pesadas em tempo real |

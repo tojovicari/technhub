@@ -34,6 +34,15 @@ O CTO.ai unifica tudo isso em uma plataforma modular, extensível e orientada a 
 cto_ai/
 ├── README.md                   ← você está aqui
 ├── SISTEMA_GESTAO_TECH.md      ← documento original de planejamento
+├── .github/
+│   ├── copilot-instructions.md ← guardrails de arquitetura para IA
+│   ├── instructions/
+│   │   └── project-context.instructions.md
+│   ├── skills/
+│   │   ├── module-contracts/SKILL.md
+│   │   └── cto-metrics-planning/SKILL.md
+│   └── prompts/
+│       └── contract-review.prompt.md
 └── docs/
     ├── architecture.md         ← visão geral de arquitetura
     ├── integrations.md         ← módulo de integrações (JIRA, GitHub...)
@@ -110,3 +119,13 @@ Decisões de tecnologia com justificativas.
 ## Status do Projeto
 
 > 🟡 Em planejamento — Fase 1 não iniciada
+
+---
+
+## Contexto e Skills de IA
+
+- `copilot-instructions.md`: instrucoes sempre ativas com regras de modularidade e contract-first.
+- `project-context.instructions.md`: contexto global do produto e heuristicas de decisao.
+- Skill `module-contracts`: desenhar/revisar contratos API/eventos entre modulos.
+- Skill `cto-metrics-planning`: estruturar DORA, SLA, COGS e scorecards executivos.
+- Prompt `contract-review.prompt.md`: revisar mudancas com foco em boundary safety e compatibilidade.
