@@ -36,10 +36,10 @@ Fase 4                                                        │  Inteligência
 
 | # | Tarefa                                           | Prioridade |
 |---|--------------------------------------------------|------------|
-| 1.1 | Setup de infraestrutura (DB, cache, API skeleton) | P0       |
+| 1.1 | Setup de infraestrutura Fly.io (app unica + Postgres + API skeleton) | P0       |
 | 1.2 | Connector JIRA: autenticação + sync de projetos, issues, epics, users | P0 |
 | 1.3 | Connector GitHub: autenticação + sync de repos, issues, PRs, users | P0 |
-| 1.4 | Webhook receiver (JIRA + GitHub) com fila assíncrona | P1     |
+| 1.4 | Webhook receiver (JIRA + GitHub) com fila assíncrona em Postgres (jobs/outbox) | P1     |
 | 1.5 | Domain model completo: User, Team, Project, Task, Epic | P0    |
 | 1.6 | Unificação de usuários JIRA ↔ GitHub por email   | P1         |
 | 1.7 | API REST: CRUD de entidades core                 | P0         |
@@ -49,8 +49,10 @@ Fase 4                                                        │  Inteligência
 
 **Critérios de Aceitação da Fase 1:**
 - [ ] Sync full de JIRA e GitHub completado sem erros em ambiente de staging
+- [ ] Ambiente de staging ativo no Fly.io com deploy automatizado via GitHub Actions
 - [ ] Latência de sync < 5 minutos (pull model)
 - [ ] Webhooks processados em < 30 segundos
+- [ ] Custo mensal da infra base <= USD 40 no primeiro ciclo
 - [ ] Dashboard exibe status atual dos projetos integrados
 - [ ] Zero dados duplicados após múltiplos syncs
 - [ ] 90%+ de cobertura em testes unitários dos transformers/connectors

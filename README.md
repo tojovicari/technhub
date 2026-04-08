@@ -40,9 +40,12 @@ cto_ai/
 │   │   └── project-context.instructions.md
 │   ├── skills/
 │   │   ├── module-contracts/SKILL.md
-│   │   └── cto-metrics-planning/SKILL.md
+│   │   ├── cto-metrics-planning/SKILL.md
+│   │   ├── contract-governance/SKILL.md
+│   │   └── frontend-api-doc-governance/SKILL.md
 │   └── prompts/
-│       └── contract-review.prompt.md
+│       ├── contract-review.prompt.md
+│       └── contract-governance-check.prompt.md
 └── docs/
     ├── architecture.md         ← visão geral de arquitetura
     ├── integrations.md         ← módulo de integrações (JIRA, GitHub...)
@@ -132,4 +135,9 @@ Decisões de tecnologia com justificativas.
 - `project-context.instructions.md`: contexto global do produto e heuristicas de decisao.
 - Skill `module-contracts`: desenhar/revisar contratos API/eventos entre modulos.
 - Skill `cto-metrics-planning`: estruturar DORA, SLA, COGS e scorecards executivos.
+- Skill `contract-governance`: validar consistencia de APIs, permissoes, payloads e documentacao.
+- Skill `frontend-api-doc-governance`: garantir documentacao frontend-ready para endpoints, payloads, permissoes, statuses e compatibilidade.
 - Prompt `contract-review.prompt.md`: revisar mudancas com foco em boundary safety e compatibilidade.
+- Prompt `contract-governance-check.prompt.md`: gate rapido para PRs com alteracoes de contrato/autorizacao.
+- PR Template `.github/pull_request_template.md`: checklist obrigatorio de API docs/permissoes/payloads.
+- Workflow `.github/workflows/frontend-api-doc-governance.yml`: bloqueia PR com mudanca de API externa sem checklist/documentacao minima.

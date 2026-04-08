@@ -189,18 +189,19 @@ Catalogo de permissoes atomicas do backend.
 
 ### PermissionProfile
 
-Grupo reutilizavel de permissoes, definido por tenant, para associacao rapida a usuarios.
+Grupo reutilizavel de permissoes, definido por tenant. Roles de sistema sao `is_system=true`; qualquer admin pode criar perfis customizados.
 
-| Campo              | Tipo        | Descrição                                      |
-|--------------------|-------------|------------------------------------------------|
-| `id`               | UUID        |                                                |
-| `tenant_id`        | UUID        | FK -> Tenant                                   |
-| `name`             | string      | Ex: "Manager Operacional"                      |
-| `description`      | string?     |                                                |
-| `permission_keys`  | string[]    | Lista de permissoes atomicas                   |
-| `is_system`        | boolean     | Perfil padrao do sistema                       |
-| `is_active`        | boolean     |                                                |
-| `created_at`       | timestamp   |                                                |
+| Campo              | Tipo        | Descrição                                                    |
+|--------------------|-------------|--------------------------------------------------------------|
+| `id`               | UUID        |                                                              |
+| `tenant_id`        | UUID        | FK -> Tenant                                                 |
+| `name`             | string      | Ex: "Lead Frontend", "Manager Operacional"                   |
+| `description`      | string?     |                                                              |
+| `permission_keys`  | string[]    | Lista de permissoes atomicas (ver catalogo em `Permission`)  |
+| `is_system`        | boolean     | `true` para perfis criados automaticamente pelo sistema      |
+| `is_active`        | boolean     |                                                              |
+| `created_at`       | timestamp   |                                                              |
+| `updated_at`       | timestamp   |                                                              |
 
 ---
 
@@ -216,7 +217,8 @@ Associacao N:N entre usuario e perfis de permissao no escopo do tenant.
 | `permission_profile_id`| UUID        | FK -> PermissionProfile                    |
 | `granted_by`           | UUID        | FK -> User (quem concedeu)                 |
 | `granted_at`           | timestamp   |                                            |
-| `expires_at`           | timestamp?  | Opcional para concessoes temporarias       |
+| `expires_at`           | timestamp?  | Concessao temporaria (null = permanente)   |
+| `revoked_at`           | timestamp?  | Preenchida em revogacao explicita          |
 
 ---
 

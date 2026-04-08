@@ -1,0 +1,101 @@
+name: Frontend API Doc Governance
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR documentation gate for external API changes
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.info('No PR context; skipping.');
+              return;
+            }
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                per_page: 100
+              }
+            );
+
+            const changed = files.map(f => f.filename);
+
+            // Heuristics: files that likely indicate public/external API surface changes.
+            const apiPatterns = [
+              /^docs\/openapi\/.+\.(ya?ml)$/,
+              /^apps\/api\//,
+              /^services\//,
+              /^src\/.*(routes|route|controllers|controller|handlers|handler|schemas|schema|contracts|contract)\//
+            ];
+
+            const docPatterns = [
+              /^docs\/openapi\/.+\.(ya?ml)$/,
+              /^docs\/architecture\.md$/,
+              /^docs\/integrations\.md$/,
+              /^docs\/entities\.md$/,
+              /^docs\/slas\.md$/,
+              /^README\.md$/
+            ];
+
+            const isApiChange = changed.some(path => apiPatterns.some(re => re.test(path)));
+            const hasDocChange = changed.some(path => docPatterns.some(re => re.test(path)));
+
+            if (!isApiChange) {
+              core.info('No external API-related files changed; gate not required.');
+              return;
+            }
+
+            if (!hasDocChange) {
+              core.setFailed(
+                'External API-related changes detected, but no API/docs files were updated. Update docs/openapi/* and relevant docs.'
+              );
+              return;
+            }
+
+            const body = (pr.body || '').toLowerCase();
+
+            const checked = (label) => body.includes(`- [x] ${label.toLowerCase()}`);
+
+            const noApiChangeChecked = checked('No external API change in this PR');
+
+            // If PR is API-related by file diff, checkbox cannot claim no API change.
+            if (noApiChangeChecked) {
+              core.setFailed('PR changes indicate API impact, but checklist marks "No external API change in this PR".');
+              return;
+            }
+
+            const requiredChecks = [
+              'Updated docs/openapi/* for every affected external endpoint/event',
+              'Documented request/response payloads with realistic examples',
+              'Documented required permissions and tenant/scope constraints',
+              'Documented status/error contracts (400/401/403/404/409/422/429 as applicable)',
+              'Marked compatibility as non-breaking or breaking',
+              'Updated authorization policy/bindings when permissions changed',
+              'Ran skill frontend-api-doc-governance',
+              'Ran skill contract-governance',
+              'Ran prompt contract-governance-check.prompt.md'
+            ];
+
+            const missing = requiredChecks.filter(item => !checked(item));
+            if (missing.length > 0) {
+              core.setFailed(
+                `Missing required checklist items for API governance:\n- ${missing.join('\n- ')}`
+              );
+              return;
+            }
+
+            core.info('Frontend API documentation governance gate passed.');

@@ -6,6 +6,8 @@ O CTO.ai é dividido em camadas horizontais com responsabilidades bem definidas,
 
 Regra obrigatoria de boundary: modulos trocam dados somente por contratos versionados (API/eventos). Nenhum modulo le ou escreve diretamente no storage interno de outro modulo.
 
+Para reduzir custo no inicio, a Fase 1 usa **monolito modular** (um unico app no Fly.io) com isolamento logico por modulo e contracts-first. O desenho ja nasce preparado para evoluir para event bus externo sem reescrever regras de dominio.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          Clientes                                    │
@@ -13,30 +15,22 @@ Regra obrigatoria de boundary: modulos trocam dados somente por contratos versio
 └────────────────────────────────────────────────────────────────────-┘
                                     │
 ┌───────────────────────────────────▼─────────────────────────────────┐
-│                         API Gateway                                  │
-│         Autenticação · Rate Limiting · Roteamento · Logging         │
-└─────────────────────────────────────────────────────────────────────┘
-          │                   │                    │
-┌─────────▼────────┐  ┌───────▼──────────┐  ┌─────▼────────────────┐
-│  Integrations    │  │  Domain Service  │  │  Analytics Engine    │
-│  Module          │  │  (Core)          │  │                      │
-│                  │  │                  │  │  - DORA Metrics      │
-│  - JiraConnector │  │  - Projects      │  │  - Health Scores     │
-│  - GithubConnect │  │  - Tasks         │  │  - COGS Aggregation  │
-│  - [Extensível]  │  │  - Epics         │  │  - Forecasting       │
-│                  │  │  - Users/Teams   │  │                      │
-│  Push (webhooks) │  │  - SLAs          │  │                      │
-│  Pull (scheduler)│  │  - HealthMetrics │  │                      │
-└─────────┬────────┘  └───────┬──────────┘  └─────┬────────────────┘
-          │                   │                    │
-┌─────────▼───────────────────▼────────────────────▼─────────────────┐
-│                         Message Bus                                  │
-│                   (Eventos domain + webhook queue)                   │
-└──────────────────────────────┬──────────────────────────────────────┘
+│                  App Unica (Monolito Modular)                        │
+│                     Node.js + Fastify @ Fly.io                       │
+│                                                                       │
+│  [Integrations] [Core] [SLA] [Metrics] [COGS] [IAM/Policy]           │
+│                                                                       │
+│  - REST APIs versionadas por modulo                                   │
+│  - Scheduler interno (sync pull)                                      │
+│  - Webhook receiver (push)                                            │
+│  - Worker interno para jobs/eventos (poll em tabela)                  │
+└───────────────────────────────┬─────────────────────────────────────┘
                                 │
 ┌───────────────────────────────▼─────────────────────────────────────┐
-│                         Storage Layer                                │
-│     PostgreSQL (relacional)  │  Redis (cache + filas)               │
+│                           PostgreSQL                                 │
+│  - Dados de dominio                                                   │
+│  - Outbox de eventos                                                  │
+│  - Fila de jobs (jobs table)                                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -44,10 +38,9 @@ Regra obrigatoria de boundary: modulos trocam dados somente por contratos versio
 
 ## Camadas
 
-### 1. API Gateway
-- Ponto de entrada único para todos os clientes
-- Responsável por: autenticação (JWT/OAuth2), rate limiting, roteamento, logging centralizado
-- **Não contém lógica de negócio**
+### 1. App/API Layer (Fly Edge + Fastify)
+- Ponto de entrada unico para clientes
+- Responsavel por autenticacao (JWT/OAuth2), rate limiting, roteamento e logging
 - Executa validacao inicial de tenant e claims obrigatorias (`tenant_id`, `roles`, `permission_profile_ids`)
 
 ### 2. Integration Module
@@ -58,23 +51,24 @@ Regra obrigatoria de boundary: modulos trocam dados somente por contratos versio
   - **Push**: Recebe webhooks e processa em fila assíncrona
 - Ver detalhes em [integrations.md](integrations.md)
 
-### 3. Domain Service (Core)
+### 3. Domain Modules (isolados no mesmo runtime)
 - Contém as entidades de negócio e regras de domínio
-- Persiste no banco relacional
-- Expõe API REST/GraphQL para o API Gateway
-- Publica eventos de domínio no Message Bus
+- Persistem no banco relacional com ownership por modulo
+- Expoem APIs REST versionadas por modulo
+- Publicam eventos de dominio via outbox
 - Ver entidades em [entities.md](entities.md)
 
-### 4. Analytics Engine
-- Consome eventos do Message Bus e dados do banco
+### 4. Analytics Worker (interno)
+- Consome eventos da outbox/jobs table
 - Calcula métricas pesadas de forma assíncrona
 - Grava resultados em tabelas de aggregation / materialized views
 - Ver detalhes em [dora-metrics.md](dora-metrics.md) e [cogs.md](cogs.md)
 
-### 5. Message Bus
-- Desacopla produtores de consumidores
-- Garante entrega de eventos mesmo com falha temporária de um serviço
-- Usado para: webhook events, domain events, alertas, scheduled jobs
+### 5. Event Backbone (fase inicial)
+- Outbox pattern em Postgres para garantir entrega e idempotencia
+- Jobs table para processamento assincrono (retries, backoff, dead-letter logico)
+- Usado para webhook events, domain events, alertas e scheduled jobs
+- Preparado para migrar para Redis/BullMQ ou Kafka sem quebrar contratos
 
 ### Contratos Entre Modulos
 - API contracts versionados: REST/GraphQL (`v1`, `v2`), com schema publicado
@@ -84,8 +78,8 @@ Regra obrigatoria de boundary: modulos trocam dados somente por contratos versio
 - Proibido acesso cross-module ao banco (`SELECT`/`UPDATE` em schema de outro modulo)
 
 ### 6. Storage Layer
-- **PostgreSQL**: dados relacionais, JSONB para campos variáveis, materialized views para relatórios
-- **Redis**: cache de API, filas de retry, contadores de rate limit, estado de sync
+- **PostgreSQL**: dados relacionais, JSONB para campos variaveis, materialized views, outbox e jobs table
+- **Redis**: opcional na Fase 2+ para cache/filas se houver pressao de latencia ou throughput
 
 ---
 
@@ -95,23 +89,23 @@ Regra obrigatoria de boundary: modulos trocam dados somente por contratos versio
 [JIRA/GitHub]
      │
      ▼
-[Integration Module]
+[Integrations Module]
   ├── normaliza DTO externo → entidade interna
   ├── deduplica (source + source_id)
-  └── emite evento: task.synced, pr.synced, etc.
+  └── grava evento na outbox: task.synced.v1, pr.synced.v1
      │
      ▼
-[Message Bus]
+[Outbox Dispatcher / Worker]
      │
-     ├──→ [Domain Service]  → persiste Task/PR/User/Epic no Postgres
+     ├──→ [Core/SLA/Metrics/COGS handlers] (mesmo app)
+     │        ├── persiste Task/PR/User/Epic no Postgres
+     │        ├── recalcula DORA/SLA
+     │        └── atualiza agregacoes
      │
-     └──→ [Analytics Engine]
-              ├── recalcula DORA metrics
-              ├── verifica SLA compliance
-              └── atualiza health score do projeto
+     └──→ [Publicacao futura em bus externo] (fase de escala)
      │
      ▼
-[API Gateway] ← polling ou push (SSE/WebSocket) → [Web App]
+[API Layer] ← polling ou push (SSE/WebSocket) → [Web App]
 ```
 
 ## Fluxo de Autorizacao (Backend)
@@ -141,7 +135,8 @@ Contrato de referencia:
 
 | Decisão | Escolha | Justificativa |
 |---|---|---|
-| Comunicação entre módulos | Event-driven (Message Bus) | Desacoplamento e resiliência |
+| Runtime inicial | Monolito modular no Fly.io | Menor custo e operacao simplificada |
+| Comunicação entre módulos | Event-ready com Outbox (Postgres) | Desacoplamento logico sem custo de infra extra |
 | Boundary enforcement | Contract-first + storage ownership | Evita acoplamento e regressão entre módulos |
 | Modelo de dados | Relacional + JSONB | Consistência + flexibilidade para campos customizados |
 | Sync strategy | Pull + Push | Pull garante consistência; Push garante baixa latência |
@@ -153,10 +148,11 @@ Contrato de referencia:
 
 ## Escalabilidade
 
-- **Horizontal**: Domain Service e Analytics Engine são stateless, escaláveis via replicas
-- **Leitura**: Read replicas do Postgres para relatórios e dashboards
-- **Write**: Connection pooling (PgBouncer)
-- **Futuro**: Sharding por `project_id` se volume ultrapassa 50M tasks
+- **Passo 1 (agora)**: 1 app (web + worker interno) + 1 Postgres pequeno
+- **Passo 2**: separar process groups (web e worker) dentro do Fly.io
+- **Passo 3**: introduzir Redis/BullMQ para filas de maior throughput
+- **Passo 4**: mover outbox dispatcher para bus externo (Kafka) quando necessario
+- **Passo 5**: read replica e particionamento/sharding por crescimento de dados
 
 ---
 
@@ -164,7 +160,7 @@ Contrato de referencia:
 
 - OAuth2 / SAML SSO para autenticação
 - JWT de curta duração + refresh tokens
-- Credentials de integrações armazenados em Vault (HashiCorp ou AWS Secrets Manager)
+- Credentials de integracoes em Fly Secrets + tabela de referencias criptografadas
 - Row-level security: usuários só veem dados de seus próprios teams/orgs
 - HTTPS em trânsito, AES-256 em repouso para dados sensíveis
 
@@ -174,8 +170,8 @@ Contrato de referencia:
 
 | Camada | Ferramenta |
 |---|---|
-| Métricas de infra | Prometheus + Grafana |
-| Logs estruturados | ELK Stack / CloudWatch |
+| Métricas de infra | Fly Metrics + Grafana Cloud (opcional) |
+| Logs estruturados | fly logs + log drains (JSON) |
 | Tracing distribuído | OpenTelemetry |
-| Alertas | Alertmanager / PagerDuty |
+| Alertas | Grafana Alerting / PagerDuty |
 | Health checks | Endpoint `/health` em cada serviço |

@@ -18,20 +18,110 @@ O módulo de SLA define expectativas de tempo de resolução por tipo e priorida
 
 ---
 
+## SLAs Personalizados contra Dados Ingeridos
+
+SLA Templates são criados pelo tenant e avaliados automaticamente sobre dados ingeridos pelo módulo de integrações. O SLA Engine consome eventos de sincronização e aplica os templates cujas condições forem satisfeitas.
+
+### Modelo de Condições (`condition`)
+
+Cada template expõe um campo `condition` (JSONB) que é avaliado contra os atributos da task sincronizada. Suporta combinação de campos nativos e metadados do provider (labels, components, story points, sprints, etc.).
+
+```json
+{
+  "operator": "AND",
+  "rules": [
+    { "field": "task_type",   "op": "in",       "value": ["bug"] },
+    { "field": "priority",    "op": "in",       "value": ["P0", "P1"] },
+    { "field": "labels",      "op": "contains", "value": "production" },
+    { "field": "source",      "op": "eq",       "value": "jira" }
+  ]
+}
+```
+
+Exemplos de condições suportadas:
+
+| `field`           | Exemplos de `op`           | Exemplos de `value`                      |
+|-------------------|----------------------------|------------------------------------------|
+| `task_type`       | `in`, `eq`                 | `["bug", "tech_debt"]`                   |
+| `priority`        | `in`, `gte`                | `["P0", "P1"]`                           |
+| `labels`          | `contains`, `any`          | `"production"`, `["hotfix","sev1"]`      |
+| `component`       | `eq`, `in`                 | `"checkout"`, `["payments","billing"]`   |
+| `source`          | `eq`                       | `"jira"`, `"github"`                     |
+| `project_id`      | `in`                       | `["proj_abc"]`                           |
+| `story_points`    | `gte`, `lte`               | `5`                                      |
+| `sprint_name`     | `contains`                 | `"alpha"`                                |
+
+O campo `condition` é avaliado na ordem de prioridade do template (`priority` no schema abaixo). O primeiro template cujas condições são satisfeitas é aplicado à task (sem sobreposição).
+
+---
+
+### Fluxo Event-Driven de SLA
+
+```
+[Integrations Module]
+  integration.task.synced.v1
+  integration.task.updated.v1
+         │
+         ▼
+[SLA Engine — consumidor de eventos]
+         │
+         ├──▶ Carrega templates ativos do tenant (ordered by priority)
+         │
+         ├──▶ Avalia condition de cada template contra payload do evento
+         │
+         ├── Nenhum match → nenhuma instância criada / existente encerrada
+         │
+         └── Match encontrado:
+               ├── Task não tem instância ativa →
+               │     cria SLA Instance (started_at = task.started_at ou now)
+               │
+               ├── Task tem instância ativa com template diferente →
+               │     encerra instância anterior (status = superseded)
+               │     cria nova instância
+               │
+               └── Task concluída/cancelada →
+                     encerra instância (status = met | breached)
+```
+
+#### Contrato do evento consumido
+
+```json
+{
+  "event_type": "integration.task.synced.v1",
+  "tenant_id":  "ten_1",
+  "payload": {
+    "task_id":    "tsk_42",
+    "source":     "jira",
+    "task_type":  "bug",
+    "priority":   "P1",
+    "status":     "in_progress",
+    "labels":     ["production", "backend"],
+    "component":  "checkout",
+    "project_id": "proj_abc",
+    "started_at": "2026-04-08T10:00:00Z"
+  }
+}
+```
+
+---
+
 ## Entidade: SLA Template
 
-| Campo             | Tipo     | Descrição                                                         |
-|-------------------|----------|-------------------------------------------------------------------|
-| `id`              | UUID     |                                                                   |
-| `name`            | string   | Ex: "SLA Padrão de Bugs"                                          |
-| `description`     | string?  |                                                                   |
-| `applies_to`      | enum[]   | Tipos de task: `bug`, `feature`, `chore`, `spike`, `tech_debt`   |
-| `rules`           | JSONB    | Mapa de prioridade → prazo em minutos (ver abaixo)               |
-| `escalation_rule` | JSONB?   | Quem notificar em cada gatilho                                    |
-| `project_ids`     | UUID[]   | Projetos que usam este template (pode ser global)                 |
-| `is_default`      | boolean  | Se é o template default da organização                            |
-| `is_active`       | boolean  |                                                                   |
-| `created_at`      | timestamp|                                                                   |
+| Campo             | Tipo      | Descrição                                                          |
+|-------------------|-----------|--------------------------------------------------------------------|
+| `id`              | UUID      |                                                                    |
+| `tenant_id`       | UUID      | FK → Tenant                                                        |
+| `name`            | string    | Ex: "SLA Bugs de Produção P0/P1"                                   |
+| `description`     | string?   |                                                                    |
+| `condition`       | JSONB     | Condições avaliadas contra dados ingeridos (ver acima)             |
+| `priority`        | int       | Ordem de avaliação entre templates do tenant (menor = primeiro)    |
+| `applies_to`      | enum[]    | Tipos de task: `bug`, `feature`, `chore`, `spike`, `tech_debt`     |
+| `rules`           | JSONB     | Mapa de prioridade → prazo em minutos (ver abaixo)                 |
+| `escalation_rule` | JSONB?    | Quem notificar em cada gatilho                                     |
+| `project_ids`     | UUID[]?   | Restringe a projetos específicos (null = global no tenant)         |
+| `is_default`      | boolean   | Aplicado quando nenhuma outra condição for satisfeita              |
+| `is_active`       | boolean   |                                                                    |
+| `created_at`      | timestamp |                                                                    |
 
 ### Exemplo de `rules`
 ```json

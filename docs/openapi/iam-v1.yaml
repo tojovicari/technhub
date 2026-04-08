@@ -11,6 +11,39 @@ tags:
   - name: IAM
 paths:
   /iam/permission-profiles:
+    get:
+      tags: [IAM]
+      summary: List permission profiles for the tenant
+      operationId: listPermissionProfiles
+      parameters:
+        - in: query
+          name: is_active
+          schema:
+            type: boolean
+        - in: query
+          name: is_system
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PermissionProfile'
+                  meta:
+                    $ref: '#/components/schemas/Meta'
+                  error:
+                    nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       tags: [IAM]
       summary: Create permission profile
@@ -296,6 +329,10 @@ components:
           type: string
           format: date-time
         expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        revoked_at:
           type: string
           format: date-time
           nullable: true

@@ -866,7 +866,9 @@ Principio: toda requisicao e avaliada no contexto de tenant. Nao existe acesso c
 - Tokens de acesso devem conter `tenant_id` ativo; requisicao sem tenant valido retorna `403`.
 - Integracoes externas sao configuradas por tenant (nunca compartilhadas entre clientes).
 
-### 13.2 Matriz de permissao por modulo (resumo)
+### 13.2 Matriz de permissao por modulo (baseline de roles de sistema)
+
+> **Esta matriz define apenas os acessos padrão por role de sistema.** Ela não é o mecanismo de enforcement — é a configuração base dos **Permission Profiles pré-definidos** que o sistema cria por tenant. Admins podem criar quantos perfis customizados quiserem e associar a usuarios (ver 13.3.1).
 
 | Modulo | org_admin | cto_exec | tech_manager | staff_engineer | engineer | finance_analyst | viewer |
 |---|---|---|---|---|---|---|---|
@@ -901,40 +903,83 @@ Payload exemplo (claims JWT):
 }
 ```
 
-### 13.3.1 Perfis de Permissao (Permission Profiles)
+### 13.3.1 Perfis de Permissao (Permission Profiles) — mecanismo central
 
-Perfis permitem criar grupos reutilizaveis de permissoes e associar a usuarios.
+Perfis sao a unidade real de controle de acesso no sistema. Um perfil e um grupo nomeado de permissoes atomicas, criado e gerenciado por tenant. Roles de sistema (tabela 13.2) sao apenas perfis pre-definidos — qualquer admin pode criar perfis customizados com a granularidade que quiser.
 
-- Entidade `PermissionProfile`
-  - `id`, `tenant_id`, `name`, `description`, `permissions[]`, `is_system`, `is_active`
-- Entidade `UserPermissionProfile`
-  - `user_id`, `tenant_id`, `permission_profile_id`, `granted_by`, `granted_at`
+**Entidade `Permission`** — catalogo de permissoes atomicas por modulo:
 
-Exemplo de perfil:
+| Permissao                         | Descricao                               |
+|-----------------------------------|-----------------------------------------|
+| `core.task.read`                  | Ler tasks                               |
+| `core.task.write`                 | Criar/editar tasks                      |
+| `core.task.write.team`            | Criar/editar tasks do proprio time      |
+| `core.epic.manage`                | Gerenciar epics                         |
+| `sla.template.read`               | Ver templates de SLA                    |
+| `sla.template.manage`             | Criar/editar templates de SLA           |
+| `sla.instance.read`               | Ver instancias de SLA                   |
+| `metrics.read`                    | Ler metricas (todos os times)           |
+| `metrics.read.team`               | Ler metricas (proprio time)             |
+| `cogs.read.aggregated`            | Ver COGS agregado (sem detalhe pessoal) |
+| `cogs.read.detailed`              | Ver COGS detalhado por hora/pessoa      |
+| `integrations.connection.read`    | Ver conexoes de integracao              |
+| `integrations.connection.manage`  | Criar/editar conexoes                   |
+| `integrations.secret.rotate`      | Rotacionar segredos de integracao       |
+| `iam.profile.manage`              | Criar/editar perfis de permissao        |
+| `iam.profile.assign`              | Associar perfis a usuarios              |
+
+**Entidade `PermissionProfile`:**
 
 ```json
 {
-  "id": "pp_manager_default",
-  "tenant_id": "ten_1",
-  "name": "Manager Operacional",
+  "id":          "pp_frontend_lead",
+  "tenant_id":   "ten_1",
+  "name":        "Lead Frontend",
+  "description": "Acesso operacional para lideres de frontend",
   "permissions": [
-    "core.task.read",
     "core.task.write.team",
+    "core.epic.manage",
     "sla.template.read",
-    "sla.instance.write",
+    "sla.instance.read",
     "metrics.read.team",
     "cogs.read.aggregated"
   ],
-  "is_active": true
+  "is_system":   false,
+  "is_active":   true
 }
 ```
 
+**Entidade `UserPermissionProfile`** — associacao N:N com suporte a concessao temporaria:
+
+| Campo                  | Tipo       | Descricao                                            |
+|------------------------|------------|------------------------------------------------------|
+| `user_id`              | UUID       | FK → User                                            |
+| `tenant_id`            | UUID       | FK → Tenant                                          |
+| `permission_profile_id`| UUID       | FK → PermissionProfile                               |
+| `granted_by`           | UUID       | Quem concedeu                                        |
+| `granted_at`           | timestamp  |                                                      |
+| `expires_at`           | timestamp? | Concessao temporaria (null = permanente)              |
+| `revoked_at`           | timestamp? | Preenchida em revogacao explicita                    |
+
+**Resolucao de permissoes efetivas** — um usuario pode ter N perfis ativos; as permissoes sao a uniao de todos:
+
+```
+permissoes_efetivas = union(
+  roles_de_sistema[user.roles],
+  active_permission_profiles[user.permission_profile_ids]
+)
+```
+
+Um perfil vencido (`expires_at < now`) ou revogado nao e incluido na resolucao e nao aparece no JWT.
+
 APIs de administracao de perfis:
 
-- `POST /api/v1/iam/permission-profiles`
-- `PATCH /api/v1/iam/permission-profiles/{profile_id}`
-- `POST /api/v1/iam/users/{user_id}/permission-profiles`
-- `DELETE /api/v1/iam/users/{user_id}/permission-profiles/{profile_id}`
+- `POST /api/v1/iam/permission-profiles` — criar perfil customizado
+- `PATCH /api/v1/iam/permission-profiles/{profile_id}` — editar perfil
+- `GET /api/v1/iam/permission-profiles` — listar perfis do tenant
+- `POST /api/v1/iam/users/{user_id}/permission-profiles` — associar perfil a usuario
+- `DELETE /api/v1/iam/users/{user_id}/permission-profiles/{profile_id}` — revogar
+- Contrato completo: `docs/openapi/iam-v1.yaml`
 
 ### 13.3.2 Bloqueio Obrigatorio no Backend
 
