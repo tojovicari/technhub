@@ -32,6 +32,16 @@ Describe the business intent and technical scope.
 - Policy bindings updated:
 - Contract tests updated:
 - Consumer/frontend impact communicated:
+- Tests added/updated for new behavior:
+
+## Definition of Done (required for every phase)
+
+- [ ] New behavior covered by unit or integration tests (`npm test` passes)
+- [ ] Test coverage does not regress (`npm run test:coverage`)
+- [ ] Build succeeds without TypeScript errors (`npm run build`)
+- [ ] `npm audit` returns 0 vulnerabilities
+- [ ] All changed public routes documented in `docs/openapi/`
+- [ ] README updated if new permissions or endpoints were added
 
 ## Frontend API Governance Checklist (Required for external API changes)
 
