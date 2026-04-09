@@ -18,7 +18,7 @@ Para reduzir custo no inicio, a Fase 1 usa **monolito modular** (um unico app no
 │                  App Unica (Monolito Modular)                        │
 │                     Node.js + Fastify @ Fly.io                       │
 │                                                                       │
-│  [Integrations] [Core] [SLA] [Metrics] [COGS] [IAM/Policy]           │
+│  [Integrations] [Core] [SLA] [DORA] [COGS] [Intel] [IAM/Policy]       │
 │                                                                       │
 │  - REST APIs versionadas por modulo                                   │
 │  - Scheduler interno (sync pull)                                      │
@@ -57,6 +57,18 @@ Para reduzir custo no inicio, a Fase 1 usa **monolito modular** (um unico app no
 - Expoem APIs REST versionadas por modulo
 - Publicam eventos de dominio via outbox
 - Ver entidades em [entities.md](entities.md)
+
+**Módulos implementados:**
+
+| Módulo | Prefixo de rota | Permissões | Contrato OpenAPI |
+|---|---|---|---|
+| Core | `/api/v1/core/*` | `core.*` | [core-v1.yaml](openapi/core-v1.yaml) |
+| Integrations | `/api/v1/integrations/*` | `integrations.*` | [integrations-v1.yaml](openapi/integrations-v1.yaml) |
+| SLA | `/api/v1/sla/*` | `sla.*` | [sla-v1.yaml](openapi/sla-v1.yaml) |
+| DORA | `/api/v1/dora/*` | `dora.*` | [dora-v1.yaml](openapi/dora-v1.yaml) |
+| COGS | `/api/v1/cogs/*` | `cogs.*` | [cogs-v1.yaml](openapi/cogs-v1.yaml) |
+| Intel | `/api/v1/intel/*` | `intel.read` | [intel-v1.yaml](openapi/intel-v1.yaml) |
+| IAM | `/api/v1/iam/*` | `iam.*` | [iam-v1.yaml](openapi/iam-v1.yaml) |
 
 ### 4. Analytics Worker (interno)
 - Consome eventos da outbox/jobs table
