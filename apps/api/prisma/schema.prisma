@@ -451,3 +451,85 @@ model IntegrationWebhookEvent {
   @@index([tenantId, status])
   @@index([provider, status])
 }
+
+// ── COGS Module ───────────────────────────────────────────────────────────────
+
+enum CogsCategory {
+  engineering    // direct labor — dev, QA, design
+  overhead       // indirect: on-call, rework, meetings
+  tooling        // JIRA, GitHub, Datadog, Sentry, etc.
+  cloud          // AWS/GCP/Azure per project
+  administrative // legal, HR, finance allocated to eng
+  other
+}
+
+enum CogsSource {
+  timetracking   // direct from JIRA worklogs or integration
+  story_points   // estimated from SP × velocity
+  estimate       // manual estimate (approved)
+  manual         // flat entry by manager
+}
+
+enum CogsConfidence {
+  high    // timetracking or verified data
+  medium  // story-points model
+  low     // estimate or manual
+}
+
+model CogsEntry {
+  id            String         @id @default(uuid())
+  tenantId      String
+  periodDate    DateTime       @db.Date   // day of the work / cost reference
+  userId        String?                   // person who generated the cost
+  teamId        String?                   // team-level entry (no specific user)
+  projectId     String?
+  epicId        String?
+  taskId        String?
+
+  // cost fields
+  hoursWorked   Float          @default(0)
+  hourlyRate    Float          @default(0)  // snapshot at time of entry
+  overheadRate  Float          @default(1.0) // multiplier, e.g. 1.3 = 30% overhead
+  totalCost     Float                        // computed: hoursWorked × hourlyRate × overheadRate
+                                             // for non-labor entries: flat cost amount
+
+  // classification
+  category      CogsCategory
+  subcategory   String?        // free-form: e.g. "ci-cd", "prod-infra", "legal-ip"
+  source        CogsSource
+  confidence    CogsConfidence @default(medium)
+
+  // audit
+  notes         String?
+  approvedBy    String?        // userId of approver (required for estimate/manual)
+  metadata      Json?          // raw data from source (worklog ids, SP breakdown, etc.)
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, periodDate])
+  @@index([tenantId, projectId])
+  @@index([tenantId, epicId])
+  @@index([tenantId, taskId])
+  @@index([tenantId, userId])
+  @@index([tenantId, teamId])
+  @@index([tenantId, category])
+}
+
+model CogsBudget {
+  id          String   @id @default(uuid())
+  tenantId    String
+  projectId   String?  // null = team-level budget
+  teamId      String?
+  period      String   // e.g. "2026-Q2" or "2026-04"
+  budgetAmount Float
+  currency    String   @default("USD")
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([tenantId, projectId, teamId, period])
+  @@index([tenantId])
+  @@index([tenantId, period])
+}

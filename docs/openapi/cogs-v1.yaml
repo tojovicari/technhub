@@ -1,0 +1,507 @@
+openapi: '3.1.0'
+info:
+  title: CTO.ai – COGS (Cost of Goods Sold) API
+  version: '1.0.0'
+  description: |
+    REST API for recording engineering cost entries, computing rollups and burn-rate,
+    managing budgets, and analysing cost-of-delivery at any organisational scope
+    (task, epic, project, team, user, or period).
+
+    ## Calculation Models
+    - **timetracking** – actual hours × hourly rate × overhead multiplier
+    - **story_points** – story point estimate × velocity-derived hours/SP × rate
+    - **estimate** – manually supplied cost with a business-value for ROI tracking
+    - **manual** – freeform cost entry (tooling, cloud spend, external services)
+
+    ## Permission Scopes
+    | Permission | Usage |
+    |---|---|
+    | `cogs.write` | Create cost entries |
+    | `cogs.read` | Read entries, rollups, budgets, burn-rate |
+    | `cogs.budget.manage` | Set or update budget targets |
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: COGS Entries
+    description: Individual cost records
+  - name: COGS Rollup
+    description: Aggregated cost views by any axis
+  - name: COGS Budgets
+    description: Budget targets and burn-rate tracking
+  - name: COGS Epic Analysis
+    description: Per-epic cost, ROI, and planned-vs-actual
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    CogsCategory:
+      type: string
+      enum: [engineering, overhead, tooling, cloud, administrative, other]
+      description: |
+        Cost classification:
+        - **engineering** – developer time and salaries
+        - **overhead** – indirect costs applied via overhead_rate
+        - **tooling** – licenses, SaaS tools, IDE, CI runners
+        - **cloud** – infrastructure, compute, storage, data transfer
+        - **administrative** – project management, legal, finance
+        - **other** – uncategorised spend
+
+    CogsSource:
+      type: string
+      enum: [timetracking, story_points, estimate, manual]
+
+    CogsConfidence:
+      type: string
+      enum: [high, medium, low]
+
+    BurnStatus:
+      type: string
+      enum: [on_track, at_risk, over_budget]
+      description: |
+        - **on_track** – burn < 90 % of budget
+        - **at_risk** – burn ≥ 90 % and ≤ 100 %
+        - **over_budget** – burn > 100 %
+
+    DeviationStatus:
+      type: string
+      enum: [on_track, at_risk, over_budget]
+      description: |
+        - **on_track** – actual ≤ 110 % of estimate
+        - **at_risk** – actual ≤ 130 % of estimate
+        - **over_budget** – actual > 130 % of estimate
+
+    CogsEntry:
+      type: object
+      properties:
+        id:           { type: string, format: uuid }
+        tenantId:     { type: string }
+        periodDate:   { type: string, format: date, description: Accounting period date }
+        userId:       { type: string, format: uuid, nullable: true }
+        teamId:       { type: string, format: uuid, nullable: true }
+        projectId:    { type: string, format: uuid, nullable: true }
+        epicId:       { type: string, format: uuid, nullable: true }
+        taskId:       { type: string, format: uuid, nullable: true }
+        hoursWorked:  { type: number, description: Hours billed }
+        hourlyRate:   { type: number, description: Rate in currency units per hour }
+        overheadRate: { type: number, description: Overhead multiplier (1 = no overhead) }
+        totalCost:    { type: number, description: 'Computed: hoursWorked × hourlyRate × overheadRate' }
+        category:     { $ref: '#/components/schemas/CogsCategory' }
+        subcategory:  { type: string, nullable: true, description: Free-text sub-classification }
+        source:       { $ref: '#/components/schemas/CogsSource' }
+        confidence:   { $ref: '#/components/schemas/CogsConfidence' }
+        notes:        { type: string, nullable: true }
+        approvedBy:   { type: string, nullable: true }
+        metadata:     { type: object, nullable: true, description: Source-specific payload (e.g. story_points, estimated_cost, business_value) }
+        createdAt:    { type: string, format: date-time }
+        updatedAt:    { type: string, format: date-time }
+
+    CogsBudget:
+      type: object
+      properties:
+        id:            { type: string, format: uuid }
+        tenantId:      { type: string }
+        projectId:     { type: string, format: uuid, nullable: true }
+        teamId:        { type: string, format: uuid, nullable: true }
+        period:        { type: string, example: '2026-Q2', description: 'Quarter (YYYY-Qn) or month (YYYY-MM)' }
+        budgetAmount:  { type: number }
+        currency:      { type: string, example: USD }
+        notes:         { type: string, nullable: true }
+        createdAt:     { type: string, format: date-time }
+        updatedAt:     { type: string, format: date-time }
+
+    CogsRollup:
+      type: object
+      properties:
+        total_cost:          { type: number }
+        total_hours:         { type: number }
+        cost_per_story_point:{ type: number, nullable: true, description: Only populated when scoped to a project or epic }
+        group_by:            { type: string, enum: [category, user, project, epic, team] }
+        breakdown:           { type: object, additionalProperties: { type: number }, description: Cost keyed by the group_by axis }
+        entry_count:         { type: integer }
+        filters:
+          type: object
+          properties:
+            project_id: { type: string, format: uuid, nullable: true }
+            epic_id:    { type: string, format: uuid, nullable: true }
+            team_id:    { type: string, format: uuid, nullable: true }
+            user_id:    { type: string, format: uuid, nullable: true }
+            date_from:  { type: string, format: date, nullable: true }
+            date_to:    { type: string, format: date, nullable: true }
+
+    BurnRate:
+      type: object
+      properties:
+        actualCost:    { type: number }
+        budgetAmount:  { type: number }
+        burnPercent:   { type: number, description: 'Percentage of budget consumed (0–∞)' }
+        remaining:     { type: number, description: 'budget − actual (negative when over)' }
+        status:        { $ref: '#/components/schemas/BurnStatus' }
+
+    PlannedVsActual:
+      type: object
+      properties:
+        deviationPercent: { type: number }
+        status:           { $ref: '#/components/schemas/DeviationStatus' }
+
+    EpicCogsAnalysis:
+      type: object
+      properties:
+        epic_id:          { type: string, format: uuid }
+        actual_cost:      { type: number }
+        estimated_cost:   { type: number, nullable: true }
+        business_value:   { type: number, nullable: true }
+        roi_percent:      { type: number, nullable: true }
+        planned_vs_actual:
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/PlannedVsActual' }]
+        cost_by_category: { type: object, additionalProperties: { type: number } }
+        entry_count:      { type: integer }
+
+    Pagination:
+      type: object
+      properties:
+        next_cursor: { type: string, nullable: true }
+
+    ApiResponse:
+      type: object
+      properties:
+        data:  {}
+        meta:  { type: object }
+        error: { nullable: true }
+
+    ApiError:
+      type: object
+      properties:
+        data:  { nullable: true }
+        error:
+          type: object
+          properties:
+            code:    { type: string }
+            message: { type: string }
+
+paths:
+  # ── Cost Entries ──────────────────────────────────────────────────────────────
+
+  /cogs/entries:
+    post:
+      summary: Create a cost entry
+      description: |
+        Record a direct cost entry. `total_cost` is auto-computed as
+        `hours_worked × hourly_rate × overhead_rate`.
+        Use `source: timetracking` for actual hours logged, `manual` for fixed costs
+        (set `hours_worked: 0`, `hourly_rate: 0` and supply a non-zero `overhead_rate`
+        equal to the cost if needed), or `estimate` to store business-value metadata
+        alongside a cost figure for later ROI computation.
+      tags: [COGS Entries]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: cogs.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [period_date, category, source]
+              properties:
+                period_date:   { type: string, format: date, description: Accounting date for this entry }
+                user_id:       { type: string, format: uuid }
+                team_id:       { type: string, format: uuid }
+                project_id:    { type: string, format: uuid }
+                epic_id:       { type: string, format: uuid }
+                task_id:       { type: string, format: uuid }
+                hours_worked:  { type: number, minimum: 0, default: 0 }
+                hourly_rate:   { type: number, minimum: 0, default: 0 }
+                overhead_rate: { type: number, minimum: 0, maximum: 10, default: 1, description: '1 = no overhead, 1.3 = 30 % overhead' }
+                category:      { $ref: '#/components/schemas/CogsCategory' }
+                subcategory:   { type: string, description: Free-text sub-label }
+                source:        { $ref: '#/components/schemas/CogsSource' }
+                confidence:    { $ref: '#/components/schemas/CogsConfidence', default: medium }
+                notes:         { type: string }
+                approved_by:   { type: string }
+                metadata:      { type: object, description: Arbitrary payload stored for audit; used by estimate entries to carry estimated_cost and business_value }
+            example:
+              period_date: '2026-04-07'
+              user_id: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
+              project_id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'
+              hours_worked: 8
+              hourly_rate: 120
+              overhead_rate: 1.3
+              category: engineering
+              source: timetracking
+      responses:
+        '201':
+          description: Entry created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/CogsEntry' }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized or tenant scope violation }
+
+    get:
+      summary: List cost entries
+      description: Paginated cursor list of cost entries filtered by any combination of axes.
+      tags: [COGS Entries]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: cogs.read
+      parameters:
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: epic_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: task_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: user_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: category,   in: query, schema: { $ref: '#/components/schemas/CogsCategory' } }
+        - { name: source,     in: query, schema: { $ref: '#/components/schemas/CogsSource' } }
+        - { name: date_from,  in: query, schema: { type: string, format: date } }
+        - { name: date_to,    in: query, schema: { type: string, format: date } }
+        - { name: limit,      in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+        - { name: cursor,     in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Paginated list of entries
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          items:      { type: array, items: { $ref: '#/components/schemas/CogsEntry' } }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  /cogs/entries/estimate:
+    post:
+      summary: Estimate cost from story points
+      description: |
+        Compute a cost entry by extrapolating from historical velocity.
+        Requires at least one completed task with `hours_actual` and `story_points`
+        in the last 30 tasks for the given user. Confidence is `medium` when velocity
+        is available, `low` otherwise with 0 hours assumed.
+      tags: [COGS Entries]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: cogs.write
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [story_points, user_id, period_date]
+              properties:
+                project_id:   { type: string, format: uuid }
+                epic_id:      { type: string, format: uuid }
+                story_points: { type: integer, minimum: 1 }
+                user_id:      { type: string, format: uuid }
+                period_date:  { type: string, format: date }
+                category:     { $ref: '#/components/schemas/CogsCategory', default: engineering }
+                notes:        { type: string }
+      responses:
+        '201':
+          description: Estimated entry created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/CogsEntry' }
+        '400': { description: Validation error }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+        '404': { description: User not found }
+
+  # ── Rollup ────────────────────────────────────────────────────────────────────
+
+  /cogs/rollup:
+    get:
+      summary: Aggregated cost rollup
+      description: |
+        Return total cost, total hours, and a cost breakdown grouped by the chosen axis.
+        `cost_per_story_point` is only computed when the query is scoped to a project or epic.
+      tags: [COGS Rollup]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: cogs.read
+      parameters:
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: epic_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: user_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: date_from,  in: query, schema: { type: string, format: date } }
+        - { name: date_to,    in: query, schema: { type: string, format: date } }
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [category, user, project, epic, team]
+            default: category
+      responses:
+        '200':
+          description: Cost rollup
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/CogsRollup' }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  # ── Epic Analysis ─────────────────────────────────────────────────────────────
+
+  /cogs/epics/{epic_id}:
+    get:
+      summary: Epic cost and ROI analysis
+      description: |
+        Returns the actual total cost for an epic, the estimated cost (if any estimate
+        entry was recorded), business value, ROI percentage, and planned-vs-actual deviation.
+        ROI = (business_value − actual_cost) / actual_cost × 100.
+      tags: [COGS Epic Analysis]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: cogs.read
+      parameters:
+        - name: epic_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Epic cost analysis
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/EpicCogsAnalysis' }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+        '404': { description: Epic not found or no cost entries exist for it }
+
+  # ── Budgets ───────────────────────────────────────────────────────────────────
+
+  /cogs/budgets:
+    post:
+      summary: Set or update a budget target
+      description: |
+        Upsert a budget for a given period + optional project/team scope.
+        The unique key is `(tenant, project_id, team_id, period)`.
+        Omitting `project_id` and `team_id` sets a top-level tenant budget.
+      tags: [COGS Budgets]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: cogs.budget.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [period, budget_amount]
+              properties:
+                project_id:    { type: string, format: uuid }
+                team_id:       { type: string, format: uuid }
+                period:
+                  type: string
+                  pattern: '^\\d{4}-(Q[1-4]|\\d{2})$'
+                  example: '2026-Q2'
+                  description: 'Quarter format: YYYY-Qn  |  Month format: YYYY-MM'
+                budget_amount: { type: number, exclusiveMinimum: 0 }
+                currency:      { type: string, minLength: 3, maxLength: 3, default: USD }
+                notes:         { type: string }
+            example:
+              period: '2026-Q2'
+              project_id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb'
+              budget_amount: 50000
+              currency: USD
+      responses:
+        '201':
+          description: Budget created or updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/CogsBudget' }
+        '400': { description: Validation error }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+    get:
+      summary: List budgets
+      description: List all budget records for the tenant, optionally filtered by period, project, or team.
+      tags: [COGS Budgets]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: cogs.read
+      parameters:
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: period,     in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: Budget list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/CogsBudget' }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  # ── Burn-Rate ─────────────────────────────────────────────────────────────────
+
+  /cogs/burn-rate:
+    get:
+      summary: Burn-rate for a period
+      description: |
+        Compare actual spend against the budget for the stated period.
+        Returns `status: on_track | at_risk | over_budget`.
+        Requires a matching budget to have been set via `POST /cogs/budgets`.
+      tags: [COGS Budgets]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: cogs.read
+      parameters:
+        - name: period
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^\\d{4}-(Q[1-4]|\\d{2})$'
+            example: '2026-Q2'
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,    in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Burn-rate result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/BurnRate' }
+        '400': { description: Invalid period format }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
