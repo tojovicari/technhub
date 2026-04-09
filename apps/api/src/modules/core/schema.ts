@@ -71,8 +71,32 @@ export const updateTaskSchema = z.object({
   custom_fields: z.record(z.unknown()).optional()
 });
 
+export const createUserSchema = z.object({
+  tenant_id: z.string().min(1),
+  email: z.string().email(),
+  full_name: z.string().min(1),
+  role: z.string().min(1),
+  external_id: z.string().optional()
+});
+
+export const addTeamMemberSchema = z.object({
+  user_id: z.string().uuid()
+});
+
+export const listQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional().default(25),
+  cursor: z.string().uuid().optional(),
+  status: z.string().optional(),
+  project_id: z.string().uuid().optional(),
+  epic_id: z.string().uuid().optional(),
+  assignee_id: z.string().uuid().optional()
+});
+
 export type CreateTeamInput = z.infer<typeof createTeamSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type CreateEpicInput = z.infer<typeof createEpicSchema>;
 export type CreateTaskInput = z.infer<typeof createTaskSchema>;
 export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
+export type CreateUserInput = z.infer<typeof createUserSchema>;
+export type AddTeamMemberInput = z.infer<typeof addTeamMemberSchema>;
+export type ListQueryInput = z.infer<typeof listQuerySchema>;

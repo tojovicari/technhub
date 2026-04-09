@@ -1,10 +1,13 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import type {
+  AddTeamMemberInput,
   CreateEpicInput,
   CreateProjectInput,
   CreateTaskInput,
   CreateTeamInput,
+  CreateUserInput,
+  ListQueryInput,
   UpdateTaskInput
 } from './schema.js';
 
@@ -236,4 +239,156 @@ export async function getTask(taskId: string, tenantId: string) {
       reporter: true
     }
   });
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+
+export async function upsertUser(input: CreateUserInput) {
+  await ensureTenant(input.tenant_id);
+
+  return prisma.user.upsert({
+    where: { tenantId_email: { tenantId: input.tenant_id, email: input.email } },
+    create: {
+      tenantId: input.tenant_id,
+      email: input.email,
+      fullName: input.full_name,
+      role: input.role
+    },
+    update: {
+      fullName: input.full_name,
+      role: input.role
+    }
+  });
+}
+
+export async function listUsers(tenantId: string, limit: number, cursor?: string) {
+  const rows = await prisma.user.findMany({
+    where: { tenantId },
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    orderBy: { createdAt: 'asc' }
+  });
+
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  return { items, nextCursor: hasMore ? items[items.length - 1].id : null };
+}
+
+// ─── Team members ─────────────────────────────────────────────────────────────
+
+export async function addTeamMember(teamId: string, tenantId: string, input: AddTeamMemberInput) {
+  const [team, user] = await Promise.all([
+    prisma.team.findFirst({ where: { id: teamId, tenantId } }),
+    prisma.user.findFirst({ where: { id: input.user_id, tenantId } })
+  ]);
+
+  if (!team || !user) {
+    return null;
+  }
+
+  return prisma.teamMember.upsert({
+    where: { teamId_userId: { teamId, userId: input.user_id } },
+    create: { teamId, userId: input.user_id, tenantId },
+    update: {}
+  });
+}
+
+export async function removeTeamMember(teamId: string, userId: string, tenantId: string) {
+  const member = await prisma.teamMember.findFirst({
+    where: { teamId, userId, tenantId }
+  });
+
+  if (!member) {
+    return null;
+  }
+
+  return prisma.teamMember.delete({ where: { id: member.id } });
+}
+
+export async function listTeamMembers(teamId: string, tenantId: string) {
+  const team = await prisma.team.findFirst({ where: { id: teamId, tenantId } });
+  if (!team) {
+    return null;
+  }
+
+  return prisma.teamMember.findMany({
+    where: { teamId, tenantId },
+    include: { user: true },
+    orderBy: { createdAt: 'asc' }
+  });
+}
+
+// ─── List operations with cursor pagination ────────────────────────────────────
+
+export async function listProjects(tenantId: string, query: ListQueryInput) {
+  const { limit, cursor, status } = query;
+  const where: Prisma.ProjectWhereInput = { tenantId };
+  if (status) {
+    where.status = status as Prisma.EnumProjectStatusFilter;
+  }
+
+  const rows = await prisma.project.findMany({
+    where,
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    orderBy: { createdAt: 'desc' }
+  });
+
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  return { items, nextCursor: hasMore ? items[items.length - 1].id : null };
+}
+
+export async function listEpics(tenantId: string, query: ListQueryInput) {
+  const { limit, cursor, status, project_id } = query;
+  const where: Prisma.EpicWhereInput = { tenantId };
+  if (status) {
+    where.status = status as Prisma.EnumEpicStatusFilter;
+  }
+
+  if (project_id) {
+    where.projectId = project_id;
+  }
+
+  const rows = await prisma.epic.findMany({
+    where,
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    orderBy: { createdAt: 'desc' }
+  });
+
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  return { items, nextCursor: hasMore ? items[items.length - 1].id : null };
+}
+
+export async function listTasks(tenantId: string, query: ListQueryInput) {
+  const { limit, cursor, status, project_id, epic_id, assignee_id } = query;
+  const where: Prisma.TaskWhereInput = { tenantId };
+  if (status) {
+    where.status = status as Prisma.EnumTaskStatusFilter;
+  }
+
+  if (project_id) {
+    where.projectId = project_id;
+  }
+
+  if (epic_id) {
+    where.epicId = epic_id;
+  }
+
+  if (assignee_id) {
+    where.assigneeId = assignee_id;
+  }
+
+  const rows = await prisma.task.findMany({
+    where,
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    orderBy: { createdAt: 'desc' }
+  });
+
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  return { items, nextCursor: hasMore ? items[items.length - 1].id : null };
 }
