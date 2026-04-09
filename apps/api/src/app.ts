@@ -6,6 +6,7 @@ import { integrationsRoutes } from './modules/integrations/routes.js';
 import { integrationWebhookRoutes } from './modules/integrations/webhook-routes.js';
 import { startIntegrationsWorker } from './modules/integrations/worker.js';
 import { slaRoutes } from './modules/sla/routes.js';
+import { doraRoutes } from './modules/dora/routes.js';
 import { registerAuth } from './plugins/auth.js';
 
 export function buildApp() {
@@ -33,6 +34,7 @@ export function buildApp() {
   app.register(integrationWebhookRoutes, { prefix: '/api/v1' });
   app.register(coreRoutes, { prefix: '/api/v1' });
   app.register(slaRoutes, { prefix: '/api/v1' });
+  app.register(doraRoutes, { prefix: '/api/v1' });
   startIntegrationsWorker(app);
 
   return app;

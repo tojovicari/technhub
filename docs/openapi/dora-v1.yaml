@@ -1,0 +1,360 @@
+openapi: '3.1.0'
+info:
+  title: CTO.ai – DORA Metrics API
+  version: '1.0.0'
+  description: |
+    REST API for ingesting deployment events, computing DORA metrics scorecard,
+    recording PR lead times, and browsing historical health metric snapshots.
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: DORA
+    description: Deployment Frequency, Lead Time for Changes, MTTR, Change Failure Rate
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    DoraLevel:
+      type: string
+      enum: [elite, high, medium, low]
+      description: |
+        DORA performance classification:
+        - **elite** – best-in-class delivery performance
+        - **high** – strong engineering outcomes
+        - **medium** – meets baseline engineering expectations
+        - **low** – improvement required
+
+    DeployEvent:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        tenantId:    { type: string }
+        projectId:   { type: string, format: uuid, nullable: true }
+        source:      { type: string, enum: [github_release, github_tag, manual] }
+        externalId:  { type: string, nullable: true }
+        ref:         { type: string, description: 'Git tag, branch, or version label' }
+        commitSha:   { type: string, nullable: true }
+        environment: { type: string, default: production }
+        deployedAt:  { type: string, format: date-time }
+        isHotfix:    { type: boolean }
+        isRollback:  { type: boolean }
+        prIds:       { type: array, items: { type: string } }
+        createdAt:   { type: string, format: date-time }
+
+    HealthMetric:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        tenantId:    { type: string }
+        projectId:   { type: string, format: uuid, nullable: true }
+        teamId:      { type: string, format: uuid, nullable: true }
+        metricName:  { type: string }
+        windowDays:  { type: integer }
+        value:       { type: number }
+        unit:        { type: string }
+        level:       { $ref: '#/components/schemas/DoraLevel', nullable: true }
+        computedAt:  { type: string, format: date-time }
+        windowStart: { type: string, format: date-time }
+        windowEnd:   { type: string, format: date-time }
+
+    DoraScorecard:
+      type: object
+      required: [window_days, window_start, window_end, overall_level, deployment_frequency]
+      properties:
+        window_days:  { type: integer, example: 30 }
+        window_start: { type: string, format: date-time }
+        window_end:   { type: string, format: date-time }
+        project_id:   { type: string, format: uuid, nullable: true }
+        overall_level:
+          $ref: '#/components/schemas/DoraLevel'
+        deployment_frequency:
+          type: object
+          properties:
+            value:        { type: number, description: Deployments per day }
+            unit:         { type: string, example: per_day }
+            level:        { $ref: '#/components/schemas/DoraLevel' }
+            deploy_count: { type: integer }
+        lead_time:
+          nullable: true
+          type: object
+          properties:
+            p50:         { type: number, description: Median lead time in hours }
+            p95:         { type: number, description: P95 lead time in hours }
+            unit:        { type: string, example: hours }
+            level:       { $ref: '#/components/schemas/DoraLevel' }
+            sample_size: { type: integer }
+        mttr:
+          nullable: true
+          type: object
+          properties:
+            value:       { type: number, description: Median MTTR in hours }
+            unit:        { type: string, example: hours }
+            level:       { $ref: '#/components/schemas/DoraLevel' }
+            sample_size: { type: integer }
+        change_failure_rate:
+          nullable: true
+          type: object
+          properties:
+            value:         { type: number, description: Failure rate percentage }
+            unit:          { type: string, example: percent }
+            level:         { $ref: '#/components/schemas/DoraLevel' }
+            total_deploys: { type: integer }
+            failed_deploys:{ type: integer }
+
+    Pagination:
+      type: object
+      properties:
+        next_cursor: { type: string, nullable: true }
+
+    ApiResponse:
+      type: object
+      properties:
+        data:  {}
+        meta:  { type: object }
+        error: { nullable: true }
+
+    ApiError:
+      type: object
+      properties:
+        data:  { nullable: true }
+        error:
+          type: object
+          properties:
+            code:    { type: string }
+            message: { type: string }
+
+paths:
+  /dora/deploys:
+    post:
+      summary: Ingest deployment event
+      description: |
+        Record a production deployment. Idempotent when `external_id` is provided.
+        Used for computing Deployment Frequency and Change Failure Rate.
+      tags: [DORA]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: dora.deploy.ingest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ref, deployed_at]
+              properties:
+                project_id:   { type: string, format: uuid }
+                source:
+                  type: string
+                  enum: [github_release, github_tag, manual]
+                  default: manual
+                external_id:  { type: string, description: Provider-assigned unique ID (idempotency key) }
+                ref:          { type: string, minLength: 1, example: v1.4.2 }
+                commit_sha:   { type: string }
+                environment:  { type: string, default: production }
+                deployed_at:  { type: string, format: date-time }
+                is_hotfix:    { type: boolean, default: false }
+                is_rollback:  { type: boolean, default: false }
+                pr_ids:       { type: array, items: { type: string } }
+                raw_payload:  { type: object, description: Original webhook payload for audit }
+      responses:
+        '201':
+          description: Deploy event recorded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/DeployEvent' }
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ApiError' } } } }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized or tenant scope violation }
+
+    get:
+      summary: List deploy events
+      description: Paginated list of deployment events for a tenant, ordered by most recent first.
+      tags: [DORA]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: dora.read
+      parameters:
+        - name: project_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: environment
+          in: query
+          schema: { type: string, default: production }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Paginated deploy events
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/Pagination'
+                          - properties:
+                              data:
+                                type: array
+                                items: { $ref: '#/components/schemas/DeployEvent' }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  /dora/scorecard:
+    get:
+      summary: Compute DORA scorecard
+      description: |
+        Computes all 4 DORA metrics (Deployment Frequency, Lead Time for Changes,
+        MTTR, Change Failure Rate) for a rolling time window and returns an
+        overall engineering performance level.
+
+        **Level thresholds:**
+        | Metric | elite | high | medium | low |
+        |---|---|---|---|---|
+        | Deployment Frequency | ≥ 1/day | ≥ 1/7d | ≥ 1/30d | < 1/30d |
+        | Lead Time | < 1h | < 7d | < 30d | ≥ 30d |
+        | MTTR | < 1h | < 24h | < 7d | ≥ 7d |
+        | Change Failure Rate | ≤ 5% | ≤ 10% | ≤ 15% | > 15% |
+
+        This endpoint also persists a `HealthMetric` snapshot per metric.
+      tags: [DORA]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: dora.read
+      parameters:
+        - name: project_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: window_days
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 365, default: 30 }
+          description: Rolling window size in days
+        - name: environment
+          in: query
+          schema: { type: string, default: production }
+      responses:
+        '200':
+          description: DORA scorecard with per-metric breakdown
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/DoraScorecard' }
+        '400': { description: Validation error }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  /dora/lead-time:
+    post:
+      summary: Ingest PR lead time event
+      description: |
+        Records the lead time for a merged pull request, measured from first commit
+        to merge. Events > 90 days are silently dropped as outliers.
+        Used to compute Lead Time for Changes metric.
+      tags: [DORA]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: dora.deploy.ingest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pr_id, first_commit_at, merged_at]
+              properties:
+                project_id:     { type: string, format: uuid }
+                pr_id:          { type: string, description: Provider PR identifier, example: PR-1042 }
+                first_commit_at:{ type: string, format: date-time }
+                merged_at:      { type: string, format: date-time }
+                environment:    { type: string, default: production }
+      responses:
+        '201':
+          description: Lead time event recorded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          skipped:         { type: boolean }
+                          reason:          { type: string, nullable: true }
+                          lead_time_hours: { type: number }
+                          metric_id:       { type: string, format: uuid, nullable: true }
+        '400': { description: Validation error }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  /dora/history/{metric_name}:
+    get:
+      summary: Get metric history
+      description: |
+        Returns time-series snapshots for a specific health metric, ordered by most
+        recent first.
+
+        Common `metric_name` values:
+        - `deployment_frequency`
+        - `lead_time_p50`, `lead_time_p95`
+        - `mttr`
+        - `change_failure_rate`
+        - `dora_overall`
+      tags: [DORA]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: dora.read
+      parameters:
+        - name: metric_name
+          in: path
+          required: true
+          schema: { type: string }
+          example: deployment_frequency
+        - name: project_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: window_days
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 365, default: 30 }
+          description: Filter snapshots computed for this window size
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Paginated metric history
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/Pagination'
+                          - properties:
+                              data:
+                                type: array
+                                items: { $ref: '#/components/schemas/HealthMetric' }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }

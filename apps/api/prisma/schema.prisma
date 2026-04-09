@@ -143,6 +143,65 @@ enum WebhookEventStatus {
   failed
 }
 
+// ── DORA metrics ──────────────────────────────────────────────────────────────
+
+enum DoraLevel {
+  elite
+  high
+  medium
+  low
+}
+
+enum DeployEventSource {
+  github_release
+  github_tag
+  manual
+}
+
+// Immutable record of a production deployment
+model DeployEvent {
+  id              String            @id @default(uuid())
+  tenantId        String
+  projectId       String?
+  source          DeployEventSource @default(github_release)
+  externalId      String?           // GitHub release id / tag sha
+  ref             String            // tag or branch name
+  commitSha       String?
+  environment     String            @default("production")
+  deployedAt      DateTime
+  isHotfix        Boolean           @default(false)
+  isRollback      Boolean           @default(false)
+  prIds           String[]          // merged PR ids included in this deploy
+  rawPayload      Json?
+  createdAt       DateTime          @default(now())
+
+  @@unique([tenantId, source, externalId])
+  @@index([tenantId])
+  @@index([tenantId, deployedAt])
+  @@index([projectId])
+}
+
+// Time-series snapshot of a computed DORA / health metric
+model HealthMetric {
+  id              String    @id @default(uuid())
+  tenantId        String
+  projectId       String?
+  teamId          String?
+  metricName      String    // e.g. "deployment_frequency", "lead_time_p50"
+  windowDays      Int       @default(30)
+  value           Float
+  unit            String    // "per_day", "hours", "percent", "count"
+  level           DoraLevel?
+  computedAt      DateTime  @default(now())
+  windowStart     DateTime
+  windowEnd       DateTime
+  metadata        Json?     // extra context (sample size, percentile, etc.)
+
+  @@index([tenantId, metricName])
+  @@index([tenantId, projectId, metricName])
+  @@index([computedAt])
+}
+
 model IntegrationConnection {
   id                  String              @id @default(uuid())
   tenantId            String
