@@ -1,0 +1,428 @@
+openapi: '3.1.0'
+info:
+  title: CTO.ai – Intelligence & Forecasting API
+  version: '1.0.0'
+  description: |
+    REST API for predictive analytics and actionable recommendations.
+    All calculations are deterministic, auditable, and explained in the response payload.
+
+    ## Capabilities
+    - **Velocity forecasting** — weighted moving average over sprint history
+    - **Epic completion forecasting** — derived from remaining story points and velocity
+    - **SLA risk scoring** — elapsed-percentage model per running instance
+    - **Anomaly detection** — z-score based flagging of metric time-series
+    - **Recommendations** — rule-based, prioritised action items
+    - **Capacity utilization** — hours logged vs per-person capacity target
+
+    ## Forecasting Methodology
+    Velocity is computed as a linearly-weighted moving average.
+    The most recent week has the highest weight (weight = position index + 1).
+    Confidence degrades as the coefficient of variation (σ/μ) increases.
+
+    ## Permission Scope
+    All endpoints require `intel.read`.
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: Velocity
+    description: Sprint velocity forecast
+  - name: Epics
+    description: Epic completion timeline forecast
+  - name: SLA Risk
+    description: Running SLA instance risk scoring
+  - name: Anomalies
+    description: Statistical anomaly detection on metrics
+  - name: Recommendations
+    description: Rule-based actionable recommendations
+  - name: Capacity
+    description: Team capacity utilization
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Trend:
+      type: string
+      enum: [up, down, stable]
+
+    SlaRiskLevel:
+      type: string
+      enum: [low, medium, high, critical]
+      description: |
+        Based on elapsed time vs SLA window:
+        - **low** < 50 % elapsed
+        - **medium** 50–70 %
+        - **high** 70–90 %
+        - **critical** ≥ 90 %
+
+    AnomalyDirection:
+      type: string
+      enum: [spike, drop]
+
+    RecommendationType:
+      type: string
+      enum:
+        - improve_deployment_frequency
+        - address_sla_violations
+        - review_budget
+        - investigate_velocity_decline
+        - epic_at_risk
+        - team_overloaded
+        - team_underutilized
+
+    WeeklyPoint:
+      type: object
+      properties:
+        weekStart: { type: string, format: date, description: ISO date of the Monday }
+        points:    { type: integer, description: Story points completed in that week }
+
+    VelocityForecast:
+      type: object
+      properties:
+        project_id:                { type: string, format: uuid, nullable: true }
+        team_id:                   { type: string, format: uuid, nullable: true }
+        window_weeks:              { type: integer }
+        forecastedPointsPerWeek:   { type: number, description: Weighted moving average velocity }
+        weeklyHistory:             { type: array, items: { $ref: '#/components/schemas/WeeklyPoint' } }
+        trend:                     { $ref: '#/components/schemas/Trend' }
+        confidenceScore:           { type: integer, minimum: 0, maximum: 100, description: 'Reliability score: 100 = constant velocity, 0 = no data' }
+
+    CompletionForecast:
+      type: object
+      nullable: true
+      description: Null when velocity is zero (cannot estimate)
+      properties:
+        remainingPoints:   { type: integer }
+        velocityPerWeek:   { type: number }
+        weeksRemaining:    { type: integer }
+        estimatedEndDate:  { type: string, format: date }
+
+    EpicForecast:
+      type: object
+      properties:
+        epic_id:            { type: string, format: uuid }
+        epic_name:          { type: string }
+        status:             { type: string }
+        target_end_date:    { type: string, format: date, nullable: true }
+        remaining_points:   { type: integer }
+        velocity_forecast:
+          type: object
+          properties:
+            forecasted_points_per_week: { type: number }
+            trend:                      { $ref: '#/components/schemas/Trend' }
+            confidence_score:           { type: integer }
+        completion_forecast: { $ref: '#/components/schemas/CompletionForecast' }
+        weeks_overdue:       { type: integer, nullable: true, description: Positive = overdue; 0 = on track; null = no target set }
+
+    SlaRiskItem:
+      type: object
+      properties:
+        instanceId:          { type: string, format: uuid }
+        taskId:              { type: string, format: uuid }
+        elapsedPercent:      { type: number, description: Percentage of SLA window elapsed }
+        riskScore:           { type: number, minimum: 0, maximum: 100 }
+        riskLevel:           { $ref: '#/components/schemas/SlaRiskLevel' }
+        hoursUntilDeadline:  { type: number, description: Hours remaining (0 if past deadline) }
+        deadlineAt:          { type: string, format: date-time }
+
+    AnomalyPoint:
+      type: object
+      properties:
+        date:      { type: string, format: date }
+        value:     { type: number }
+        zScore:    { type: number, description: Standard deviations from the series mean }
+        direction: { $ref: '#/components/schemas/AnomalyDirection' }
+
+    AnomalyGroup:
+      type: object
+      description: Anomalies grouped by metric name and optional project scope
+      properties:
+        metric_name: { type: string }
+        project_id:  { type: string, format: uuid, nullable: true }
+        anomalies:   { type: array, items: { $ref: '#/components/schemas/AnomalyPoint' } }
+
+    Recommendation:
+      type: object
+      properties:
+        type:     { $ref: '#/components/schemas/RecommendationType' }
+        priority: { type: string, enum: [high, medium, low] }
+        message:  { type: string, description: Human-readable action description }
+        context:  { type: object, description: Supporting data for the recommendation }
+
+    CapacityUser:
+      type: object
+      properties:
+        userId:             { type: string, format: uuid }
+        hoursWorked:        { type: number }
+        capacityHours:      { type: number }
+        utilizationPercent: { type: number }
+        status:
+          type: string
+          enum: [under, normal, over]
+          description: |
+            - **under** < 70 % utilization
+            - **normal** 70–110 %
+            - **over** > 110 %
+
+    CapacityReport:
+      type: object
+      properties:
+        period:                    { type: string }
+        team_id:                   { type: string, format: uuid, nullable: true }
+        capacity_hours_per_person: { type: number }
+        total_users:               { type: integer }
+        overloaded_count:          { type: integer }
+        utilization:               { type: array, items: { $ref: '#/components/schemas/CapacityUser' } }
+
+    ApiResponse:
+      type: object
+      properties:
+        data:  {}
+        meta:  { type: object }
+        error: { nullable: true }
+
+    ApiError:
+      type: object
+      properties:
+        data:  { nullable: true }
+        error:
+          type: object
+          properties:
+            code:    { type: string }
+            message: { type: string }
+
+paths:
+  # ── Velocity ──────────────────────────────────────────────────────────────────
+
+  /intel/velocity/forecast:
+    get:
+      summary: Sprint velocity forecast
+      description: |
+        Compute a velocity forecast for the given project or team using a
+        linearly-weighted moving average over the past `window_weeks` weeks.
+
+        **Formula:** `forecast = Σ(points[i] × (i+1)) / Σ(i+1)` (most-recent week has highest weight)
+
+        `confidence_score` approaches 0 when velocity is highly variable,
+        and 100 when it is constant.
+      tags: [Velocity]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: intel.read
+      parameters:
+        - { name: project_id,   in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,      in: query, schema: { type: string, format: uuid } }
+        - name: window_weeks
+          in: query
+          schema: { type: integer, minimum: 4, maximum: 52, default: 12 }
+      responses:
+        '200':
+          description: Velocity forecast result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/VelocityForecast' }
+        '400': { description: Validation error }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  # ── Epic Forecast ─────────────────────────────────────────────────────────────
+
+  /intel/epics/{epic_id}/forecast:
+    get:
+      summary: Epic completion forecast
+      description: |
+        Estimate the remaining delivery time for an epic based on:
+        1. Remaining story points (open tasks with `story_points > 0`)
+        2. Velocity forecast derived from the epic's project history
+
+        `weeks_overdue` is the number of weeks the estimate overshoots `target_end_date`.
+        A `completion_forecast` of `null` means velocity is zero — no estimate is possible.
+      tags: [Epics]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: intel.read
+      parameters:
+        - name: epic_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Epic completion forecast
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/EpicForecast' }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+        '404': { description: Epic not found or no cost/task data exists }
+
+  # ── SLA Risk ──────────────────────────────────────────────────────────────────
+
+  /intel/sla/risk:
+    get:
+      summary: SLA risk scoring
+      description: |
+        Returns risk scores for all currently running SLA instances, ordered by deadline (nearest first).
+
+        **Formula:** `elapsed_percent = (now − started_at) / (deadline_at − started_at) × 100`
+
+        Instances past their deadline are returned with `riskScore: 100` and `hoursUntilDeadline: 0`.
+      tags: [SLA Risk]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: intel.read
+      parameters:
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: limit,      in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        '200':
+          description: SLA risk list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/SlaRiskItem' }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  # ── Anomalies ─────────────────────────────────────────────────────────────────
+
+  /intel/anomalies:
+    get:
+      summary: Detect metric anomalies
+      description: |
+        Flags data points in `HealthMetric` time-series where the standardised
+        z-score exceeds the threshold.
+
+        **Formula:** `z = (value − μ) / σ`; flagged when `|z| > z_threshold`
+
+        Results are grouped by `(metric_name, project_id)` and ordered by date.
+        Only groups with at least one anomaly are returned.
+      tags: [Anomalies]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: intel.read
+      parameters:
+        - { name: metric_name, in: query, schema: { type: string, description: 'Filter to a specific metric name (e.g. deployment_frequency)' } }
+        - { name: project_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: window_days, in: query, schema: { type: integer, minimum: 7, maximum: 365, default: 90 } }
+        - name: z_threshold
+          in: query
+          schema: { type: number, minimum: 1, maximum: 5, default: 2.0 }
+          description: 'Number of standard deviations to flag as an anomaly. Lower = more sensitive.'
+      responses:
+        '200':
+          description: Anomaly groups (empty array when no anomalies found)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/AnomalyGroup' }
+        '400': { description: Validation error }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  # ── Recommendations ───────────────────────────────────────────────────────────
+
+  /intel/recommendations:
+    get:
+      summary: Generate actionable recommendations
+      description: |
+        Aggregates signals from DORA metrics, SLA compliance, COGS burn-rate,
+        velocity trend, and epic schedules to produce a prioritised list of
+        recommended actions.
+
+        Results are sorted high → medium → low priority.
+        Returns an empty array when all signals are healthy.
+      tags: [Recommendations]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: intel.read
+      parameters:
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,    in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Prioritised recommendation list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Recommendation' }
+        '400': { description: Validation error }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  # ── Capacity ──────────────────────────────────────────────────────────────────
+
+  /intel/capacity:
+    get:
+      summary: Team capacity utilization
+      description: |
+        Computes utilization per person for a given period by summing `CogsEntry.hoursWorked`
+        and comparing against the `capacity_hours` target.
+
+        **Formula:** `utilization_percent = hours_worked / capacity_hours × 100`
+
+        Status thresholds:
+        - **under** < 70 %
+        - **normal** 70–110 %
+        - **over** > 110 %
+
+        `overloaded_count` is the number of users with status `over`.
+        Useful for spotting burnout risk before it impacts velocity.
+      tags: [Capacity]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: intel.read
+      parameters:
+        - name: period
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: '^\\d{4}-(Q[1-4]|\\d{2})$'
+            example: '2026-Q2'
+          description: 'Quarter (YYYY-Qn) or month (YYYY-MM)'
+        - { name: team_id,        in: query, schema: { type: string, format: uuid } }
+        - name: capacity_hours
+          in: query
+          schema: { type: number, minimum: 1, default: 160 }
+          description: 'Expected productive hours per person for the period (default: 160 = ~4 weeks × 40h)'
+      responses:
+        '200':
+          description: Capacity utilization report
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/CapacityReport' }
+        '400': { description: Validation error (missing or malformed period) }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
