@@ -1,0 +1,532 @@
+openapi: 3.1.0
+info:
+  title: CTO.ai — SLA API
+  version: v1
+  description: |
+    SLA Templates and Instances for CTO.ai.
+    Defines compliance rules per task type/priority, evaluates breaches, and exposes dashboard data.
+
+servers:
+  - url: /api/v1
+
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    SlaRule:
+      type: object
+      required: [field, op, value]
+      properties:
+        field:
+          type: string
+          example: task_type
+        op:
+          type: string
+          enum: [eq, in, contains, any, gte, lte]
+        value:
+          oneOf:
+            - type: string
+            - type: number
+            - type: array
+              items:
+                type: string
+
+    SlaConditionGroup:
+      type: object
+      required: [operator, rules]
+      properties:
+        operator:
+          type: string
+          enum: [AND, OR]
+        rules:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/SlaRule'
+              - $ref: '#/components/schemas/SlaConditionGroup'
+      example:
+        operator: AND
+        rules:
+          - field: task_type
+            op: in
+            value: [bug]
+          - field: priority
+            op: in
+            value: [P0, P1]
+
+    SlaRuleEntry:
+      type: object
+      required: [target_minutes, warning_at_percent]
+      properties:
+        target_minutes:
+          type: integer
+          minimum: 1
+          example: 120
+        warning_at_percent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          example: 80
+
+    SlaPriorityRules:
+      type: object
+      description: Map of TaskPriority → SlaRuleEntry
+      additionalProperties:
+        $ref: '#/components/schemas/SlaRuleEntry'
+      example:
+        P0: { target_minutes: 120, warning_at_percent: 80 }
+        P1: { target_minutes: 480, warning_at_percent: 80 }
+        P2: { target_minutes: 1440, warning_at_percent: 75 }
+
+    SlaEscalationNotify:
+      type: object
+      properties:
+        notify:
+          type: array
+          items:
+            type: string
+          example: [assignee, team_lead]
+        create_incident:
+          type: boolean
+
+    SlaEscalationRule:
+      type: object
+      properties:
+        at_risk:
+          $ref: '#/components/schemas/SlaEscalationNotify'
+        breached:
+          $ref: '#/components/schemas/SlaEscalationNotify'
+
+    SlaTemplate:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        condition:
+          $ref: '#/components/schemas/SlaConditionGroup'
+        priority:
+          type: integer
+          description: Evaluation order — lower number evaluated first
+        applies_to:
+          type: array
+          items:
+            type: string
+            enum: [feature, bug, chore, spike, tech_debt]
+        rules:
+          $ref: '#/components/schemas/SlaPriorityRules'
+        escalation_rule:
+          $ref: '#/components/schemas/SlaEscalationRule'
+          nullable: true
+        project_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Scopes template to specific projects (empty = all projects in tenant)
+        is_default:
+          type: boolean
+          description: Applied when no other condition matches
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SlaInstance:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        sla_template_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+        target_minutes:
+          type: integer
+        started_at:
+          type: string
+          format: date-time
+        deadline_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum: [running, met, at_risk, breached, superseded]
+        actual_minutes:
+          type: integer
+          nullable: true
+        breach_minutes:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        template:
+          type: object
+          nullable: true
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+
+    SlaEvaluateResult:
+      type: object
+      properties:
+        instance_id:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+        action:
+          type: string
+          enum: [created, updated, closed, noop]
+
+    Error:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+        message:
+          type: string
+
+    PaginatedTemplates:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SlaTemplate'
+        next_cursor:
+          type: string
+          format: uuid
+          nullable: true
+
+    PaginatedInstances:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/SlaInstance'
+        next_cursor:
+          type: string
+          format: uuid
+          nullable: true
+
+paths:
+  /sla/templates:
+    post:
+      summary: Create SLA template
+      operationId: createSlaTemplate
+      x-required-permissions: [sla.template.manage]
+      tags: [SLA Templates]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, condition, applies_to, rules]
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                condition:
+                  $ref: '#/components/schemas/SlaConditionGroup'
+                priority:
+                  type: integer
+                  default: 100
+                applies_to:
+                  type: array
+                  items:
+                    type: string
+                    enum: [feature, bug, chore, spike, tech_debt]
+                  minItems: 1
+                rules:
+                  $ref: '#/components/schemas/SlaPriorityRules'
+                escalation_rule:
+                  $ref: '#/components/schemas/SlaEscalationRule'
+                project_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                is_default:
+                  type: boolean
+                  default: false
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlaTemplate'
+        '400':
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+
+    get:
+      summary: List SLA templates
+      operationId: listSlaTemplates
+      x-required-permissions: [sla.template.read]
+      tags: [SLA Templates]
+      parameters:
+        - name: is_active
+          in: query
+          schema:
+            type: boolean
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTemplates'
+        '401':
+          description: Unauthorized
+
+  /sla/templates/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+
+    get:
+      summary: Get SLA template by ID
+      operationId: getSlaTemplate
+      x-required-permissions: [sla.template.read]
+      tags: [SLA Templates]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlaTemplate'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Not found
+
+    patch:
+      summary: Update SLA template
+      operationId: updateSlaTemplate
+      x-required-permissions: [sla.template.manage]
+      tags: [SLA Templates]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                condition:
+                  $ref: '#/components/schemas/SlaConditionGroup'
+                priority:
+                  type: integer
+                applies_to:
+                  type: array
+                  items:
+                    type: string
+                    enum: [feature, bug, chore, spike, tech_debt]
+                rules:
+                  $ref: '#/components/schemas/SlaPriorityRules'
+                escalation_rule:
+                  $ref: '#/components/schemas/SlaEscalationRule'
+                project_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                is_default:
+                  type: boolean
+                is_active:
+                  type: boolean
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlaTemplate'
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+
+    delete:
+      summary: Delete SLA template
+      operationId: deleteSlaTemplate
+      x-required-permissions: [sla.template.manage]
+      tags: [SLA Templates]
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+
+  /sla/evaluate:
+    post:
+      summary: Evaluate a task event against SLA rules
+      operationId: evaluateTaskSla
+      x-required-permissions: [sla.evaluate]
+      tags: [SLA Engine]
+      description: |
+        Pushes a task state event into the SLA engine.
+        The engine evaluates templates in priority order and creates/updates/closes SLA instances.
+        This endpoint is consumed internally by the integration layer on task sync events.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [task_id, tenant_id, task_type, priority, status]
+              properties:
+                task_id:
+                  type: string
+                  format: uuid
+                tenant_id:
+                  type: string
+                task_type:
+                  type: string
+                  enum: [feature, bug, chore, spike, tech_debt]
+                priority:
+                  type: string
+                  enum: [P0, P1, P2, P3, P4]
+                status:
+                  type: string
+                  enum: [backlog, todo, in_progress, review, done, cancelled]
+                started_at:
+                  type: string
+                  format: date-time
+                labels:
+                  type: array
+                  items:
+                    type: string
+                component:
+                  type: string
+                project_id:
+                  type: string
+                  format: uuid
+                source:
+                  type: string
+                  enum: [jira, github, manual]
+      responses:
+        '200':
+          description: Evaluation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SlaEvaluateResult'
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden — tenant mismatch
+
+  /sla/instances:
+    get:
+      summary: List SLA instances (for dashboards)
+      operationId: listSlaInstances
+      x-required-permissions: [sla.template.read]
+      tags: [SLA Instances]
+      parameters:
+        - name: task_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [running, met, at_risk, breached, superseded]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedInstances'
+        '401':
+          description: Unauthorized

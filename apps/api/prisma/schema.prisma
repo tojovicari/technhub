@@ -100,6 +100,14 @@ enum TaskSlaStatus {
   n_a
 }
 
+enum SlaInstanceStatus {
+  running
+  met
+  at_risk
+  breached
+  superseded
+}
+
 enum IntegrationProvider {
   jira
   github
@@ -276,11 +284,58 @@ model Task {
   epic             Epic?        @relation(fields: [epicId], references: [id], onDelete: SetNull)
   assignee         User?        @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   reporter         User?        @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
+  slaInstances     SlaInstance[]
 
   @@index([tenantId])
   @@index([projectId])
   @@index([epicId])
   @@index([status])
+}
+
+model SlaTemplate {
+  id              String   @id @default(uuid())
+  tenantId        String
+  name            String
+  description     String?
+  condition       Json     // SlaConditionGroup
+  priority        Int      @default(100)
+  appliesTo       String[] // TaskType values
+  rules           Json     // Record<TaskPriority, { target_minutes: int, warning_at_percent: int }>
+  escalationRule  Json?    // { at_risk: {...}, breached: {...} }
+  projectIds      String[]
+  isDefault       Boolean  @default(false)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  instances       SlaInstance[]
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+}
+
+model SlaInstance {
+  id              String            @id @default(uuid())
+  taskId          String
+  slaTemplateId   String
+  tenantId        String
+  targetMinutes   Int
+  startedAt       DateTime
+  deadlineAt      DateTime
+  completedAt     DateTime?
+  status          SlaInstanceStatus @default(running)
+  actualMinutes   Int?
+  breachMinutes   Int?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  task            Task              @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  template        SlaTemplate       @relation(fields: [slaTemplateId], references: [id], onDelete: Restrict)
+
+  @@index([tenantId])
+  @@index([taskId])
+  @@index([status])
+  @@index([deadlineAt])
 }
 
 model IntegrationSecret {
