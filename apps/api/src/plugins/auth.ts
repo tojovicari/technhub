@@ -1,0 +1,72 @@
+import jwt from '@fastify/jwt';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import { fail } from '../lib/http.js';
+
+type JwtUser = {
+  sub: string;
+  tenant_id: string;
+  roles: string[];
+  permissions: string[];
+};
+
+const DEV_USER: JwtUser = {
+  sub: 'usr_dev',
+  tenant_id: 'ten_1',
+  roles: ['org_admin'],
+  permissions: ['*']
+};
+
+export async function registerAuth(app: FastifyInstance) {
+  app.register(jwt, {
+    secret: process.env.JWT_SECRET || 'dev-local-secret-change-me'
+  });
+
+  app.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
+    if (process.env.AUTH_BYPASS === 'true') {
+      request.user = DEV_USER;
+      return;
+    }
+
+    try {
+      await request.jwtVerify();
+    } catch {
+      return reply
+        .status(401)
+        .send(fail(request, 'UNAUTHORIZED', 'Invalid or missing token'));
+    }
+  });
+
+  app.decorate('requirePermission', (permission: string) => {
+    return async (request: FastifyRequest, reply: FastifyReply) => {
+      const user = request.user as JwtUser | undefined;
+      const permissions = user?.permissions || [];
+
+      if (!permissions.includes('*') && !permissions.includes(permission)) {
+        return reply.status(403).send(
+          fail(request, 'FORBIDDEN', 'Missing required permission', {
+            required_permission: permission,
+            reason: 'missing_permission'
+          })
+        );
+      }
+    };
+  });
+}
+
+export function ensureTenantScope(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  tenantId: string | undefined
+) {
+  const user = request.user as JwtUser | undefined;
+
+  if (!tenantId || !user?.tenant_id || tenantId !== user.tenant_id) {
+    return reply.status(403).send(
+      fail(request, 'FORBIDDEN', 'Tenant scope violation', {
+        reason: 'tenant_mismatch'
+      })
+    );
+  }
+
+  return null;
+}

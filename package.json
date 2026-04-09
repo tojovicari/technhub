@@ -1,0 +1,15 @@
+{
+  "name": "cto_ai",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "api:dev": "npm --prefix apps/api run dev",
+    "api:build": "npm --prefix apps/api run build",
+    "api:start": "npm --prefix apps/api run start",
+    "api:prisma:generate": "npm --prefix apps/api run prisma:generate",
+    "api:prisma:migrate:dev": "npm --prefix apps/api run prisma:migrate:dev",
+    "api:prisma:migrate:deploy": "npm --prefix apps/api run prisma:migrate:deploy"
+  }
+}

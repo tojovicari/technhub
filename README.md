@@ -56,6 +56,7 @@ cto_ai/
     ├── roadmap.md              ← fases e milestones do projeto
     ├── tech-stack.md           ← decisões de tecnologia
     └── openapi/
+        ├── core-v1.yaml        ← contratos Core (teams, projects, epics, tasks)
         ├── iam-v1.yaml         ← contratos IAM (roles, perfis e atribuições)
         ├── integrations-v1.yaml← contratos integrações + rotação de secrets
         └── authorization-policy-v1.yaml ← contrato transversal de autorização backend
@@ -126,6 +127,100 @@ Decisões de tecnologia com justificativas.
 ## Status do Projeto
 
 > 🟡 Em planejamento — Fase 1 não iniciada
+
+---
+
+## Desenvolvimento Local (Backend)
+
+Backend inicial em [apps/api](apps/api) com Node.js + Fastify + Prisma.
+
+### 1) Instalar dependências
+
+```bash
+npm --prefix apps/api install
+```
+
+### 2) Configurar ambiente local
+
+```bash
+cp apps/api/.env.example apps/api/.env
+```
+
+### 3) Banco local
+
+Opcao A (Docker Compose):
+
+```bash
+npm run db:up
+```
+
+Opcao B (Postgres local ja instalado):
+- garantir um banco `cto_ai` local
+- manter `DATABASE_URL` no [apps/api/.env](apps/api/.env)
+
+### 4) Controle de datamodel e migration
+
+```bash
+npm run api:prisma:migrate:dev -- --name init
+npm run api:prisma:generate
+```
+
+Pratica recomendada:
+- toda alteracao no [apps/api/prisma/schema.prisma](apps/api/prisma/schema.prisma) deve gerar migration versionada
+- nunca alterar estrutura manualmente em producao sem migration correspondente
+- em deploy, aplicar com `npm run api:prisma:migrate:deploy`
+
+### 5) Rodar API local
+
+```bash
+npm run api:dev
+```
+
+Endpoints iniciais:
+- [apps/api/src/app.ts](apps/api/src/app.ts): `GET /health`
+- [apps/api/src/app.ts](apps/api/src/app.ts): `GET /ready`
+
+### 6) Auth local (JWT)
+
+As rotas de API em `/api/v1/*` exigem JWT por padrao.
+
+Claims minimas esperadas:
+- `sub`
+- `tenant_id`
+- `roles[]`
+- `permissions[]`
+
+Permissoes de Integrations usadas no backend:
+- `integrations.connection.manage`
+- `integrations.secret.rotate`
+- `integrations.sync.trigger`
+- `integrations.sync.read`
+- `integrations.webhook.read`
+
+Permissoes de Core usadas no backend:
+- `core.team.manage`
+- `core.project.manage`
+- `core.project.read`
+- `core.epic.manage`
+- `core.epic.read`
+- `core.task.write`
+- `core.task.read`
+
+Em desenvolvimento local, e possivel bypass temporario com:
+
+```bash
+AUTH_BYPASS=true
+```
+
+Mantendo `AUTH_BYPASS=false` (padrao), gere um token HS256 de teste com o mesmo `JWT_SECRET` do `.env`.
+
+### 7) Webhooks locais
+
+Webhooks usam token de provider no header `x-webhook-token`:
+- `GITHUB_WEBHOOK_TOKEN`
+- `JIRA_WEBHOOK_TOKEN`
+
+O worker interno de webhooks roda em polling com `WEBHOOK_WORKER_INTERVAL_MS` e consome a fila persistida em Postgres.
 
 ---
 

@@ -109,6 +109,73 @@ paths:
         '404':
           description: Not found
 
+  /integrations/webhooks/{provider}/{tenant_id}:
+    post:
+      tags: [Integrations]
+      summary: Receive provider webhook and enqueue async processing
+      operationId: receiveIntegrationWebhook
+      security: []
+      parameters:
+        - in: path
+          name: provider
+          required: true
+          schema:
+            type: string
+            enum: [jira, github]
+        - in: path
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+        - in: header
+          name: x-webhook-token
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '202':
+          description: Accepted and queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEventAcceptedResponse'
+        '400':
+          description: Unsupported provider or invalid payload
+        '401':
+          description: Invalid webhook token
+
+  /integrations/webhooks/events/{event_id}:
+    get:
+      tags: [Integrations]
+      summary: Get webhook event processing status
+      operationId: getWebhookEvent
+      parameters:
+        - in: path
+          name: event_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEventResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Not found
+
 components:
   securitySchemes:
     bearerAuth:
@@ -309,6 +376,73 @@ components:
       properties:
         data:
           $ref: '#/components/schemas/SyncJob'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    WebhookEventAccepted:
+      type: object
+      required: [event_id, provider, status, received_at]
+      properties:
+        event_id:
+          type: string
+        provider:
+          type: string
+          enum: [jira, github]
+        status:
+          type: string
+          enum: [queued, processing, processed, failed]
+        received_at:
+          type: string
+          format: date-time
+
+    WebhookEventAcceptedResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/WebhookEventAccepted'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    WebhookEvent:
+      type: object
+      required: [id, tenant_id, provider, external_id, event_type, status, attempts, received_at]
+      properties:
+        id:
+          type: string
+        tenant_id:
+          type: string
+        provider:
+          type: string
+          enum: [jira, github]
+        external_id:
+          type: string
+        event_type:
+          type: string
+        status:
+          type: string
+          enum: [queued, processing, processed, failed]
+        attempts:
+          type: integer
+        last_error:
+          type: string
+          nullable: true
+        received_at:
+          type: string
+          format: date-time
+        processed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    WebhookEventResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/WebhookEvent'
         meta:
           $ref: '#/components/schemas/Meta'
         error:
