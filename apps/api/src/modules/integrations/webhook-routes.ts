@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
 import { prisma } from '../../lib/prisma.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
+import { isValidProvider } from './connectors/registry.js';
 import {
   enqueueWebhookEvent,
   resolveExternalEventId,
@@ -16,7 +17,7 @@ export async function integrationWebhookRoutes(app: FastifyInstance) {
       tenant_id: string;
     };
 
-    if (provider !== 'jira' && provider !== 'github') {
+    if (!isValidProvider(provider)) {
       return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Unsupported provider'));
     }
 

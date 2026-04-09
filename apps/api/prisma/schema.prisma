@@ -8,17 +8,55 @@ datasource db {
 }
 
 model Tenant {
-  id         String   @id
-  name       String
-  slug       String   @unique
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-  users      User[]
-  connections IntegrationConnection[]
-  teams      Team[]
-  projects   Project[]
-  epics      Epic[]
-  tasks      Task[]
+  id               String            @id
+  name             String
+  slug             String            @unique
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  users            User[]
+  connections      IntegrationConnection[]
+  teams            Team[]
+  projects         Project[]
+  epics            Epic[]
+  tasks            Task[]
+  platformAccounts PlatformAccount[]
+}
+
+enum PlatformRole {
+  org_admin
+  manager
+  viewer
+}
+
+model PlatformAccount {
+  id            String                 @id @default(uuid())
+  tenantId      String
+  email         String                 @unique
+  passwordHash  String
+  fullName      String
+  role          PlatformRole           @default(viewer)
+  isActive      Boolean                @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  refreshTokens PlatformRefreshToken[]
+
+  @@index([tenantId])
+}
+
+model PlatformRefreshToken {
+  id        String          @id @default(uuid())
+  accountId String
+  tokenHash String          @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime        @default(now())
+
+  account   PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
 }
 
 model User {
@@ -306,6 +344,7 @@ model Epic {
   owner             User?       @relation("EpicOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   tasks             Task[]
 
+  @@unique([tenantId, source, sourceId])
   @@index([tenantId])
   @@index([projectId])
 }
@@ -345,6 +384,7 @@ model Task {
   reporter         User?        @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
   slaInstances     SlaInstance[]
 
+  @@unique([tenantId, source, sourceId])
   @@index([tenantId])
   @@index([projectId])
   @@index([epicId])

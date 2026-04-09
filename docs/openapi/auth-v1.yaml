@@ -1,0 +1,410 @@
+openapi: 3.0.3
+info:
+  title: CTO.ai Auth API
+  version: 1.0.0
+  description: |
+    Platform authentication for CTO.ai users (CTOs, Tech Managers, viewers).
+    Separate from `core/users`, which represents integration-sourced collaborators.
+    Uses email + password with JWT access tokens and rotating refresh tokens.
+servers:
+  - url: /api/v1
+tags:
+  - name: Auth
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a platform account
+      operationId: registerAccount
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              tenant_id: ten_1
+              email: glauber@example.com
+              password: Abcd1234
+              full_name: Glauber Vicari
+              role: org_admin
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/EmailTaken'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Authenticate and obtain tokens
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: glauber@example.com
+              password: Abcd1234
+      responses:
+        '200':
+          description: Authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/InvalidCredentials'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate refresh token and obtain new access token
+      operationId: refreshToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Tokens rotated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/InvalidRefreshToken'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke refresh token
+      operationId: logout
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current platform account
+      operationId: getMe
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Account not found or disabled
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            data: null
+            meta:
+              request_id: req_unauth
+              version: v1
+              timestamp: '2026-04-09T19:00:00Z'
+            error:
+              code: UNAUTHORIZED
+              message: Invalid or missing token
+
+    ValidationError:
+      description: Request body validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            data: null
+            meta:
+              request_id: req_val
+              version: v1
+              timestamp: '2026-04-09T19:00:00Z'
+            error:
+              code: VALIDATION_ERROR
+              message: Invalid request body
+              details:
+                issues: []
+
+    EmailTaken:
+      description: Email already registered
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            data: null
+            meta:
+              request_id: req_409
+              version: v1
+              timestamp: '2026-04-09T19:00:00Z'
+            error:
+              code: EMAIL_TAKEN
+              message: Email already registered
+
+    InvalidCredentials:
+      description: Invalid email or password
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            data: null
+            meta:
+              request_id: req_401
+              version: v1
+              timestamp: '2026-04-09T19:00:00Z'
+            error:
+              code: INVALID_CREDENTIALS
+              message: Invalid email or password
+
+    InvalidRefreshToken:
+      description: Refresh token is expired, revoked, or invalid
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            data: null
+            meta:
+              request_id: req_401r
+              version: v1
+              timestamp: '2026-04-09T19:00:00Z'
+            error:
+              code: INVALID_REFRESH_TOKEN
+              message: Invalid or expired refresh token
+
+  schemas:
+    Meta:
+      type: object
+      required: [request_id, version, timestamp]
+      properties:
+        request_id:
+          type: string
+        version:
+          type: string
+          example: v1
+        timestamp:
+          type: string
+          format: date-time
+
+    ErrorBody:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+
+    ErrorResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          nullable: true
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+
+    PlatformRole:
+      type: string
+      enum: [org_admin, manager, viewer]
+      description: |
+        - `org_admin`: full wildcard permissions (`*`)
+        - `manager`: read/write on core, read on DORA/SLA/COGS/Intel
+        - `viewer`: read-only on core, DORA, SLA, Intel
+
+    Account:
+      type: object
+      required: [id, tenant_id, email, full_name, role, is_active, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+        email:
+          type: string
+          format: email
+        full_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/PlatformRole'
+        is_active:
+          type: boolean
+        last_login_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    AccountResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          $ref: '#/components/schemas/Account'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    RegisterRequest:
+      type: object
+      required: [tenant_id, email, password, full_name]
+      properties:
+        tenant_id:
+          type: string
+          minLength: 1
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+          description: Min 8 chars, at least one uppercase letter and one digit
+        full_name:
+          type: string
+          minLength: 1
+        role:
+          $ref: '#/components/schemas/PlatformRole'
+          default: viewer
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+
+    RefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+
+    TokenPair:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: JWT — valid for 1 hour
+        refresh_token:
+          type: string
+          description: Opaque token — valid for 7 days, rotated on each use
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          example: 3600
+          description: Access token TTL in seconds
+
+    LoginResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          allOf:
+            - $ref: '#/components/schemas/TokenPair'
+            - type: object
+              required: [account]
+              properties:
+                account:
+                  $ref: '#/components/schemas/Account'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    RefreshResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          $ref: '#/components/schemas/TokenPair'
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true
+
+    LogoutResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          type: object
+          properties:
+            message:
+              type: string
+              example: Logged out successfully
+        meta:
+          $ref: '#/components/schemas/Meta'
+        error:
+          nullable: true

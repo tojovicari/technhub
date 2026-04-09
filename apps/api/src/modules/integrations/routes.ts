@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
-import { createConnectionSchema, createSyncJobSchema, rotateSecretSchema } from './schema.js';
-import { createConnection, createSyncJob, getSyncJob, rotateSecret } from './service.js';
+import { createConnectionSchema, createSyncJobSchema, rotateSecretSchema, updateConnectionSchema } from './schema.js';
+import { createConnection, createSyncJob, deleteConnection, getConnection, getSyncJob, listConnections, rotateSecret, updateConnection } from './service.js';
 
 function mapConnection(connection: {
   id: string;
@@ -45,6 +45,28 @@ function mapSyncJob(job: {
 }
 
 export async function integrationsRoutes(app: FastifyInstance) {
+  app.get('/integrations/connections', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.read')]
+  }, async (request, reply) => {
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const connections = await listConnections(tenantId);
+    return reply.status(200).send(ok(request, connections.map(mapConnection)));
+  });
+
+  app.get('/integrations/connections/:connection_id', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.read')]
+  }, async (request, reply) => {
+    const { connection_id: connectionId } = request.params as { connection_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const connection = await getConnection(connectionId, tenantId);
+
+    if (!connection) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+
+    return reply.status(200).send(ok(request, mapConnection(connection)));
+  });
+
   app.post('/integrations/connections', {
     preHandler: [app.authenticate, app.requirePermission('integrations.connection.manage')]
   }, async (request, reply) => {
@@ -64,6 +86,49 @@ export async function integrationsRoutes(app: FastifyInstance) {
     const connection = await createConnection(parsed.data);
 
     return reply.status(201).send(ok(request, mapConnection(connection)));
+  });
+
+  app.patch('/integrations/connections/:connection_id', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.manage')]
+  }, async (request, reply) => {
+    const parsed = updateConnectionSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Invalid request body', {
+        issues: parsed.error.issues
+      }));
+    }
+
+    const tenantScopeError = ensureTenantScope(request, reply, parsed.data.tenant_id);
+    if (tenantScopeError) {
+      return tenantScopeError;
+    }
+
+    const { connection_id: connectionId } = request.params as { connection_id: string };
+    const connection = await updateConnection(connectionId, parsed.data.tenant_id, {
+      status: parsed.data.status,
+      scope: parsed.data.scope
+    });
+
+    if (!connection) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+
+    return reply.status(200).send(ok(request, mapConnection(connection)));
+  });
+
+  app.delete('/integrations/connections/:connection_id', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.manage')]
+  }, async (request, reply) => {
+    const { connection_id: connectionId } = request.params as { connection_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const deleted = await deleteConnection(connectionId, tenantId);
+
+    if (!deleted) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+
+    return reply.status(204).send();
   });
 
   app.put('/integrations/connections/:connection_id/secrets', {

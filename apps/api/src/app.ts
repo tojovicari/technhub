@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import { authRoutes } from './modules/auth/routes.js';
 import { coreRoutes } from './modules/core/routes.js';
 import { integrationsRoutes } from './modules/integrations/routes.js';
 import { integrationWebhookRoutes } from './modules/integrations/webhook-routes.js';
@@ -14,7 +15,10 @@ import { registerAuth } from './plugins/auth.js';
 export function buildApp() {
   const app = Fastify({ logger: true });
 
-  app.register(cors, { origin: true });
+  app.register(cors, {
+    origin: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  });
   app.register(helmet);
   registerAuth(app);
 
@@ -34,6 +38,7 @@ export function buildApp() {
 
   app.register(integrationsRoutes, { prefix: '/api/v1' });
   app.register(integrationWebhookRoutes, { prefix: '/api/v1' });
+  app.register(authRoutes, { prefix: '/api/v1' });
   app.register(coreRoutes, { prefix: '/api/v1' });
   app.register(slaRoutes, { prefix: '/api/v1' });
   app.register(doraRoutes, { prefix: '/api/v1' });

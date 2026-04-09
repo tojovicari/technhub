@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { IntegrationProvider } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { getConnector } from './connectors/registry.js';
 import { createSyncJob } from './service.js';
 
 type EnqueueInput = {
@@ -40,56 +41,35 @@ export function resolveExternalEventId(
   provider: IntegrationProvider,
   headers: Record<string, string | string[] | undefined>
 ) {
-  const h = (key: string) => {
-    const value = headers[key];
-    if (Array.isArray(value)) {
-      return value[0];
-    }
-    return value;
-  };
-
-  if (provider === 'github') {
-    return h('x-github-delivery') || randomUUID();
-  }
-
-  return h('x-atlassian-webhook-identifier') || h('x-webhook-id') || randomUUID();
+  const { eventIdHeader } = getConnector(provider).webhookConfig;
+  const value = headers[eventIdHeader];
+  return (Array.isArray(value) ? value[0] : value) ?? randomUUID();
 }
 
 export function resolveWebhookEventType(
   provider: IntegrationProvider,
   headers: Record<string, string | string[] | undefined>
 ) {
-  const h = (key: string) => {
-    const value = headers[key];
-    if (Array.isArray(value)) {
-      return value[0];
-    }
-    return value;
-  };
-
-  if (provider === 'github') {
-    return h('x-github-event') || 'unknown';
-  }
-
-  return h('x-atlassian-webhook-event') || 'unknown';
+  const { eventTypeHeader } = getConnector(provider).webhookConfig;
+  const value = headers[eventTypeHeader];
+  return (Array.isArray(value) ? value[0] : value) ?? 'unknown';
 }
 
 export function verifyWebhookToken(
   provider: IntegrationProvider,
   headers: Record<string, string | string[] | undefined>
 ) {
-  const headerValue = headers['x-webhook-token'];
-  const token = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-
-  const expected = provider === 'github'
-    ? (process.env.GITHUB_WEBHOOK_TOKEN || (process.env.NODE_ENV !== 'production' ? 'dev-github-webhook-token' : undefined))
-    : (process.env.JIRA_WEBHOOK_TOKEN || (process.env.NODE_ENV !== 'production' ? 'dev-jira-webhook-token' : undefined));
+  const { tokenEnvVar, devToken } = getConnector(provider).webhookConfig;
+  const expected = process.env[tokenEnvVar] ||
+    (process.env.NODE_ENV !== 'production' ? devToken : undefined);
 
   // Local fallback: if no token configured, accept only when AUTH_BYPASS=true.
   if (!expected) {
     return process.env.AUTH_BYPASS === 'true';
   }
 
+  const headerValue = headers['x-webhook-token'];
+  const token = Array.isArray(headerValue) ? headerValue[0] : headerValue;
   return token === expected;
 }
 

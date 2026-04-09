@@ -1,16 +1,7 @@
 import type { IntegrationProvider, Prisma, SecretStrategy } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
-import { GithubConnector } from './connectors/github.js';
-import { JiraConnector } from './connectors/jira.js';
+import { getConnector } from './connectors/registry.js';
 import type { CreateConnectionInput, CreateSyncJobInput, RotateSecretInput } from './schema.js';
-
-function getConnector(provider: IntegrationProvider) {
-  if (provider === 'jira') {
-    return new JiraConnector();
-  }
-
-  return new GithubConnector();
-}
 
 function inferSecretStrategy(credentials?: unknown): SecretStrategy {
   if (
@@ -120,6 +111,23 @@ export async function rotateSecret(connectionId: string, input: RotateSecretInpu
   return true;
 }
 
+function decodeSecret(encryptedBlob: string): Record<string, unknown> {
+  try {
+    const decoded = JSON.parse(Buffer.from(encryptedBlob, 'base64').toString('utf8'));
+    return decoded.payload as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+async function resolveLastSyncDate(connectionId: string, tenantId: string): Promise<Date | undefined> {
+  const lastSuccess = await prisma.integrationSyncJob.findFirst({
+    where: { connectionId, tenantId, status: 'success' },
+    orderBy: { finishedAt: 'desc' }
+  });
+  return lastSuccess?.finishedAt ?? undefined;
+}
+
 export async function createSyncJob(input: CreateSyncJobInput) {
   const connection = await prisma.integrationConnection.findFirst({
     where: {
@@ -143,11 +151,25 @@ export async function createSyncJob(input: CreateSyncJobInput) {
   });
 
   try {
+    // Resolve credentials and scope to pass into the connector
+    const secret = await prisma.integrationSecret.findFirst({
+      where: { connectionId: connection.id, tenantId: input.tenant_id },
+      orderBy: { version: 'desc' }
+    });
+    const credentials = secret ? decodeSecret(secret.encryptedBlob) : undefined;
+    const scope = (connection.scope as Record<string, unknown> | null) ?? undefined;
+    const sinceDate = input.mode === 'incremental'
+      ? await resolveLastSyncDate(connection.id, input.tenant_id)
+      : undefined;
+
     const connector = getConnector(connection.provider);
     const result = await connector.runSync({
       tenantId: input.tenant_id,
       connectionId: input.connection_id,
-      mode: input.mode
+      mode: input.mode,
+      credentials,
+      scope,
+      sinceDate
     });
 
     const updated = await prisma.integrationSyncJob.update({
@@ -181,4 +203,51 @@ export async function getSyncJob(jobId: string, tenantId: string) {
       tenantId
     }
   });
+}
+
+export async function listConnections(tenantId: string) {
+  return prisma.integrationConnection.findMany({
+    where: { tenantId },
+    orderBy: { createdAt: 'desc' }
+  });
+}
+
+export async function getConnection(connectionId: string, tenantId: string) {
+  return prisma.integrationConnection.findFirst({
+    where: { id: connectionId, tenantId }
+  });
+}
+
+export async function updateConnection(
+  connectionId: string,
+  tenantId: string,
+  input: { status?: 'active' | 'disabled'; scope?: Record<string, unknown> }
+) {
+  const connection = await prisma.integrationConnection.findFirst({
+    where: { id: connectionId, tenantId }
+  });
+
+  if (!connection) return null;
+
+  return prisma.integrationConnection.update({
+    where: { id: connectionId },
+    data: {
+      ...(input.status !== undefined && { status: input.status }),
+      ...(input.scope !== undefined && { scope: input.scope as Prisma.InputJsonValue })
+    }
+  });
+}
+
+export async function deleteConnection(connectionId: string, tenantId: string) {
+  const connection = await prisma.integrationConnection.findFirst({
+    where: { id: connectionId, tenantId }
+  });
+
+  if (!connection) return null;
+
+  await prisma.integrationSecret.deleteMany({ where: { connectionId } });
+  await prisma.integrationSyncJob.deleteMany({ where: { connectionId } });
+  await prisma.integrationConnection.delete({ where: { id: connectionId } });
+
+  return true;
 }

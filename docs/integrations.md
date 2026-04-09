@@ -142,31 +142,39 @@ integrations/
 
 ---
 
-## BaseConnector (Interface)
+## IntegrationConnector (Interface)
 
-Todo connector deve implementar este contrato:
+Contrato real implementado em `src/modules/integrations/connectors/base.ts`:
 
 ```typescript
-interface BaseConnector {
-  // Autentica com o provider externo
-  authenticate(): Promise<void>
+type SyncInput = {
+  tenantId: string;
+  connectionId: string;
+  mode: 'full' | 'incremental';
+  /** Decoded credentials from IntegrationSecret (provider-specific shape) */
+  credentials?: Record<string, unknown>;
+  /** Connection scope config — e.g. { org: "my-org" } for GitHub */
+  scope?: Record<string, unknown>;
+  /** Populated for incremental syncs — only fetch items updated after this date */
+  sinceDate?: Date;
+};
 
-  // Verifica se a conexão está saudável
-  healthCheck(): Promise<ConnectorStatus>
+type WebhookConfig = {
+  eventIdHeader: string;    // header com ID único do evento no provider
+  eventTypeHeader: string;  // header com o tipo do evento
+  tokenEnvVar: string;      // env var com o token de validação
+  devToken: string;         // token fallback em desenvolvimento
+};
 
-  // Busca dados de um recurso específico com filtros opcionais
-  fetchData(resource: ResourceType, filter: FetchFilter): Promise<ExternalDTO[]>
-
-  // Transforma um DTO externo para a entidade de domínio interna
-  transformToDomain(dto: ExternalDTO): DomainEntity
-
-  // Retorna o estado atual do sync (cursor/timestamp)
-  getSyncState(): SyncState
-
-  // Atualiza o estado após um sync bem-sucedido
-  setSyncState(state: SyncState): Promise<void>
+interface IntegrationConnector {
+  provider: IntegrationProvider;
+  webhookConfig: WebhookConfig;
+  validateConfiguration(): Promise<void>;
+  runSync(input: SyncInput): Promise<SyncResult>;
 }
 ```
+
+O `service.ts` resolve `credentials`, `scope` e `sinceDate` automaticamente antes de chamar `runSync` — o connector não precisa buscar esses dados.
 
 ### Tipos Suportados de Resource
 
@@ -185,24 +193,72 @@ interface BaseConnector {
 
 ## Connector: JIRA
 
+**Status:** implementado (`src/modules/integrations/connectors/jira.ts`)
+
 ### Autenticação
-- API Token (Basic Auth com email + token)
-- OAuth 2.0 (para instâncias JIRA Cloud)
 
-### Recursos sincronizados
-- **Projects**: Nome, key, status, metadata
-- **Sprints**: Datas, status (active/closed/future), velocidade
-- **Issues (Tasks)**: Status, assignee, story points, tipo, prioridade, datas, SLA fields
-- **Epics**: Issues agrupadas, progresso, datas
-- **Changelogs**: Histórico de transições de status (para cálculo de cycle time)
-- **Users**: Perfis e permissões
+**API Token** (único método suportado no connector atual — Jira Cloud).
 
-### Rate Limiting JIRA
-- 300 req/min (Cloud) — gerenciado pelo SyncScheduler
-- Retry automático com exponential backoff ao receber 429
+```json
+// credentials ao criar a IntegrationConnection
+{
+  "auth_type": "token",
+  "base_url": "https://myorg.atlassian.net",
+  "email": "glauber@example.com",
+  "access_token": "<jira-api-token>"
+}
+```
+
+### Scope
+
+```json
+// scope ao criar a IntegrationConnection
+{
+  "project_keys": ["AUTH", "PLATFORM"]  // opcional — se ausente, sincroniza todos os projetos
+}
+```
+
+### Entidades sincronizadas
+
+| Fonte Jira | Entidade de domínio | Chave de upsert |
+|---|---|---|
+| Users (accountType=atlassian) | `User` | `tenantId + email` |
+| Projects | `Project` | `tenantId + key (project key)` |
+| Epics (issuetype=Epic) | `Epic` | `tenantId + source + sourceId (issue key)` |
+| Issues (não-Epic) | `Task` | `tenantId + source + sourceId (issue key)` |
+
+### Mapeamento issuetype → taskType
+
+| issuetype Jira | `taskType` |
+|---|---|
+| `Bug`, `Defect` | `bug` |
+| `Tech Debt`, `Technical Debt`, `Refactoring` | `tech_debt` |
+| `Spike`, `Research` | `spike` |
+| `Task`, `Sub-task`, `Chore` | `chore` |
+| `Story`, `Feature`, outros | `feature` |
+
+### Mapeamento priority → priority
+
+| Priority Jira | `priority` |
+|---|---|
+| Critical, Blocker | `P0` |
+| High, Major | `P1` |
+| Medium (default) | `P2` |
+| Low, Minor | `P3` |
+| Trivial, Lowest | `P4` |
+
+### Sync incremental
+
+`sinceDate` = `finishedAt` do último `IntegrationSyncJob` com `status=success`.
+Issues são filtradas no JQL com `updatedDate >= "YYYY-MM-DD"`. Full sync ignora o filtro.
+
+### Epic Link
+
+O vínculo Issue → Epic usa o campo customizado `customfield_10014` (padrão Jira Cloud).
+Epics são sincronizadas antes das Issues para garantir que o `epicId` já existe no banco.
 
 ### Webhooks JIRA
-Eventos capturados:
+Eventos capturados (via `x-atlassian-webhook-event` header):
 
 | Evento             | Trigger                          |
 |--------------------|----------------------------------|
@@ -215,20 +271,63 @@ Eventos capturados:
 
 ## Connector: GitHub
 
-### Autenticação
-- GitHub App (recomendado — permissões granulares)
-- Personal Access Token (dev/staging)
+**Status:** implementado (`src/modules/integrations/connectors/github.ts`)
 
-### Recursos sincronizados
-- **Repositories**: Metadata, linguagens, configurações
-- **Issues**: Labels, assignees, milestones, datas
-- **Pull Requests**: Status, reviewers, checks, datas de abertura/merge
-- **Commits**: Hash, autor, data, mensagem, arquivos alterados
-- **Releases / Tags**: Versão, data (base para Deployment Frequency)
-- **Check Runs**: Status de CI/CD (base para Change Failure Rate)
+### Autenticação
+
+**GitHub App** (único método suportado no connector atual).
+
+```json
+// credentials ao criar a IntegrationConnection
+{
+  "auth_type": "app",
+  "app_id": 123456,
+  "private_key_pem": "-----BEGIN RSA PRIVATE KEY-----\n...",
+  "installation_id": 789012
+}
+```
+
+### Scope
+
+```json
+// scope ao criar a IntegrationConnection
+{
+  "org": "minha-org",
+  "repos": ["api", "frontend"]  // opcional — se ausente, sincroniza todos os repos da org
+}
+```
+
+### Entidades sincronizadas
+
+| Fonte GitHub | Entidade de domínio | Chave de upsert |
+|---|---|---|
+| Org members | `User` | `tenantId + email` |
+| Repositories | `Project` | `tenantId + key (org/repo)` |
+| Milestones | `Epic` | `tenantId + source + sourceId` |
+| Issues (não-PR) | `Task` (type via labels) | `tenantId + source + sourceId` |
+| Pull Requests | `Task` (type=feature) | `tenantId + source + sourceId` |
+
+### Mapeamento de labels → Task
+
+| Labels | `taskType` | `priority` |
+|---|---|---|
+| `bug`, `defect`, `fix` | `bug` | — |
+| `tech-debt`, `refactor` | `tech_debt` | — |
+| `spike`, `research` | `spike` | — |
+| `chore`, `ci`, `deps` | `chore` | — |
+| outros | `feature` | — |
+| `p0`, `critical`, `urgent` | — | `P0` |
+| `p1`, `high` | — | `P1` |
+| `p3`, `low` | — | `P3` |
+| sem match | `feature` | `P2` |
+
+### Sync incremental
+
+`sinceDate` = `finishedAt` do último `IntegrationSyncJob` com `status=success`.
+Issues e PRs são filtrados por `updated_at >= sinceDate`. Full sync ignora o filtro.
 
 ### Webhooks GitHub
-Eventos capturados:
+Eventos capturados (via `x-github-event` header):
 
 | Evento              | Trigger                          |
 |---------------------|----------------------------------|
@@ -244,21 +343,18 @@ Eventos capturados:
 ## Sincronização: Pull Model
 
 ```
-SyncScheduler
-└── a cada X minutos (configurável por projeto/connector):
-    1. Consulta SyncStateManager → obtém cursor (timestamp ou page token)
-    2. Chama connector.fetchData(resource, { since: cursor })
-    3. Para cada item retornado:
-        a. connector.transformToDomain(dto) → DomainEntity
-        b. Deduplica via (source, source_id)
-        c. Publica evento no Message Bus
-    4. Atualiza SyncState com novo cursor
-    5. Em caso de falha → enfileira no RetryQueue
+POST /api/v1/integrations/:connection_id/sync  (ou disparado pelo webhook worker)
+  └── createSyncJob()
+        ├── resolve credentials (IntegrationSecret → base64 decode → JSON payload)
+        ├── resolve scope (IntegrationConnection.scope)
+        ├── resolve sinceDate (finishedAt do último SyncJob com status=success)
+        └── connector.runSync({ tenantId, connectionId, mode, credentials, scope, sinceDate })
+              └── upsert de entidades por (tenantId, source, sourceId)
 ```
 
 ### Deduplicação
-- Cada entidade recebe um identificador composto: `{source}:{source_id}` (ex: `jira:PROJ-123`)
-- Upsert no banco por esse identificador — sem duplicação, sem perda de dados customizados
+- Cada entidade usa `@@unique([tenantId, source, sourceId])` no banco
+- Upsert idempotente — múltiplos syncs não geram duplicatas
 
 ---
 
@@ -289,18 +385,87 @@ WebhookQueue
 
 ## Adicionando um Novo Connector
 
-Para integrar um novo provider (ex: Linear, Trello, Azure DevOps):
+### Arquitetura atual (implementado)
 
-1. Criar `connectors/linear/LinearConnector` implementando `BaseConnector`
-2. Criar `connectors/linear/LinearTransformer` mapeando DTOs externos para domain entities
-3. Criar `connectors/linear/LinearWebhookHandler` (se o provider suportar webhooks)
-4. Registrar no `ConnectorRegistry`:
-   ```typescript
-   registry.register('linear', LinearConnector)
-   ```
-5. Adicionar configuração de autenticação no Vault/Secrets Manager
+O registry de connectors vive em `src/modules/integrations/connectors/registry.ts`.
+Cada connector é uma classe que implementa a interface `IntegrationConnector` definida em `connectors/base.ts`:
 
-Nenhuma alteração necessária no core do sistema.
+```typescript
+// connectors/base.ts
+export type WebhookConfig = {
+  eventIdHeader: string;    // header com ID único do evento no provider
+  eventTypeHeader: string;  // header com o tipo do evento
+  tokenEnvVar: string;      // env var com o token de validação
+  devToken: string;         // token fallback em desenvolvimento
+};
+
+export interface IntegrationConnector {
+  provider: IntegrationProvider;
+  webhookConfig: WebhookConfig;
+  validateConfiguration(): Promise<void>;
+  runSync(input: SyncInput): Promise<SyncResult>;
+}
+```
+
+### Passos para adicionar um novo provider (ex: Linear)
+
+**1. Criar o arquivo do connector:**
+
+```typescript
+// src/modules/integrations/connectors/linear.ts
+import type { IntegrationConnector, SyncInput, SyncResult, WebhookConfig } from './base.js';
+
+export class LinearConnector implements IntegrationConnector {
+  provider = 'linear' as const;
+
+  webhookConfig: WebhookConfig = {
+    eventIdHeader: 'linear-delivery',       // ajustar conforme docs da Linear API
+    eventTypeHeader: 'linear-event',
+    tokenEnvVar: 'LINEAR_WEBHOOK_TOKEN',
+    devToken: 'dev-linear-webhook-token',
+  };
+
+  async validateConfiguration(): Promise<void> {
+    // validar credenciais contra a API da Linear
+  }
+
+  async runSync(input: SyncInput): Promise<SyncResult> {
+    // implementar chamadas à Linear API
+    return { provider: this.provider, mode: input.mode, synced_entities: 0 };
+  }
+}
+```
+
+**2. Registrar no registry:**
+
+```typescript
+// src/modules/integrations/connectors/registry.ts
+import { LinearConnector } from './linear.js';
+
+const connectorFactories = new Map<IntegrationProvider, () => IntegrationConnector>([
+  ['github', () => new GithubConnector()],
+  ['jira',   () => new JiraConnector()],
+  ['linear', () => new LinearConnector()],   // ← adicionar aqui
+]);
+```
+
+**3. Adicionar ao enum do banco (migration necessária):**
+
+```prisma
+// schema.prisma
+enum IntegrationProvider {
+  jira
+  github
+  linear   // ← adicionar e rodar: npx prisma migrate dev
+}
+```
+
+**O que NÃO precisa mudar:**
+- `service.ts` — usa `getConnector()` do registry
+- `webhooks.ts` — lê `webhookConfig` do connector
+- `webhook-routes.ts` — usa `isValidProvider()` do registry
+
+Nenhuma alteração fora dos 3 arquivos listados acima.
 
 ---
 
