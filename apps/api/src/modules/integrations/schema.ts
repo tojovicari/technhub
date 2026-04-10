@@ -42,7 +42,15 @@ export const createSyncJobSchema = z.object({
   mode: z.enum(['full', 'incremental']).optional().default('incremental')
 });
 
+export const typeMappingSchema = z.object({
+  mapping: z.record(
+    z.string().min(1),
+    z.enum(['feature', 'bug', 'chore', 'spike', 'tech_debt'])
+  )
+});
+
 export type CreateConnectionInput = z.infer<typeof createConnectionSchema>;
 export type UpdateConnectionInput = z.infer<typeof updateConnectionSchema>;
 export type RotateSecretInput = z.infer<typeof rotateSecretSchema>;
 export type CreateSyncJobInput = z.infer<typeof createSyncJobSchema>;
+export type TypeMappingInput = z.infer<typeof typeMappingSchema>;

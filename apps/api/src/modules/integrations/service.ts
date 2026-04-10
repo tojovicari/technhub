@@ -251,3 +251,72 @@ export async function deleteConnection(connectionId: string, tenantId: string) {
 
   return true;
 }
+
+export async function getTypeMapping(
+  connectionId: string,
+  tenantId: string
+): Promise<Record<string, string> | null> {
+  const connection = await prisma.integrationConnection.findFirst({
+    where: { id: connectionId, tenantId },
+    select: { typeMapping: true }
+  });
+
+  if (!connection) return null;
+
+  return (connection.typeMapping as Record<string, string> | null) ?? {};
+}
+
+export async function updateTypeMapping(
+  connectionId: string,
+  tenantId: string,
+  mapping: Record<string, string>
+): Promise<Record<string, string> | null> {
+  const connection = await prisma.integrationConnection.findFirst({
+    where: { id: connectionId, tenantId }
+  });
+
+  if (!connection) return null;
+
+  await prisma.integrationConnection.update({
+    where: { id: connectionId },
+    data: { typeMapping: mapping as Prisma.InputJsonValue }
+  });
+
+  return mapping;
+}
+
+export async function getOriginalTypes(
+  connectionId: string,
+  tenantId: string
+): Promise<string[] | null> {
+  const connection = await prisma.integrationConnection.findFirst({
+    where: { id: connectionId, tenantId },
+    select: { id: true }
+  });
+
+  if (!connection) return null;
+
+  const rows = await prisma.task.findMany({
+    where: { connectionId, tenantId, originalType: { not: null } },
+    select: { originalType: true },
+    distinct: ['originalType']
+  });
+
+  return rows
+    .map(r => r.originalType!)
+    .filter(Boolean)
+    .sort();
+}
+
+export async function getAllOriginalTypes(tenantId: string): Promise<string[]> {
+  const rows = await prisma.task.findMany({
+    where: { tenantId, originalType: { not: null } },
+    select: { originalType: true },
+    distinct: ['originalType']
+  });
+
+  return rows
+    .map(r => r.originalType!)
+    .filter(Boolean)
+    .sort();
+}

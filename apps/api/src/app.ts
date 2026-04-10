@@ -6,6 +6,7 @@ import { coreRoutes } from './modules/core/routes.js';
 import { integrationsRoutes } from './modules/integrations/routes.js';
 import { integrationWebhookRoutes } from './modules/integrations/webhook-routes.js';
 import { startIntegrationsWorker } from './modules/integrations/worker.js';
+import { startSlaScheduler } from './modules/sla/worker.js';
 import { slaRoutes } from './modules/sla/routes.js';
 import { doraRoutes } from './modules/dora/routes.js';
 import { cogsRoutes } from './modules/cogs/routes.js';
@@ -45,6 +46,7 @@ export function buildApp() {
   app.register(cogsRoutes, { prefix: '/api/v1' });
   app.register(intelRoutes, { prefix: '/api/v1' });
   startIntegrationsWorker(app);
+  startSlaScheduler(app);
 
   return app;
 }

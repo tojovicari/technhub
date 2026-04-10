@@ -6,6 +6,7 @@ import {
   updateSlaTemplateSchema,
   listSlaTemplatesQuerySchema,
   listSlaInstancesQuerySchema,
+  slaSummaryQuerySchema,
   slaTaskEventSchema
 } from './schema.js';
 import {
@@ -13,6 +14,8 @@ import {
   deleteSlaTemplate,
   evaluateTaskSla,
   getSlaTemplate,
+  getSlaSummary,
+  getSlaSummaryByTemplate,
   listSlaInstances,
   listSlaTemplates,
   updateSlaTemplate
@@ -66,7 +69,8 @@ function mapInstance(inst: {
   breachMinutes: number | null;
   createdAt: Date;
   updatedAt: Date;
-  template?: { id: string; name: string };
+  template?: { id: string; name: string } | null;
+  task_snapshot?: { title: string; assigneeId: string | null; priority: string; projectId: string } | null;
 }) {
   return {
     id: inst.id,
@@ -82,7 +86,15 @@ function mapInstance(inst: {
     breach_minutes: inst.breachMinutes,
     created_at: inst.createdAt.toISOString(),
     updated_at: inst.updatedAt.toISOString(),
-    template: inst.template ?? null
+    template: inst.template ?? null,
+    task_snapshot: inst.task_snapshot
+      ? {
+          title: inst.task_snapshot.title,
+          assignee_id: inst.task_snapshot.assigneeId,
+          priority: inst.task_snapshot.priority,
+          project_id: inst.task_snapshot.projectId
+        }
+      : null
   };
 }
 
@@ -218,6 +230,46 @@ export async function slaRoutes(app: FastifyInstance) {
         data: result.data.map(mapInstance),
         next_cursor: result.next_cursor
       }));
+    }
+  );
+
+  // ── GET /sla/summary ─────────────────────────────────────────────────────────
+  app.get(
+    '/sla/summary',
+    { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
+    async (req, reply) => {
+      const parsed = slaSummaryQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const summary = await getSlaSummary(tenantId, {
+        projectId: parsed.data.project_id,
+        from: parsed.data.from,
+        to: parsed.data.to
+      });
+      return reply.status(200).send(ok(req, summary));
+    }
+  );
+
+  // ── GET /sla/summary/by-template ─────────────────────────────────────────────
+  app.get(
+    '/sla/summary/by-template',
+    { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
+    async (req, reply) => {
+      const parsed = slaSummaryQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const rows = await getSlaSummaryByTemplate(tenantId, {
+        projectId: parsed.data.project_id,
+        from: parsed.data.from,
+        to: parsed.data.to
+      });
+      return reply.status(200).send(ok(req, rows));
     }
   );
 }

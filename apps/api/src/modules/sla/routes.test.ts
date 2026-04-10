@@ -106,6 +106,7 @@ function makeInstance(overrides: Record<string, unknown> = {}) {
     createdAt: now,
     updatedAt: now,
     template: { id: TEST_TEMPLATE_ID, name: 'Bug SLA' },
+    task_snapshot: null,
     ...overrides
   };
 }

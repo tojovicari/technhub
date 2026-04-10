@@ -1,6 +1,7 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
 import { prisma } from '../../../lib/prisma.js';
+import { evaluateTaskSla } from '../../sla/service.js';
 import type { IntegrationConnector, SyncInput, SyncResult, WebhookConfig } from './base.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -30,13 +31,49 @@ function buildOctokit(creds: GithubAppCredentials): Octokit {
   });
 }
 
-function resolveTaskType(labels: string[]): 'feature' | 'bug' | 'chore' | 'spike' | 'tech_debt' {
+type CanonicalTaskType = 'feature' | 'bug' | 'chore' | 'spike' | 'tech_debt';
+
+function resolveTaskType(
+  labels: string[],
+  typeMapping?: Record<string, string>,
+): { taskType: CanonicalTaskType | null; originalType: string } {
+  // originalType for GitHub is the first matching label that implies a type, or "unlabeled"
   const l = labels.map(s => s.toLowerCase());
-  if (l.some(s => s === 'bug' || s === 'defect' || s === 'fix')) return 'bug';
-  if (l.some(s => s.includes('tech-debt') || s.includes('technical-debt') || s === 'refactor')) return 'tech_debt';
-  if (l.some(s => s === 'spike' || s === 'research' || s === 'investigation')) return 'spike';
-  if (l.some(s => s === 'chore' || s === 'maintenance' || s === 'ci' || s === 'deps')) return 'chore';
-  return 'feature';
+
+  // 1. Tenant-configured de-para: check each label against the mapping
+  if (typeMapping) {
+    for (const label of labels) {
+      const mapped = typeMapping[label] as CanonicalTaskType | undefined;
+      if (mapped) return { taskType: mapped, originalType: label };
+    }
+  }
+
+  // 2. Built-in heuristics
+  if (l.some(s => s === 'bug' || s === 'defect' || s === 'fix')) {
+    const orig = labels.find(s => ['bug', 'defect', 'fix'].includes(s.toLowerCase())) ?? 'bug';
+    return { taskType: 'bug', originalType: orig };
+  }
+  if (l.some(s => s.includes('tech-debt') || s.includes('technical-debt') || s === 'refactor')) {
+    const orig = labels.find(s => s.toLowerCase().includes('tech') || s.toLowerCase() === 'refactor') ?? 'tech-debt';
+    return { taskType: 'tech_debt', originalType: orig };
+  }
+  if (l.some(s => s === 'spike' || s === 'research' || s === 'investigation')) {
+    const orig = labels.find(s => ['spike', 'research', 'investigation'].includes(s.toLowerCase())) ?? 'spike';
+    return { taskType: 'spike', originalType: orig };
+  }
+  if (l.some(s => s === 'chore' || s === 'maintenance' || s === 'ci' || s === 'deps')) {
+    const orig = labels.find(s => ['chore', 'maintenance', 'ci', 'deps'].includes(s.toLowerCase())) ?? 'chore';
+    return { taskType: 'chore', originalType: orig };
+  }
+  if (l.some(s => s === 'feature' || s === 'enhancement' || s === 'improvement')) {
+    const orig = labels.find(s => ['feature', 'enhancement', 'improvement'].includes(s.toLowerCase())) ?? 'feature';
+    return { taskType: 'feature', originalType: orig };
+  }
+
+  // 3. No match — log and return null taskType
+  const originalType = labels[0] ?? 'unlabeled';
+  console.warn(`[github] No type match for labels [${labels.join(', ')}] — task saved without canonical taskType`);
+  return { taskType: null, originalType };
 }
 
 function resolveTaskPriority(labels: string[]): 'P0' | 'P1' | 'P2' | 'P3' | 'P4' {
@@ -176,6 +213,8 @@ async function syncIssues(
   org: string,
   repoName: string,
   projectId: string,
+  connectionId: string,
+  typeMapping: Record<string, string> | undefined,
   since?: string,
 ): Promise<number> {
   const issues = await octokit.paginate(octokit.issues.listForRepo, {
@@ -194,7 +233,7 @@ async function syncIssues(
     const labels = issue.labels
       .map(l => (typeof l === 'string' ? l : l.name ?? ''))
       .filter(Boolean);
-    const taskType = resolveTaskType(labels);
+    const { taskType, originalType } = resolveTaskType(labels, typeMapping);
     const priority = resolveTaskPriority(labels);
     const status = resolveIssueStatus({ state: issue.state, assignee: issue.assignee });
 
@@ -216,7 +255,7 @@ async function syncIssues(
       epicId = epic?.id;
     }
 
-    await prisma.task.upsert({
+    const task = await prisma.task.upsert({
       where: { tenantId_source_sourceId: { tenantId, source: 'github', sourceId } },
       create: {
         tenantId,
@@ -226,7 +265,9 @@ async function syncIssues(
         sourceId,
         title: issue.title,
         description: issue.body ?? undefined,
-        taskType,
+        taskType: taskType ?? undefined,
+        originalType,
+        connectionId,
         priority,
         status,
         assigneeId,
@@ -238,6 +279,8 @@ async function syncIssues(
       update: {
         title: issue.title,
         description: issue.body ?? undefined,
+        taskType: taskType ?? undefined,
+        originalType,
         status,
         assigneeId,
         epicId,
@@ -245,6 +288,23 @@ async function syncIssues(
         tags: labels,
       },
     });
+
+    if (status === 'in_progress') {
+      evaluateTaskSla({
+        task_id: task.id,
+        tenant_id: tenantId,
+        task_type: taskType ?? undefined,
+        original_type: originalType,
+        priority: priority as 'P0' | 'P1' | 'P2' | 'P3' | 'P4',
+        status,
+        labels,
+        project_id: projectId,
+        source: 'github',
+        started_at: task.startedAt?.toISOString(),
+        title: issue.title,
+        assignee_id: assigneeId ?? null
+      }).catch(err => console.warn('[SLA] evaluate failed for task', task.id, err));
+    }
   }
 
   return realIssues.length;
@@ -344,6 +404,13 @@ export class GithubConnector implements IntegrationConnector {
 
     let synced = 0;
 
+    // Load tenant-configured type mapping for this connection
+    const connectionRecord = await prisma.integrationConnection.findUnique({
+      where: { id: input.connectionId },
+      select: { typeMapping: true },
+    });
+    const typeMapping = (connectionRecord?.typeMapping as Record<string, string> | null) ?? undefined;
+
     synced += await syncMembers(octokit, input.tenantId, org);
 
     const projects = await syncRepos(octokit, input.tenantId, org, scope.repos);
@@ -351,7 +418,7 @@ export class GithubConnector implements IntegrationConnector {
 
     for (const { id: projectId, repoName } of projects) {
       synced += await syncMilestones(octokit, input.tenantId, org, repoName, projectId);
-      synced += await syncIssues(octokit, input.tenantId, org, repoName, projectId, since);
+      synced += await syncIssues(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
       synced += await syncPullRequests(octokit, input.tenantId, org, repoName, projectId, since);
     }
 

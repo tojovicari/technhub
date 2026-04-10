@@ -1,4 +1,5 @@
 import { prisma } from '../../../lib/prisma.js';
+import { evaluateTaskSla } from '../../sla/service.js';
 import type { IntegrationConnector, SyncInput, SyncResult, WebhookConfig } from './base.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -62,13 +63,27 @@ class JiraClient {
 
 // ── Mapping helpers ────────────────────────────────────────────────────────────
 
-function resolveTaskType(issueTypeName: string): 'feature' | 'bug' | 'chore' | 'spike' | 'tech_debt' {
+type CanonicalTaskType = 'feature' | 'bug' | 'chore' | 'spike' | 'tech_debt';
+
+function resolveTaskType(
+  issueTypeName: string,
+  typeMapping?: Record<string, string>,
+): CanonicalTaskType | null {
+  // 1. Tenant-configured de-para takes precedence
+  if (typeMapping) {
+    const mapped = typeMapping[issueTypeName] as CanonicalTaskType | undefined;
+    if (mapped) return mapped;
+  }
+  // 2. Built-in heuristics for well-known Jira types
   const t = issueTypeName.toLowerCase();
   if (t === 'bug' || t === 'defect') return 'bug';
   if (t.includes('tech debt') || t === 'technical debt' || t === 'refactoring') return 'tech_debt';
   if (t === 'spike' || t === 'research') return 'spike';
   if (t === 'task' || t === 'sub-task' || t === 'chore') return 'chore';
-  return 'feature';
+  if (t === 'story' || t === 'feature' || t === 'improvement' || t === 'new feature') return 'feature';
+  // 3. Unknown type — log and return null (no silent fallback)
+  console.warn(`[jira] Unknown issue type "${issueTypeName}" — task saved without canonical taskType`);
+  return null;
 }
 
 function resolveTaskPriority(priorityName: string): 'P0' | 'P1' | 'P2' | 'P3' | 'P4' {
@@ -93,8 +108,22 @@ function resolveTaskStatus(statusCategory: string): 'backlog' | 'todo' | 'in_pro
 
 async function syncUsers(client: JiraClient, tenantId: string): Promise<number> {
   type JiraUser = { emailAddress?: string; displayName: string; accountType: string };
-  const users = await client.paginate<JiraUser>('/users/search', 'values', { accountType: 'atlassian' });
+
+  // /users/search returns an array directly (not a paginated object), so we
+  // cannot use client.paginate() which expects a wrapping object with itemsKey.
+  const allUsers: JiraUser[] = [];
+  let startAt = 0;
+  const maxResults = 100;
+  while (true) {
+    const page = await client.get<JiraUser[]>('/users/search', { startAt, maxResults, accountType: 'atlassian' });
+    if (!Array.isArray(page) || page.length === 0) break;
+    allUsers.push(...page);
+    if (page.length < maxResults) break;
+    startAt += page.length;
+  }
+
   let count = 0;
+  const users = allUsers;
 
   for (const u of users) {
     if (!u.emailAddress || u.accountType !== 'atlassian') continue;
@@ -156,7 +185,7 @@ async function syncEpics(
   };
 
   const epics = await client.paginate<JiraIssue>(
-    '/search',
+    '/search/jql',
     'issues',
     { jql: `project="${projectKey}" AND issuetype=Epic ORDER BY created ASC`, fields: 'summary,description,status,duedate,resolutiondate' },
   );
@@ -197,6 +226,8 @@ async function syncIssues(
   projectKey: string,
   projectId: string,
   epicMap: Map<string, string>,
+  connectionId: string,
+  typeMapping: Record<string, string> | undefined,
   since?: Date,
 ): Promise<number> {
   type JiraIssue = {
@@ -223,14 +254,15 @@ async function syncIssues(
   const sinceJql = since ? ` AND updatedDate >= "${since.toISOString().slice(0, 10)}"` : '';
   const jql = `project="${projectKey}" AND issuetype != Epic${sinceJql} ORDER BY updated ASC`;
 
-  const issues = await client.paginate<JiraIssue>('/search', 'issues', {
+  const issues = await client.paginate<JiraIssue>('/search/jql', 'issues', {
     jql,
     fields: 'summary,description,issuetype,priority,status,assignee,reporter,customfield_10016,duedate,created,resolutiondate,customfield_10014,labels',
   });
 
   for (const issue of issues) {
     const f = issue.fields;
-    const taskType = resolveTaskType(f.issuetype.name);
+    const rawType = f.issuetype.name;
+    const taskType = resolveTaskType(rawType, typeMapping);
     const priority = resolveTaskPriority(f.priority?.name ?? 'medium');
     const status = resolveTaskStatus(f.status.statusCategory.name);
     const storyPoints = f.customfield_10016 ?? undefined;
@@ -255,7 +287,7 @@ async function syncIssues(
     const epicKey = f.customfield_10014 ?? undefined;
     const epicId = epicKey ? epicMap.get(epicKey) : undefined;
 
-    await prisma.task.upsert({
+    const task = await prisma.task.upsert({
       where: { tenantId_source_sourceId: { tenantId, source: 'jira', sourceId: issue.key } },
       create: {
         tenantId,
@@ -264,7 +296,9 @@ async function syncIssues(
         source: 'jira',
         sourceId: issue.key,
         title: f.summary,
-        taskType,
+        taskType: taskType ?? undefined,
+        originalType: rawType,
+        connectionId,
         priority,
         status,
         assigneeId,
@@ -277,6 +311,8 @@ async function syncIssues(
       },
       update: {
         title: f.summary,
+        taskType: taskType ?? undefined,
+        originalType: rawType,
         status,
         assigneeId,
         reporterId,
@@ -286,6 +322,23 @@ async function syncIssues(
         tags: f.labels ?? [],
       },
     });
+
+    if (status === 'in_progress' || status === 'review') {
+      evaluateTaskSla({
+        task_id: task.id,
+        tenant_id: tenantId,
+        task_type: taskType ?? undefined,
+        original_type: rawType,
+        priority: priority as 'P0' | 'P1' | 'P2' | 'P3' | 'P4',
+        status,
+        labels: f.labels ?? [],
+        project_id: projectId,
+        source: 'jira',
+        started_at: task.startedAt?.toISOString(),
+        title: f.summary,
+        assignee_id: assigneeId ?? null
+      }).catch(err => console.warn('[SLA] evaluate failed for task', task.id, err));
+    }
   }
 
   return issues.length;
@@ -320,6 +373,13 @@ export class JiraConnector implements IntegrationConnector {
     const client = new JiraClient(creds);
     let synced = 0;
 
+    // Load tenant-configured type mapping for this connection
+    const connectionRecord = await prisma.integrationConnection.findUnique({
+      where: { id: input.connectionId },
+      select: { typeMapping: true },
+    });
+    const typeMapping = (connectionRecord?.typeMapping as Record<string, string> | null) ?? undefined;
+
     synced += await syncUsers(client, input.tenantId);
 
     const projects = await syncProjects(client, input.tenantId, scope?.project_keys);
@@ -328,7 +388,7 @@ export class JiraConnector implements IntegrationConnector {
     for (const { id: projectId, jiraKey } of projects) {
       const epicMap = await syncEpics(client, input.tenantId, jiraKey, projectId);
       synced += epicMap.size;
-      synced += await syncIssues(client, input.tenantId, jiraKey, projectId, epicMap, input.sinceDate);
+      synced += await syncIssues(client, input.tenantId, jiraKey, projectId, epicMap, input.connectionId, typeMapping, input.sinceDate);
     }
 
     return {

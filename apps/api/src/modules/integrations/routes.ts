@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
-import { createConnectionSchema, createSyncJobSchema, rotateSecretSchema, updateConnectionSchema } from './schema.js';
-import { createConnection, createSyncJob, deleteConnection, getConnection, getSyncJob, listConnections, rotateSecret, updateConnection } from './service.js';
+import { createConnectionSchema, createSyncJobSchema, rotateSecretSchema, typeMappingSchema, updateConnectionSchema } from './schema.js';
+import { createConnection, createSyncJob, deleteConnection, getAllOriginalTypes, getConnection, getOriginalTypes, getSyncJob, getTypeMapping, listConnections, rotateSecret, updateConnection, updateTypeMapping } from './service.js';
 
 function mapConnection(connection: {
   id: string;
@@ -194,5 +194,73 @@ export async function integrationsRoutes(app: FastifyInstance) {
     }
 
     return reply.status(200).send(ok(request, mapSyncJob(job)));
+  });
+
+  app.get('/integrations/connections/:connection_id/original-types', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.read')]
+  }, async (request, reply) => {
+    const { connection_id: connectionId } = request.params as { connection_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const types = await getOriginalTypes(connectionId, tenantId);
+
+    if (!types) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+
+    return reply.status(200).send(ok(request, {
+      connection_id: connectionId,
+      original_types: types
+    }));
+  });
+
+  app.get('/integrations/original-types', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.read')]
+  }, async (request, reply) => {
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const types = await getAllOriginalTypes(tenantId);
+
+    return reply.status(200).send(ok(request, { original_types: types }));
+  });
+
+  app.get('/integrations/connections/:connection_id/type-mapping', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.read')]
+  }, async (request, reply) => {
+    const { connection_id: connectionId } = request.params as { connection_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const mapping = await getTypeMapping(connectionId, tenantId);
+
+    if (mapping === null) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+
+    return reply.status(200).send(ok(request, {
+      connection_id: connectionId,
+      mapping
+    }));
+  });
+
+  app.patch('/integrations/connections/:connection_id/type-mapping', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.manage')]
+  }, async (request, reply) => {
+    const parsed = typeMappingSchema.safeParse(request.body);
+
+    if (!parsed.success) {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Invalid request body', {
+        issues: parsed.error.issues
+      }));
+    }
+
+    const { connection_id: connectionId } = request.params as { connection_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const mapping = await updateTypeMapping(connectionId, tenantId, parsed.data.mapping);
+
+    if (mapping === null) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+
+    return reply.status(200).send(ok(request, {
+      connection_id: connectionId,
+      mapping
+    }));
   });
 }

@@ -108,11 +108,35 @@ export async function deleteSlaTemplate(id: string, tenantId: string) {
 // SLA Engine: evaluate a task event
 // ────────────────────────────────────────────────────────────────────────────────
 
+async function upsertTaskSnapshot(event: SlaTaskEvent): Promise<void> {
+  if (!event.title || !event.project_id) return;
+  await prisma.slaTaskSnapshot.upsert({
+    where: { taskId: event.task_id },
+    create: {
+      taskId: event.task_id,
+      tenantId: event.tenant_id,
+      title: event.title,
+      assigneeId: event.assignee_id ?? null,
+      priority: event.priority,
+      projectId: event.project_id
+    },
+    update: {
+      title: event.title,
+      assigneeId: event.assignee_id ?? null,
+      priority: event.priority,
+      projectId: event.project_id
+    }
+  });
+}
+
 export async function evaluateTaskSla(event: SlaTaskEvent): Promise<{
   instance_id: string | null;
   status: string;
   action: 'created' | 'updated' | 'closed' | 'noop';
 }> {
+  // Upsert local read-model with task metadata (snapshot from core.task.updated.v1)
+  await upsertTaskSnapshot(event).catch(() => {}); // non-blocking, best-effort
+
   // Load active templates for the tenant, ordered by priority
   const templates = await prisma.slaTemplate.findMany({
     where: { tenantId: event.tenant_id, isActive: true },
@@ -163,8 +187,8 @@ export async function evaluateTaskSla(event: SlaTaskEvent): Promise<{
   let matchedTemplate: (typeof templates)[number] | null = null;
 
   for (const template of templates) {
-    // Filter by applies_to
-    if (!template.appliesTo.includes(event.task_type)) continue;
+    // Filter by applies_to — empty array means no type restriction (use condition DSL only)
+    if (template.appliesTo.length > 0 && (!event.task_type || !template.appliesTo.includes(event.task_type))) continue;
 
     // Filter by project_ids (empty = any project)
     if (
@@ -286,8 +310,15 @@ export async function listSlaInstances(tenantId: string, query: ListSlaInstances
   const hasMore = items.length > limit;
   const page = hasMore ? items.slice(0, limit) : items;
 
+  // Enrich with local task snapshot (SLA-owned read-model, no cross-module DB access)
+  const taskIds = page.map((i) => i.taskId);
+  const snapshots = taskIds.length
+    ? await prisma.slaTaskSnapshot.findMany({ where: { taskId: { in: taskIds } } })
+    : [];
+  const snapshotMap = new Map(snapshots.map((s) => [s.taskId, s]));
+
   return {
-    data: page,
+    data: page.map((inst) => ({ ...inst, task_snapshot: snapshotMap.get(inst.taskId) ?? null })),
     next_cursor: hasMore ? page[page.length - 1].id : null
   };
 }
@@ -346,4 +377,149 @@ export async function tickSlaInstances(tenantId?: string): Promise<number> {
   }
 
   return updated;
+}
+
+// ────────────────────────────────────────────────────────────────────────────────
+// SLA Summary — overall metrics
+// ────────────────────────────────────────────────────────────────────────────────
+
+export async function getSlaSummary(
+  tenantId: string,
+  opts: { projectId?: string; from?: string; to?: string }
+) {
+  const where: Prisma.SlaInstanceWhereInput = { tenantId };
+  if (opts.from || opts.to) {
+    where.startedAt = {
+      ...(opts.from && { gte: new Date(opts.from) }),
+      ...(opts.to && { lte: new Date(opts.to) })
+    };
+  }
+  if (opts.projectId) {
+    where.task = { projectId: opts.projectId };
+  }
+
+  const instances = await prisma.slaInstance.findMany({
+    where,
+    select: { status: true, actualMinutes: true, breachMinutes: true }
+  });
+
+  const counts = { running: 0, at_risk: 0, breached: 0, met: 0, superseded: 0 };
+  let totalActualMinutes = 0;
+  let resolvedCount = 0;
+  let totalBreachMinutes = 0;
+  let breachedCount = 0;
+
+  for (const inst of instances) {
+    const s = inst.status as keyof typeof counts;
+    if (s in counts) counts[s]++;
+
+    if ((inst.status === 'met' || inst.status === 'breached') && inst.actualMinutes != null) {
+      totalActualMinutes += inst.actualMinutes;
+      resolvedCount++;
+    }
+    if (inst.status === 'breached' && inst.breachMinutes != null) {
+      totalBreachMinutes += inst.breachMinutes;
+      breachedCount++;
+    }
+  }
+
+  const total = instances.length;
+  const closedTotal = counts.met + counts.breached;
+
+  return {
+    period: { from: opts.from ?? null, to: opts.to ?? null },
+    total_instances: total,
+    running: counts.running,
+    at_risk: counts.at_risk,
+    breached: counts.breached,
+    met: counts.met,
+    compliance_rate: closedTotal > 0 ? Math.round((counts.met / closedTotal) * 1000) / 10 : null,
+    breach_rate: closedTotal > 0 ? Math.round((counts.breached / closedTotal) * 1000) / 10 : null,
+    at_risk_rate: counts.running + counts.at_risk > 0
+      ? Math.round((counts.at_risk / (counts.running + counts.at_risk)) * 1000) / 10
+      : null,
+    mean_resolution_minutes: resolvedCount > 0 ? Math.round(totalActualMinutes / resolvedCount) : null,
+    breach_severity_avg_minutes: breachedCount > 0 ? Math.round(totalBreachMinutes / breachedCount) : null
+  };
+}
+
+// ────────────────────────────────────────────────────────────────────────────────
+// SLA Summary — breakdown by template
+// ────────────────────────────────────────────────────────────────────────────────
+
+export async function getSlaSummaryByTemplate(
+  tenantId: string,
+  opts: { projectId?: string; from?: string; to?: string }
+) {
+  const where: Prisma.SlaInstanceWhereInput = { tenantId };
+  if (opts.from || opts.to) {
+    where.startedAt = {
+      ...(opts.from && { gte: new Date(opts.from) }),
+      ...(opts.to && { lte: new Date(opts.to) })
+    };
+  }
+  if (opts.projectId) {
+    where.task = { projectId: opts.projectId };
+  }
+
+  const instances = await prisma.slaInstance.findMany({
+    where,
+    select: {
+      status: true,
+      actualMinutes: true,
+      breachMinutes: true,
+      slaTemplateId: true,
+      template: { select: { id: true, name: true, priority: true } }
+    }
+  });
+
+  // Group by template
+  const templateMap = new Map<string, {
+    template: { id: string; name: string; priority: number };
+    running: number; at_risk: number; breached: number; met: number;
+    totalActualMinutes: number; resolvedCount: number;
+    totalBreachMinutes: number; breachedCount: number;
+  }>();
+
+  for (const inst of instances) {
+    const tid = inst.slaTemplateId;
+    if (!templateMap.has(tid)) {
+      templateMap.set(tid, {
+        template: inst.template,
+        running: 0, at_risk: 0, breached: 0, met: 0,
+        totalActualMinutes: 0, resolvedCount: 0,
+        totalBreachMinutes: 0, breachedCount: 0
+      });
+    }
+    const entry = templateMap.get(tid)!;
+    const s = inst.status as 'running' | 'at_risk' | 'breached' | 'met' | 'superseded';
+    if (s in entry) (entry as unknown as Record<string, number>)[s]++;
+
+    if ((inst.status === 'met' || inst.status === 'breached') && inst.actualMinutes != null) {
+      entry.totalActualMinutes += inst.actualMinutes;
+      entry.resolvedCount++;
+    }
+    if (inst.status === 'breached' && inst.breachMinutes != null) {
+      entry.totalBreachMinutes += inst.breachMinutes;
+      entry.breachedCount++;
+    }
+  }
+
+  return Array.from(templateMap.values())
+    .sort((a, b) => a.template.priority - b.template.priority)
+    .map(e => {
+      const closedTotal = e.met + e.breached;
+      return {
+        template: e.template,
+        running: e.running,
+        at_risk: e.at_risk,
+        breached: e.breached,
+        met: e.met,
+        total_instances: e.running + e.at_risk + e.breached + e.met,
+        compliance_rate: closedTotal > 0 ? Math.round((e.met / closedTotal) * 1000) / 10 : null,
+        breach_rate: closedTotal > 0 ? Math.round((e.breached / closedTotal) * 1000) / 10 : null,
+        mean_resolution_minutes: e.resolvedCount > 0 ? Math.round(e.totalActualMinutes / e.resolvedCount) : null,
+        breach_severity_avg_minutes: e.breachedCount > 0 ? Math.round(e.totalBreachMinutes / e.breachedCount) : null
+      };
+    });
 }
