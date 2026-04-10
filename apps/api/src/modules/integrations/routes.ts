@@ -11,14 +11,31 @@ function mapConnection(connection: {
   status: 'active' | 'disabled' | 'error';
   secretStrategy: 'vault_ref' | 'db_encrypted';
   secretLastRotatedAt: Date | null;
+  syncJobs?: Array<{
+    id: string;
+    status: 'queued' | 'running' | 'success' | 'failed';
+    startedAt: Date | null;
+    finishedAt: Date | null;
+    errorSummary: string | null;
+  }>;
 }) {
+  const lastSync = connection.syncJobs?.[0] ?? null;
   return {
     id: connection.id,
     tenant_id: connection.tenantId,
     provider: connection.provider,
     status: connection.status,
     secret_strategy: connection.secretStrategy,
-    secret_last_rotated_at: connection.secretLastRotatedAt?.toISOString() ?? null
+    secret_last_rotated_at: connection.secretLastRotatedAt?.toISOString() ?? null,
+    last_sync: lastSync
+      ? {
+          id: lastSync.id,
+          status: lastSync.status,
+          started_at: lastSync.startedAt?.toISOString() ?? null,
+          finished_at: lastSync.finishedAt?.toISOString() ?? null,
+          error_summary: lastSync.errorSummary
+        }
+      : null
   };
 }
 

@@ -208,7 +208,20 @@ export async function getSyncJob(jobId: string, tenantId: string) {
 export async function listConnections(tenantId: string) {
   return prisma.integrationConnection.findMany({
     where: { tenantId },
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: 'desc' },
+    include: {
+      syncJobs: {
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          startedAt: true,
+          finishedAt: true,
+          errorSummary: true
+        }
+      }
+    }
   });
 }
 
