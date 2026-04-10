@@ -24,6 +24,7 @@ import {
   listProjects,
   listTasks,
   listTeamMembers,
+  listTeams,
   listUsers,
   removeTeamMember,
   updateTask,
@@ -152,6 +153,19 @@ export async function coreRoutes(app: FastifyInstance) {
 
     const team = await createTeam(parsed.data);
     return reply.status(201).send(ok(request, mapTeam(team)));
+  });
+
+  app.get('/core/teams', {
+    preHandler: [app.authenticate, app.requirePermission('core.team.read')]
+  }, async (request, reply) => {
+    const parsed = listQuerySchema.safeParse(request.query);
+    if (!parsed.success) {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Invalid query parameters', { issues: parsed.error.issues }));
+    }
+
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const { items, nextCursor } = await listTeams(tenantId, parsed.data);
+    return reply.status(200).send(ok(request, { items: items.map(mapTeam), next_cursor: nextCursor }));
   });
 
   app.post('/core/projects', {

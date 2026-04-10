@@ -261,6 +261,21 @@ export async function upsertUser(input: CreateUserInput) {
   });
 }
 
+export async function listTeams(tenantId: string, query: ListQueryInput) {
+  const { limit, cursor } = query;
+
+  const rows = await prisma.team.findMany({
+    where: { tenantId },
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    orderBy: { createdAt: 'asc' }
+  });
+
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  return { items, nextCursor: hasMore ? items[items.length - 1].id : null };
+}
+
 export async function listUsers(tenantId: string, limit: number, cursor?: string) {
   const rows = await prisma.user.findMany({
     where: { tenantId },
