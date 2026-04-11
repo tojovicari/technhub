@@ -1,5 +1,4 @@
 import { prisma } from '../../../lib/prisma.js';
-import { evaluateTaskSla } from '../../sla/service.js';
 import type { IntegrationConnector, SyncInput, SyncResult, WebhookConfig } from './base.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -337,23 +336,7 @@ async function syncIssues(
       },
     });
 
-    if (status === 'in_progress' || status === 'review' || status === 'done' || status === 'cancelled') {
-      evaluateTaskSla({
-        task_id: task.id,
-        tenant_id: tenantId,
-        task_type: taskType ?? undefined,
-        original_type: rawType,
-        priority: priority as 'P0' | 'P1' | 'P2' | 'P3' | 'P4',
-        status,
-        labels: f.labels ?? [],
-        component,
-        project_id: projectId,
-        source: 'jira',
-        started_at: task.startedAt?.toISOString(),
-        title: f.summary,
-        assignee_id: assigneeId ?? null
-      }).catch(err => console.warn('[SLA] evaluate failed for task', task.id, err));
-    }
+
   }
 
   return issues.length;

@@ -1,7 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { SlaInstanceStatus } from '@prisma/client';
-
 const TEST_TEMPLATE_ID = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
 const TEST_TASK_ID     = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
 
@@ -49,8 +47,7 @@ vi.mock('./service.js', () => ({
   getSlaTemplate: vi.fn(),
   updateSlaTemplate: vi.fn(),
   deleteSlaTemplate: vi.fn(),
-  evaluateTaskSla: vi.fn(),
-  listSlaInstances: vi.fn()
+  getSlaCompliance: vi.fn()
 }));
 
 import { buildApp } from '../../app.js';
@@ -85,28 +82,6 @@ function makeTemplate(overrides: Record<string, unknown> = {}) {
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),
-    ...overrides
-  };
-}
-
-function makeInstance(overrides: Record<string, unknown> = {}) {
-  const now = new Date();
-  return {
-    id: 'cccccccc-cccc-4ccc-cccc-cccccccccccc',
-    taskId: TEST_TASK_ID,
-    slaTemplateId: TEST_TEMPLATE_ID,
-    tenantId: 'ten_test',
-    targetMinutes: 480,
-    startedAt: now,
-    deadlineAt: new Date(now.getTime() + 480 * 60_000),
-    completedAt: null,
-    status: 'running' as SlaInstanceStatus,
-    actualMinutes: null,
-    breachMinutes: null,
-    createdAt: now,
-    updatedAt: now,
-    template: { id: TEST_TEMPLATE_ID, name: 'Bug SLA' },
-    task_snapshot: null,
     ...overrides
   };
 }
@@ -297,97 +272,40 @@ describe('SLA routes', () => {
     });
   });
 
-  // ── POST /sla/evaluate ─────────────────────────────────────────────────────
+  // ── GET /sla/compliance ────────────────────────────────────────────────────
 
-  describe('POST /api/v1/sla/evaluate', () => {
-    it('200: evaluates task event', async () => {
-      vi.mocked(slaSvc.evaluateTaskSla).mockResolvedValueOnce({
-        instance_id: 'cccccccc-cccc-4ccc-cccc-cccccccccccc',
-        status: 'running',
-        action: 'created'
+  describe('GET /api/v1/sla/compliance', () => {
+    it('200: returns compliance result', async () => {
+      vi.mocked(slaSvc.getSlaCompliance).mockResolvedValueOnce({
+        period: { from: '2026-04-01T00:00:00.000Z', to: '2026-04-30T23:59:59.000Z' },
+        templates: []
       });
 
       const res = await app.inject({
-        method: 'POST',
-        url: '/api/v1/sla/evaluate',
-        headers: { authorization: `Bearer ${token}` },
-        body: {
-          task_id: TEST_TASK_ID,
-          tenant_id: 'ten_test',
-          task_type: 'bug',
-          priority: 'P1',
-          status: 'in_progress',
-          started_at: new Date().toISOString()
-        }
+        method: 'GET',
+        url: '/api/v1/sla/compliance?from=2026-04-01T00:00:00Z&to=2026-04-30T23:59:59Z',
+        headers: { authorization: `Bearer ${token}` }
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json().data.action).toBe('created');
+      expect(res.json().data.templates).toEqual([]);
     });
 
-    it('403: tenant mismatch in body vs token', async () => {
+    it('400: missing required from/to', async () => {
       const res = await app.inject({
-        method: 'POST',
-        url: '/api/v1/sla/evaluate',
-        headers: { authorization: `Bearer ${token}` },
-        body: {
-          task_id: TEST_TASK_ID,
-          tenant_id: 'ten_other', // mismatch
-          task_type: 'bug',
-          priority: 'P1',
-          status: 'in_progress'
-        }
+        method: 'GET',
+        url: '/api/v1/sla/compliance',
+        headers: { authorization: `Bearer ${token}` }
       });
-
-      expect(res.statusCode).toBe(403);
-    });
-
-    it('400: invalid task event', async () => {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/v1/sla/evaluate',
-        headers: { authorization: `Bearer ${token}` },
-        body: { task_id: 'not-a-uuid', tenant_id: 'ten_test' }
-      });
-
       expect(res.statusCode).toBe(400);
     });
-  });
 
-  // ── GET /sla/instances ─────────────────────────────────────────────────────
-
-  describe('GET /api/v1/sla/instances', () => {
-    it('200: returns list', async () => {
-      vi.mocked(slaSvc.listSlaInstances).mockResolvedValueOnce({
-        data: [makeInstance()],
-        next_cursor: null
-      });
-
+    it('401: no token', async () => {
       const res = await app.inject({
         method: 'GET',
-        url: '/api/v1/sla/instances',
-        headers: { authorization: `Bearer ${token}` }
+        url: '/api/v1/sla/compliance?from=2026-04-01T00:00:00Z&to=2026-04-30T23:59:59Z'
       });
-
-      expect(res.statusCode).toBe(200);
-      expect(res.json().data.data).toHaveLength(1);
-      expect(res.json().data.data[0].status).toBe('running');
-    });
-
-    it('200: filters by task_id and status', async () => {
-      vi.mocked(slaSvc.listSlaInstances).mockResolvedValueOnce({ data: [], next_cursor: null });
-
-      const res = await app.inject({
-        method: 'GET',
-        url: `/api/v1/sla/instances?task_id=${TEST_TASK_ID}&status=running`,
-        headers: { authorization: `Bearer ${token}` }
-      });
-
-      expect(res.statusCode).toBe(200);
-      expect(slaSvc.listSlaInstances).toHaveBeenCalledWith(
-        'ten_test',
-        expect.objectContaining({ task_id: TEST_TASK_ID, status: 'running' })
-      );
+      expect(res.statusCode).toBe(401);
     });
   });
 });

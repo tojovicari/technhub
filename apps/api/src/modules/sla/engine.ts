@@ -1,4 +1,4 @@
-import type { SlaConditionGroup, SlaRule, SlaTaskEvent } from './schema.js';
+import type { SlaConditionGroup, SlaRule } from './schema.js';
 
 // ────────────────────────────────────────────────────────────────────────────────
 // Condition evaluator
@@ -101,16 +101,4 @@ export function computeSlaStatus(
   };
 }
 
-// ────────────────────────────────────────────────────────────────────────────────
-// Terminal state: should the SLA instance be closed?
-// ────────────────────────────────────────────────────────────────────────────────
 
-const TERMINAL_TASK_STATUSES = new Set(['done', 'cancelled']);
-
-export function isTaskTerminal(event: SlaTaskEvent): boolean {
-  return TERMINAL_TASK_STATUSES.has(event.status);
-}
-
-export function isTaskActive(event: SlaTaskEvent): boolean {
-  return event.status === 'in_progress' || event.status === 'review';
-}

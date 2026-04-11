@@ -1,22 +1,16 @@
 import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
-import { ensureTenantScope } from '../../plugins/auth.js';
 import {
   createSlaTemplateSchema,
   updateSlaTemplateSchema,
   listSlaTemplatesQuerySchema,
-  listSlaInstancesQuerySchema,
-  slaSummaryQuerySchema,
-  slaTaskEventSchema
+  slaComplianceQuerySchema
 } from './schema.js';
 import {
   createSlaTemplate,
   deleteSlaTemplate,
-  evaluateTaskSla,
+  getSlaCompliance,
   getSlaTemplate,
-  getSlaSummary,
-  getSlaSummaryByTemplate,
-  listSlaInstances,
   listSlaTemplates,
   updateSlaTemplate
 } from './service.js';
@@ -52,49 +46,6 @@ function mapTemplate(t: {
     is_active: t.isActive,
     created_at: t.createdAt.toISOString(),
     updated_at: t.updatedAt.toISOString()
-  };
-}
-
-function mapInstance(inst: {
-  id: string;
-  taskId: string;
-  slaTemplateId: string;
-  tenantId: string;
-  targetMinutes: number;
-  startedAt: Date;
-  deadlineAt: Date;
-  completedAt: Date | null;
-  status: string;
-  actualMinutes: number | null;
-  breachMinutes: number | null;
-  createdAt: Date;
-  updatedAt: Date;
-  template?: { id: string; name: string } | null;
-  task_snapshot?: { title: string; assigneeId: string | null; priority: string; projectId: string } | null;
-}) {
-  return {
-    id: inst.id,
-    task_id: inst.taskId,
-    sla_template_id: inst.slaTemplateId,
-    tenant_id: inst.tenantId,
-    target_minutes: inst.targetMinutes,
-    started_at: inst.startedAt.toISOString(),
-    deadline_at: inst.deadlineAt.toISOString(),
-    completed_at: inst.completedAt?.toISOString() ?? null,
-    status: inst.status,
-    actual_minutes: inst.actualMinutes,
-    breach_minutes: inst.breachMinutes,
-    created_at: inst.createdAt.toISOString(),
-    updated_at: inst.updatedAt.toISOString(),
-    template: inst.template ?? null,
-    task_snapshot: inst.task_snapshot
-      ? {
-          title: inst.task_snapshot.title,
-          assignee_id: inst.task_snapshot.assigneeId,
-          priority: inst.task_snapshot.priority,
-          project_id: inst.task_snapshot.projectId
-        }
-      : null
   };
 }
 
@@ -190,85 +141,93 @@ export async function slaRoutes(app: FastifyInstance) {
     }
   );
 
-  // ── POST /sla/evaluate ───────────────────────────────────────────────────────
-  app.post(
-    '/sla/evaluate',
-    { preHandler: [app.authenticate, app.requirePermission('sla.evaluate')] },
+  // ── GET /sla/compliance ──────────────────────────────────────────────────────
+  app.get(
+    '/sla/compliance',
+    { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
-      const parsed = slaTaskEventSchema.safeParse(req.body);
+      const parsed = slaComplianceQuerySchema.safeParse(req.query);
       if (!parsed.success) {
-        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid task event', { issues: parsed.error.issues }));
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
       }
 
       const tenantId = (req.user as { tenant_id: string }).tenant_id;
-
-      const scopeError = ensureTenantScope(req, reply, parsed.data.tenant_id);
-      if (scopeError) return scopeError;
-
-      if (parsed.data.tenant_id !== tenantId) {
-        return reply.status(403).send(fail(req, 'FORBIDDEN', 'Tenant mismatch'));
-      }
-
-      const result = await evaluateTaskSla(parsed.data);
+      const result = await getSlaCompliance(tenantId, parsed.data);
       return reply.status(200).send(ok(req, result));
     }
   );
 
-  // ── GET /sla/instances ───────────────────────────────────────────────────────
+  // ── GET /sla/instances — compatibility shim (returns empty list) ─────────────
   app.get(
     '/sla/instances',
     { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
-      const parsed = listSlaInstancesQuerySchema.safeParse(req.query);
-      if (!parsed.success) {
-        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
-      }
-
-      const tenantId = (req.user as { tenant_id: string }).tenant_id;
-      const result = await listSlaInstances(tenantId, parsed.data);
-      return reply.status(200).send(ok(req, {
-        data: result.data.map(mapInstance),
-        next_cursor: result.next_cursor
-      }));
+      return reply.status(200).send(ok(req, { data: [], next_cursor: null }));
     }
   );
 
-  // ── GET /sla/summary ─────────────────────────────────────────────────────────
+  // ── GET /sla/summary — compatibility shim (delegates to compliance) ──────────
   app.get(
     '/sla/summary',
     { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
-      const parsed = slaSummaryQuerySchema.safeParse(req.query);
-      if (!parsed.success) {
-        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
-      }
-
       const tenantId = (req.user as { tenant_id: string }).tenant_id;
-      const summary = await getSlaSummary(tenantId, {
-        projectId: parsed.data.project_id,
-        from: parsed.data.from,
-        to: parsed.data.to
-      });
-      return reply.status(200).send(ok(req, summary));
+      const now = new Date();
+      const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const to = now.toISOString();
+      const result = await getSlaCompliance(tenantId, { from, to });
+
+      // Aggregate across templates
+      let total = 0, met = 0, running = 0, at_risk = 0, breached = 0;
+      for (const t of result.templates) {
+        total += t.summary.total;
+        met += t.summary.met;
+        running += t.summary.running;
+        at_risk += t.summary.at_risk;
+        breached += t.summary.breached;
+      }
+      const closed = met + breached;
+
+      return reply.status(200).send(ok(req, {
+        period: result.period,
+        total_instances: total,
+        running,
+        at_risk,
+        breached,
+        met,
+        compliance_rate: closed > 0 ? Math.round((met / closed) * 1000) / 10 : null,
+        breach_rate: closed > 0 ? Math.round((breached / closed) * 1000) / 10 : null,
+        at_risk_rate: null,
+        mean_resolution_minutes: null,
+        breach_severity_avg_minutes: null
+      }));
     }
   );
 
-  // ── GET /sla/summary/by-template ─────────────────────────────────────────────
+  // ── GET /sla/summary/by-template — compatibility shim ───────────────────────
   app.get(
     '/sla/summary/by-template',
     { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
-      const parsed = slaSummaryQuerySchema.safeParse(req.query);
-      if (!parsed.success) {
-        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
-      }
-
       const tenantId = (req.user as { tenant_id: string }).tenant_id;
-      const rows = await getSlaSummaryByTemplate(tenantId, {
-        projectId: parsed.data.project_id,
-        from: parsed.data.from,
-        to: parsed.data.to
-      });
+      const now = new Date();
+      const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const to = now.toISOString();
+      const result = await getSlaCompliance(tenantId, { from, to });
+
+      const rows = result.templates.map(t => ({
+        template: { id: t.template_id, name: t.template_name, priority: 0 },
+        running: t.summary.running,
+        at_risk: t.summary.at_risk,
+        breached: t.summary.breached,
+        met: t.summary.met,
+        total_instances: t.summary.total,
+        compliance_rate: t.summary.compliance_rate,
+        breach_rate: null,
+        mean_resolution_minutes: null,
+        breach_severity_avg_minutes: null
+      }));
+
       return reply.status(200).send(ok(req, rows));
     }
   );

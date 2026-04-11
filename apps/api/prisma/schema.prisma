@@ -131,21 +131,6 @@ enum TaskStatus {
   cancelled
 }
 
-enum TaskSlaStatus {
-  ok
-  at_risk
-  breached
-  n_a
-}
-
-enum SlaInstanceStatus {
-  running
-  met
-  at_risk
-  breached
-  superseded
-}
-
 enum IntegrationProvider {
   jira
   github
@@ -391,7 +376,6 @@ model Task {
   startedAt        DateTime?
   completedAt      DateTime?
   dueDate          DateTime?
-  slaStatus        TaskSlaStatus @default(n_a)
   cycleTimeHours   Float?
   relatedPrIds     String[]
   tags             String[]
@@ -405,7 +389,6 @@ model Task {
   assignee         User?                  @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
   reporter         User?                  @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
   connection       IntegrationConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
-  slaInstances     SlaInstance[]
 
   @@unique([tenantId, source, sourceId])
   @@index([tenantId])
@@ -430,48 +413,8 @@ model SlaTemplate {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  instances       SlaInstance[]
-
   @@index([tenantId])
   @@index([tenantId, isActive])
-}
-
-model SlaInstance {
-  id              String            @id @default(uuid())
-  taskId          String
-  slaTemplateId   String
-  tenantId        String
-  targetMinutes   Int
-  startedAt       DateTime
-  deadlineAt      DateTime
-  completedAt     DateTime?
-  status          SlaInstanceStatus @default(running)
-  actualMinutes   Int?
-  breachMinutes   Int?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-
-  task            Task              @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  template        SlaTemplate       @relation(fields: [slaTemplateId], references: [id], onDelete: Restrict)
-
-  @@index([tenantId])
-  @@index([taskId])
-  @@index([status])
-  @@index([deadlineAt])
-}
-
-// Local read-model: task metadata snapshot consumed from core.task.updated.v1 events.
-// Owned by the SLA module — never written by other modules directly.
-model SlaTaskSnapshot {
-  taskId      String   @id
-  tenantId    String
-  title       String
-  assigneeId  String?
-  priority    String
-  projectId   String
-  updatedAt   DateTime @updatedAt
-
-  @@index([tenantId])
 }
 
 model IntegrationSecret {

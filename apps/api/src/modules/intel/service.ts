@@ -164,36 +164,36 @@ export async function getEpicCompletionForecast(tenantId: string, params: EpicFo
 }
 
 // ── SLA risk ──────────────────────────────────────────────────────────────────
+// SLA instances no longer exist — risk is approximated from active tasks.
+// Tasks with startedAt are sorted by age; dueDate is used as deadline when available.
 
 export async function getSlaRisk(tenantId: string, query: SlaRiskQuery) {
-  const instances = await prisma.slaInstance.findMany({
+  const tasks = await prisma.task.findMany({
     where: {
       tenantId,
-      status: { in: ['running', 'at_risk'] },
-      ...(query.project_id || query.team_id
-        ? {
-            task: {
-              ...(query.project_id && { projectId: query.project_id }),
-              ...(query.team_id && { project: { teamId: query.team_id } })
-            }
-          }
-        : {})
+      status: { in: ['in_progress', 'review'] },
+      startedAt: { not: null },
+      ...(query.project_id && { projectId: query.project_id }),
+      ...(query.team_id && { project: { teamId: query.team_id } })
     },
     select: {
       id: true,
-      taskId: true,
       startedAt: true,
-      deadlineAt: true,
-      status: true
+      dueDate: true
     },
-    orderBy: { deadlineAt: 'asc' },
+    orderBy: { startedAt: 'asc' },
     take: query.limit
   });
 
   const now = new Date();
-  return instances.map(inst =>
-    computeSlaRiskScore(inst.id, inst.taskId, inst.startedAt, inst.deadlineAt, now)
-  );
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+  return tasks.map(task => {
+    const startedAt = task.startedAt!;
+    // Use explicit dueDate if set, otherwise fallback to startedAt + 7 days
+    const deadlineAt = task.dueDate ?? new Date(startedAt.getTime() + SEVEN_DAYS_MS);
+    return computeSlaRiskScore(task.id, task.id, startedAt, deadlineAt, now);
+  });
 }
 
 // ── Anomaly detection ─────────────────────────────────────────────────────────
@@ -257,25 +257,35 @@ export async function getRecommendations(tenantId: string, query: RecommendQuery
     signals.doraOverallLevel = doraSig.level as RecommendationSignals['doraOverallLevel'];
   }
 
-  // SLA counts
-  const slaCounts = await prisma.slaInstance.groupBy({
-    by: ['status'],
+  // SLA counts: derived from active tasks (in_progress/review) as a proxy
+  const slaRiskTasks = await prisma.task.findMany({
     where: {
       tenantId,
-      status: { in: ['at_risk', 'breached'] },
+      status: { in: ['in_progress', 'review'] },
+      startedAt: { not: null },
       ...(query.project_id || query.team_id
         ? {
-            task: {
-              ...(query.project_id && { projectId: query.project_id }),
-              ...(query.team_id && { project: { teamId: query.team_id } })
-            }
+            ...(query.project_id && { projectId: query.project_id }),
+            ...(query.team_id && { project: { teamId: query.team_id } })
           }
         : {})
     },
-    _count: true
+    select: { startedAt: true, dueDate: true }
   });
-  signals.atRiskSlaCount = slaCounts.find(c => c.status === 'at_risk')?._count ?? 0;
-  signals.breachedSlaCount = slaCounts.find(c => c.status === 'breached')?._count ?? 0;
+  const now2 = new Date();
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  let atRiskCount = 0, breachedCount = 0;
+  for (const t of slaRiskTasks) {
+    const startedAt = t.startedAt!;
+    const deadlineAt = t.dueDate ?? new Date(startedAt.getTime() + SEVEN_DAYS_MS);
+    const elapsedMs = now2.getTime() - startedAt.getTime();
+    const totalMs = deadlineAt.getTime() - startedAt.getTime();
+    const pct = totalMs > 0 ? (elapsedMs / totalMs) * 100 : 100;
+    if (now2 > deadlineAt) breachedCount++;
+    else if (pct >= 80) atRiskCount++;
+  }
+  signals.atRiskSlaCount = atRiskCount;
+  signals.breachedSlaCount = breachedCount;
 
   // Velocity trend
   const velocityResult = await getVelocityForecast(tenantId, {

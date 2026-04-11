@@ -1,7 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { evaluateCondition, computeSlaStatus, isTaskTerminal, isTaskActive } from './engine.js';
+import { describe, expect, it } from 'vitest';
+import { evaluateCondition, computeSlaStatus } from './engine.js';
 import type { SlaConditionGroup } from './schema.js';
-import type { SlaTaskEvent } from './schema.js';
 
 // ── Engine: evaluateCondition ────────────────────────────────────────────────
 
@@ -118,37 +117,4 @@ describe('computeSlaStatus', () => {
   });
 });
 
-// ── Engine: terminal / active helpers ────────────────────────────────────────
 
-describe('isTaskTerminal / isTaskActive', () => {
-  const base: SlaTaskEvent = {
-    task_id: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
-    tenant_id: 'ten_test',
-    task_type: 'bug',
-    priority: 'P1',
-    status: 'in_progress',
-    labels: []
-  };
-
-  it.each(['done', 'cancelled'] as const)('considers %s as terminal', (status) => {
-    expect(isTaskTerminal({ ...base, status })).toBe(true);
-  });
-
-  it.each(['backlog', 'todo', 'in_progress', 'review'] as const)(
-    'does not consider %s as terminal',
-    (status) => {
-      expect(isTaskTerminal({ ...base, status })).toBe(false);
-    }
-  );
-
-  it.each(['in_progress', 'review'] as const)('considers %s as active', (status) => {
-    expect(isTaskActive({ ...base, status })).toBe(true);
-  });
-
-  it.each(['backlog', 'todo', 'done', 'cancelled'] as const)(
-    'does not consider %s as active',
-    (status) => {
-      expect(isTaskActive({ ...base, status })).toBe(false);
-    }
-  );
-});
