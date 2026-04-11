@@ -87,11 +87,11 @@ function resolveTaskType(
 
 function resolveTaskPriority(priorityName: string): 'P0' | 'P1' | 'P2' | 'P3' | 'P4' {
   const p = priorityName.toLowerCase();
-  if (p === 'critical' || p === 'blocker' || p === 'p0') return 'P0';
+  if (p === 'critical' || p === 'blocker' || p === 'p0' || p === 'highest') return 'P0';
   if (p === 'high' || p === 'major' || p === 'p1') return 'P1';
   if (p === 'low' || p === 'minor' || p === 'p3') return 'P3';
   if (p === 'trivial' || p === 'lowest' || p === 'p4') return 'P4';
-  return 'P2';
+  return 'P2'; // medium, unknown
 }
 
 function resolveTaskStatus(statusCategory: { key: string; name: string }): 'backlog' | 'todo' | 'in_progress' | 'review' | 'done' | 'cancelled' {
