@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
 import {
+  addProjectSourceSchema,
   addTeamMemberSchema,
   createEpicSchema,
   createProjectSchema,
@@ -9,9 +10,11 @@ import {
   createTeamSchema,
   createUserSchema,
   listQuerySchema,
-  updateTaskSchema
+  updateTaskSchema,
+  updateTeamSchema
 } from './schema.js';
 import {
+  addProjectSource,
   addTeamMember,
   createEpic,
   createProject,
@@ -21,13 +24,16 @@ import {
   getProject,
   getTask,
   listEpics,
+  listProjectSources,
   listProjects,
   listTasks,
   listTeamMembers,
   listTeams,
   listUsers,
+  removeProjectSource,
   removeTeamMember,
   updateTask,
+  updateTeam,
   upsertUser
 } from './service.js';
 
@@ -40,6 +46,18 @@ function mapTeam(team: { id: string; tenantId: string; name: string; description
     lead_id: team.leadId,
     budget_quarterly: team.budgetQuarterly,
     tags: team.tags
+  };
+}
+
+function mapProjectSource(source: { id: string; tenantId: string; projectId: string; provider: string; externalId: string; displayName: string | null; createdAt: Date }) {
+  return {
+    id: source.id,
+    tenant_id: source.tenantId,
+    project_id: source.projectId,
+    provider: source.provider,
+    external_id: source.externalId,
+    display_name: source.displayName,
+    created_at: source.createdAt.toISOString()
   };
 }
 
@@ -57,6 +75,7 @@ function mapProject(project: any) {
     custom_fields: project.customFields ?? null,
     tags: project.tags,
     team: project.team ? mapTeam(project.team) : null,
+    sources: project.sources ? project.sources.map(mapProjectSource) : undefined,
     epic_count: project.epics?.length,
     task_count: project.tasks?.length
   };
@@ -155,6 +174,25 @@ export async function coreRoutes(app: FastifyInstance) {
     return reply.status(201).send(ok(request, mapTeam(team)));
   });
 
+  app.patch('/core/teams/:team_id', {
+    preHandler: [app.authenticate, app.requirePermission('core.team.manage')]
+  }, async (request, reply) => {
+    const parsed = updateTeamSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Invalid request body', { issues: parsed.error.issues }));
+    }
+
+    const { team_id: teamId } = request.params as { team_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const team = await updateTeam(teamId, tenantId, parsed.data);
+
+    if (!team) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Team not found'));
+    }
+
+    return reply.status(200).send(ok(request, mapTeam(team)));
+  });
+
   app.get('/core/teams', {
     preHandler: [app.authenticate, app.requirePermission('core.team.read')]
   }, async (request, reply) => {
@@ -197,6 +235,55 @@ export async function coreRoutes(app: FastifyInstance) {
     }
 
     return reply.status(200).send(ok(request, mapProject(project)));
+  });
+
+  // ─── Project sources ─────────────────────────────────────────────────────────
+
+  app.get('/core/projects/:project_id/sources', {
+    preHandler: [app.authenticate, app.requirePermission('core.project.read')]
+  }, async (request, reply) => {
+    const { project_id: projectId } = request.params as { project_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const sources = await listProjectSources(projectId, tenantId);
+
+    if (!sources) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Project not found'));
+    }
+
+    return reply.status(200).send(ok(request, { items: sources.map(mapProjectSource) }));
+  });
+
+  app.post('/core/projects/:project_id/sources', {
+    preHandler: [app.authenticate, app.requirePermission('core.project.manage')]
+  }, async (request, reply) => {
+    const parsed = addProjectSourceSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Invalid request body', { issues: parsed.error.issues }));
+    }
+
+    const { project_id: projectId } = request.params as { project_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const source = await addProjectSource(projectId, tenantId, parsed.data);
+
+    if (!source) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Project not found'));
+    }
+
+    return reply.status(201).send(ok(request, mapProjectSource(source)));
+  });
+
+  app.delete('/core/projects/:project_id/sources/:source_id', {
+    preHandler: [app.authenticate, app.requirePermission('core.project.manage')]
+  }, async (request, reply) => {
+    const { project_id: projectId, source_id: sourceId } = request.params as { project_id: string; source_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const result = await removeProjectSource(projectId, sourceId, tenantId);
+
+    if (!result) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Source not found'));
+    }
+
+    return reply.status(204).send();
   });
 
   app.post('/core/epics', {

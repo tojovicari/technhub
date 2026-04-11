@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import type {
+  AddProjectSourceInput,
   AddTeamMemberInput,
   CreateEpicInput,
   CreateProjectInput,
@@ -8,7 +9,8 @@ import type {
   CreateTeamInput,
   CreateUserInput,
   ListQueryInput,
-  UpdateTaskInput
+  UpdateTaskInput,
+  UpdateTeamInput
 } from './schema.js';
 
 async function ensureTenant(tenantId: string) {
@@ -33,6 +35,24 @@ export async function createTeam(input: CreateTeamInput) {
       description: input.description,
       leadId: input.lead_id,
       budgetQuarterly: input.budget_quarterly,
+      tags: input.tags
+    }
+  });
+}
+
+export async function updateTeam(teamId: string, tenantId: string, input: UpdateTeamInput) {
+  const team = await prisma.team.findFirst({ where: { id: teamId, tenantId } });
+  if (!team) {
+    return null;
+  }
+
+  return prisma.team.update({
+    where: { id: teamId },
+    data: {
+      name: input.name,
+      description: input.description === undefined ? undefined : input.description,
+      leadId: input.lead_id === undefined ? undefined : input.lead_id,
+      budgetQuarterly: input.budget_quarterly === undefined ? undefined : input.budget_quarterly,
       tags: input.tags
     }
   });
@@ -63,7 +83,8 @@ export async function getProject(projectId: string, tenantId: string) {
     include: {
       team: true,
       epics: true,
-      tasks: true
+      tasks: true,
+      sources: true
     }
   });
 }
@@ -329,6 +350,45 @@ export async function listTeamMembers(teamId: string, tenantId: string) {
   return prisma.teamMember.findMany({
     where: { teamId, tenantId },
     include: { user: true },
+    orderBy: { createdAt: 'asc' }
+  });
+}
+
+// ─── Project sources ─────────────────────────────────────────────────────────
+
+export async function addProjectSource(projectId: string, tenantId: string, input: AddProjectSourceInput) {
+  const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
+  if (!project) {
+    return null;
+  }
+
+  return prisma.projectSource.upsert({
+    where: { projectId_provider_externalId: { projectId, provider: input.provider, externalId: input.external_id } },
+    create: { projectId, tenantId, provider: input.provider, externalId: input.external_id, displayName: input.display_name },
+    update: { displayName: input.display_name }
+  });
+}
+
+export async function removeProjectSource(projectId: string, sourceId: string, tenantId: string) {
+  const source = await prisma.projectSource.findFirst({
+    where: { id: sourceId, projectId, tenantId }
+  });
+
+  if (!source) {
+    return null;
+  }
+
+  return prisma.projectSource.delete({ where: { id: source.id } });
+}
+
+export async function listProjectSources(projectId: string, tenantId: string) {
+  const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
+  if (!project) {
+    return null;
+  }
+
+  return prisma.projectSource.findMany({
+    where: { projectId, tenantId },
     orderBy: { createdAt: 'asc' }
   });
 }

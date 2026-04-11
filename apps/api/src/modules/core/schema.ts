@@ -9,6 +9,14 @@ export const createTeamSchema = z.object({
   tags: z.array(z.string()).optional().default([])
 });
 
+export const updateTeamSchema = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().nullable().optional(),
+  lead_id: z.string().uuid().nullable().optional(),
+  budget_quarterly: z.number().nullable().optional(),
+  tags: z.array(z.string()).optional()
+});
+
 export const createProjectSchema = z.object({
   tenant_id: z.string().min(1),
   key: z.string().min(1).max(24),
@@ -83,6 +91,12 @@ export const addTeamMemberSchema = z.object({
   user_id: z.string().uuid()
 });
 
+export const addProjectSourceSchema = z.object({
+  provider: z.enum(['jira', 'github']),
+  external_id: z.string().min(1),
+  display_name: z.string().optional()
+});
+
 export const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(25),
   cursor: z.string().uuid().optional(),
@@ -93,10 +107,12 @@ export const listQuerySchema = z.object({
 });
 
 export type CreateTeamInput = z.infer<typeof createTeamSchema>;
+export type UpdateTeamInput = z.infer<typeof updateTeamSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
 export type CreateEpicInput = z.infer<typeof createEpicSchema>;
 export type CreateTaskInput = z.infer<typeof createTaskSchema>;
 export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
 export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type AddTeamMemberInput = z.infer<typeof addTeamMemberSchema>;
+export type AddProjectSourceInput = z.infer<typeof addProjectSourceSchema>;
 export type ListQueryInput = z.infer<typeof listQuerySchema>;

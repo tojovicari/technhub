@@ -56,6 +56,7 @@ Tenant
 | `/core/users` | POST | `core.user.manage` |
 | `/core/users` | GET | `core.user.read` |
 | `/core/teams` | POST | `core.team.manage` |
+| `/core/teams/:team_id` | PATCH | `core.team.manage` |
 | `/core/teams` | GET | `core.team.read` |
 | `/core/teams/:team_id/members` | GET | `core.team.read` |
 | `/core/teams/:team_id/members` | POST | `core.team.manage` |
@@ -303,6 +304,67 @@ Cria um novo time.
 | 400 | `BAD_REQUEST` | Campo obrigatório ausente ou formato inválido |
 | 401 | `UNAUTHORIZED` | Token ausente ou inválido |
 | 403 | `FORBIDDEN` | Sem permissão ou `tenant_id` não bate com o JWT |
+
+---
+
+### PATCH /core/teams/:team_id
+
+Atualiza parcialmente um time. Todos os campos são opcionais — envie apenas o que deseja alterar.
+
+**Permissão:** `core.team.manage`
+
+**Path Params:**
+
+| Param | Tipo | Notas |
+|---|---|---|
+| `team_id` | string (UUID) | UUID do time |
+
+**Request Body:**
+
+| Campo | Tipo | Obrigatório | Notas |
+|---|---|---|---|
+| `name` | string | ❌ | Novo nome do time |
+| `description` | string \| null | ❌ | `null` limpa o campo |
+| `lead_id` | string (UUID) \| null | ❌ | `null` remove o líder |
+| `budget_quarterly` | number \| null | ❌ | `null` limpa o budget |
+| `tags` | string[] | ❌ | Substitui a lista inteira de tags |
+
+**Exemplo de Request:**
+
+```json
+{
+  "name": "Platform & Reliability",
+  "lead_id": "user-99aa",
+  "tags": ["backend", "infra", "sre"]
+}
+```
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "id": "team-c1d2e3",
+    "tenant_id": "tenant-7a4b",
+    "name": "Platform & Reliability",
+    "description": "Owns infra, pipelines, and DX",
+    "lead_id": "user-99aa",
+    "budget_quarterly": 250000,
+    "tags": ["backend", "infra", "sre"]
+  },
+  "meta": { "request_id": "req_007", "version": "v1", "timestamp": "2026-04-11T09:00:00Z" },
+  "error": null
+}
+```
+
+**Cenários de Erro:**
+
+| Status | Code | Situação |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Formato inválido (ex: `lead_id` não é UUID) |
+| 401 | `UNAUTHORIZED` | Token ausente ou inválido |
+| 403 | `FORBIDDEN` | Sem permissão |
+| 404 | `NOT_FOUND` | Time não encontrado no tenant |
 
 ---
 
