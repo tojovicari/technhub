@@ -95,12 +95,20 @@ function resolveTaskPriority(priorityName: string): 'P0' | 'P1' | 'P2' | 'P3' | 
   return 'P2';
 }
 
-function resolveTaskStatus(statusCategory: string): 'backlog' | 'todo' | 'in_progress' | 'review' | 'done' | 'cancelled' {
-  switch (statusCategory.toLowerCase()) {
+function resolveTaskStatus(statusCategory: { key: string; name: string }): 'backlog' | 'todo' | 'in_progress' | 'review' | 'done' | 'cancelled' {
+  // Use key (system-defined, locale-independent) — fallback to name for safety
+  switch (statusCategory.key) {
     case 'done': return 'done';
-    case 'in progress': return 'in_progress';
-    case 'to do': return 'todo';
-    default: return 'backlog';
+    case 'indeterminate': return 'in_progress';
+    case 'new': return 'todo';
+    default:
+      // Fallback: try name for non-standard configurations
+      switch (statusCategory.name.toLowerCase()) {
+        case 'done': return 'done';
+        case 'in progress': return 'in_progress';
+        case 'to do': return 'todo';
+        default: return 'backlog';
+      }
   }
 }
 
@@ -178,7 +186,7 @@ async function syncEpics(
     fields: {
       summary: string;
       description?: unknown;
-      status: { statusCategory: { name: string } };
+      status: { statusCategory: { key: string; name: string } };
       duedate?: string;
       resolutiondate?: string;
     };
@@ -237,7 +245,7 @@ async function syncIssues(
       description?: unknown;
       issuetype: { name: string };
       priority?: { name: string };
-      status: { statusCategory: { name: string } };
+      status: { statusCategory: { key: string; name: string } };
       assignee?: { emailAddress?: string };
       reporter?: { emailAddress?: string };
       story_points?: number;
@@ -248,6 +256,7 @@ async function syncIssues(
       'Epic Link'?: string;
       customfield_10014?: string; // epic link (common custom field)
       labels?: string[];
+      components?: Array<{ name: string }>;
     };
   };
 
@@ -256,7 +265,7 @@ async function syncIssues(
 
   const issues = await client.paginate<JiraIssue>('/search/jql', 'issues', {
     jql,
-    fields: 'summary,description,issuetype,priority,status,assignee,reporter,customfield_10016,duedate,created,resolutiondate,customfield_10014,labels',
+    fields: 'summary,description,issuetype,priority,status,assignee,reporter,customfield_10016,duedate,created,resolutiondate,customfield_10014,labels,components',
   });
 
   for (const issue of issues) {
@@ -264,8 +273,9 @@ async function syncIssues(
     const rawType = f.issuetype.name;
     const taskType = resolveTaskType(rawType, typeMapping);
     const priority = resolveTaskPriority(f.priority?.name ?? 'medium');
-    const status = resolveTaskStatus(f.status.statusCategory.name);
+    const status = resolveTaskStatus(f.status.statusCategory);
     const storyPoints = f.customfield_10016 ?? undefined;
+    const component = f.components?.[0]?.name;
 
     let assigneeId: string | undefined;
     if (f.assignee?.emailAddress) {
@@ -314,16 +324,20 @@ async function syncIssues(
         taskType: taskType ?? undefined,
         originalType: rawType,
         status,
+        priority,
         assigneeId,
         reporterId,
         epicId,
         storyPoints,
+        dueDate: f.duedate ? new Date(f.duedate) : undefined,
+        // Only set startedAt when task has moved to in_progress/done and field isn't already set
+        startedAt: (status === 'in_progress' || status === 'done') ? new Date(f.created) : undefined,
         completedAt: f.resolutiondate ? new Date(f.resolutiondate) : undefined,
         tags: f.labels ?? [],
       },
     });
 
-    if (status === 'in_progress' || status === 'review') {
+    if (status === 'in_progress' || status === 'review' || status === 'done' || status === 'cancelled') {
       evaluateTaskSla({
         task_id: task.id,
         tenant_id: tenantId,
@@ -332,6 +346,7 @@ async function syncIssues(
         priority: priority as 'P0' | 'P1' | 'P2' | 'P3' | 'P4',
         status,
         labels: f.labels ?? [],
+        component,
         project_id: projectId,
         source: 'jira',
         started_at: task.startedAt?.toISOString(),

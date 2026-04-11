@@ -289,7 +289,7 @@ async function syncIssues(
       },
     });
 
-    if (status === 'in_progress') {
+    if (status === 'in_progress' || status === 'done') {
       evaluateTaskSla({
         task_id: task.id,
         tenant_id: tenantId,
@@ -342,7 +342,7 @@ async function syncPullRequests(
       assigneeId = user?.id;
     }
 
-    await prisma.task.upsert({
+    const prTask = await prisma.task.upsert({
       where: { tenantId_source_sourceId: { tenantId, source: 'github', sourceId } },
       create: {
         tenantId,
@@ -365,6 +365,20 @@ async function syncPullRequests(
         completedAt: pr.merged_at ? new Date(pr.merged_at) : undefined,
       },
     });
+
+    evaluateTaskSla({
+      task_id: prTask.id,
+      tenant_id: tenantId,
+      task_type: 'feature',
+      priority: 'P2',
+      status,
+      labels: [],
+      project_id: projectId,
+      source: 'github',
+      started_at: prTask.startedAt?.toISOString(),
+      title: pr.title,
+      assignee_id: assigneeId ?? null
+    }).catch(err => console.warn('[SLA] evaluate failed for PR', sourceId, err));
   }
 
   return filtered.length;

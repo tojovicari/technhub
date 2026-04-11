@@ -100,7 +100,10 @@ export async function deleteSlaTemplate(id: string, tenantId: string) {
   const existing = await prisma.slaTemplate.findFirst({ where: { id, tenantId } });
   if (!existing) return null;
 
-  await prisma.slaTemplate.delete({ where: { id } });
+  await prisma.$transaction([
+    prisma.slaInstance.deleteMany({ where: { slaTemplateId: id } }),
+    prisma.slaTemplate.delete({ where: { id } }),
+  ]);
   return true;
 }
 
