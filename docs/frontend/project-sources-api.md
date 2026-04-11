@@ -31,6 +31,9 @@ Project "Platform"
 | Listar as fontes de um projeto | `GET /core/projects/:project_id/sources` |
 | Remover uma integração | `DELETE /core/projects/:project_id/sources/:source_id` |
 | Ver fontes ao carregar um projeto | Includas em `GET /core/projects/:project_id` → campo `sources[]` |
+| Listar apenas iniciativas (criadas manualmente) | `GET /core/projects?is_initiative=true` |
+| Listar apenas projetos auto-importados | `GET /core/projects?is_initiative=false` |
+| Promover um repo auto-importado a iniciativa | `PATCH /core/projects/:project_id` com `{ "is_initiative": true }` |
 
 > **Impacto nos dados:** ao criar uma fonte, o worker de sync passa a considerar esse vínculo na próxima coleta — epics e tasks importados do JIRA/GitHub serão associados a esse projeto. Métricas DORA (deployment frequency, lead time) são calculadas por repositório GitHub vinculado.
 
@@ -40,6 +43,9 @@ Project "Platform"
 
 | Rota | Método | Permissão necessária |
 |---|---|---|
+| `/core/projects` | GET | `core.project.read` |
+| `/core/projects/:project_id` | GET | `core.project.read` |
+| `/core/projects/:project_id` | PATCH | `core.project.manage` |
 | `/core/projects/:project_id/sources` | GET | `core.project.read` |
 | `/core/projects/:project_id/sources` | POST | `core.project.manage` |
 | `/core/projects/:project_id/sources/:source_id` | DELETE | `core.project.manage` |
@@ -73,7 +79,7 @@ Project "Platform"
 
 ## Schema: Project (atualizado)
 
-O objeto `Project` retornado por `GET /core/projects/:project_id` agora inclui o campo `sources`:
+O objeto `Project` retornado por `GET /core/projects/:project_id` agora inclui os campos `sources` e `is_initiative`:
 
 | Campo | Tipo | Notas |
 |---|---|---|
@@ -81,6 +87,7 @@ O objeto `Project` retornado por `GET /core/projects/:project_id` agora inclui o
 | `tenant_id` | string (UUID) | — |
 | `key` | string | Chave curta única (ex: `PLAT`) |
 | `name` | string | — |
+| `is_initiative` | boolean | `true` = iniciativa visível para o time; `false` = projeto técnico/auto-importado |
 | `team_id` | string (UUID) \| null | Time responsável |
 | `status` | enum | `planning` \| `active` \| `on_hold` \| `done` |
 | `start_date` | ISO datetime \| null | — |
@@ -89,15 +96,112 @@ O objeto `Project` retornado por `GET /core/projects/:project_id` agora inclui o
 | `custom_fields` | object \| null | Campos extras |
 | `tags` | string[] | — |
 | `team` | Team \| null | Embedded — presente se `team_id` definido |
-| `sources` | ProjectSource[] | **Novo** — lista de fontes externas vinculadas |
+| `sources` | ProjectSource[] | Lista de fontes externas vinculadas — incluso apenas no detalhe |
 | `epic_count` | integer | Computed — total de epics |
 | `task_count` | integer | Computed — total de tasks |
+
+**Semântica de `is_initiative`:**
+
+| Valor | Quando ocorre |
+|---|---|
+| `true` | Projeto criado manualmente via `POST /core/projects` (default) |
+| `false` | Projeto criado automaticamente pelo worker de sync (ex: repos GitHub importados) |
+| `true` (promovido) | Projeto auto-importado que o usuário marcou explicitamente como iniciativa via `PATCH` |
+
+> Um projeto `is_initiative: false` pode ter todas as características técnicas de uma iniciativa — sources, epics, métricas. A flag é apenas sobre **intenção de visibilidade**, não sobre estrutura.
 
 > `sources` só é incluído em `GET /core/projects/:project_id` (detalhe). Nos resultados de listagem (`GET /core/projects`), o campo `sources` não está presente — use o detalhe do projeto ou o endpoint dedicado.
 
 ---
 
 ## Endpoints
+
+---
+
+### GET /core/projects
+
+Lista projetos do tenant. Suporta filtro por `is_initiative`.
+
+**Permissão:** `core.project.read`
+
+**Query Params:**
+
+| Param | Tipo | Default | Notas |
+|---|---|---|---|
+| `is_initiative` | boolean | — | Omitir = retorna todos; `true` = só iniciativas; `false` = só auto-importados |
+| `limit` | integer | 25 | Máx 100 |
+| `cursor` | string | — | Cursor de paginação (campo `next_cursor` da resposta anterior) |
+
+**Exemplos:**
+
+```
+GET /core/projects                    → todos os projetos
+GET /core/projects?is_initiative=true → apenas iniciativas
+GET /core/projects?is_initiative=false → apenas auto-importados
+```
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "proj-aa1234",
+        "tenant_id": "tenant-7a4b",
+        "key": "PLAT",
+        "name": "Platform Overhaul Q2",
+        "is_initiative": true,
+        "status": "active",
+        "team_id": "team-c1d2e3",
+        "tags": ["q2"],
+        "epic_count": 12,
+        "task_count": 87
+      }
+    ],
+    "next_cursor": null
+  },
+  "meta": { "request_id": "req_p_list", "version": "v1", "timestamp": "2026-04-11T10:00:00Z" },
+  "error": null
+}
+```
+
+---
+
+### PATCH /core/projects/:project_id
+
+Atualiza campos de um projeto — incluindo a promoção de um auto-importado para iniciativa.
+
+**Permissão:** `core.project.manage`
+
+**Request Body** (todos os campos opcionais):
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `name` | string | — |
+| `is_initiative` | boolean | `true` promove; `false` rebaixa |
+| `status` | enum | `planning` \| `active` \| `on_hold` \| `done` |
+| `team_id` | string (UUID) \| null | — |
+| `start_date` | ISO datetime \| null | — |
+| `target_end_date` | ISO datetime \| null | — |
+| `tags` | string[] | — |
+
+**Exemplo — promover repo auto-importado a iniciativa:**
+
+```json
+{ "is_initiative": true, "name": "Platform Core" }
+```
+
+**Response — 200 OK:** objeto `Project` atualizado.
+
+**Erros:**
+
+| Status | Code | Quando |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Campo com tipo inválido |
+| 401 | `UNAUTHORIZED` | Token ausente ou inválido |
+| 403 | `FORBIDDEN` | Sem permissão `core.project.manage` |
+| 404 | `NOT_FOUND` | Projeto não encontrado neste tenant |
 
 ---
 
@@ -296,6 +400,7 @@ O endpoint de detalhe de projeto foi atualizado e agora retorna `sources[]` embe
     "tenant_id": "tenant-7a4b",
     "key": "PLAT",
     "name": "Platform Overhaul Q2",
+    "is_initiative": true,
     "team_id": "team-c1d2e3",
     "status": "active",
     "start_date": "2026-04-01T00:00:00Z",
@@ -349,21 +454,28 @@ O endpoint de detalhe de projeto foi atualizado e agora retorna `sources[]` embe
 ## Fluxo recomendado (frontend)
 
 ```
-1. Criar projeto
-   POST /core/projects → recebe proj-id
+1. Listar iniciativas (tela principal)
+   GET /core/projects?is_initiative=true
 
-2. Vincular fontes
+2. Criar nova iniciativa
+   POST /core/projects → is_initiative: true por default
+
+3. Vincular fontes
    POST /core/projects/{proj-id}/sources  (JIRA)
    POST /core/projects/{proj-id}/sources  (GitHub repo 1)
    POST /core/projects/{proj-id}/sources  (GitHub repo 2)
 
-3. Exibir projeto com fontes
+4. Exibir iniciativa com fontes
    GET /core/projects/{proj-id} → campo sources[] já incluso
 
-4. Gerenciar fontes na tela de configuração
+5. Gerenciar fontes na tela de configuração
    GET  /core/projects/{proj-id}/sources     → lista atual
    POST /core/projects/{proj-id}/sources     → adicionar
    DELETE /core/projects/{proj-id}/sources/{src-id} → remover
+
+6. Promover repo auto-importado a iniciativa
+   GET  /core/projects?is_initiative=false   → listar candidatos
+   PATCH /core/projects/{proj-id}  { "is_initiative": true }
 ```
 
 ---
@@ -385,3 +497,4 @@ Nenhuma migração é necessária por parte do frontend para código existente. 
 | Data | Mudança |
 |---|---|
 | 2026-04-11 | Introdução de `ProjectSource`: novo modelo, 3 endpoints, `sources[]` no detalhe de projeto |
+| 2026-04-11 | Introdução de `is_initiative`: flag de intenção no `Project`; filtro `?is_initiative` no `GET /core/projects`; campo editável via `PATCH /core/projects/:id` |

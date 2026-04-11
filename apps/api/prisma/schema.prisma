@@ -300,6 +300,7 @@ model Project {
   tenantId       String
   key            String
   name           String
+  isInitiative   Boolean       @default(true)
   teamId         String?
   status         ProjectStatus @default(planning)
   startDate      DateTime?

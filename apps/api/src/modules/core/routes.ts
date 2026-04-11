@@ -10,6 +10,7 @@ import {
   createTeamSchema,
   createUserSchema,
   listQuerySchema,
+  updateProjectSchema,
   updateTaskSchema,
   updateTeamSchema
 } from './schema.js';
@@ -32,6 +33,7 @@ import {
   listUsers,
   removeProjectSource,
   removeTeamMember,
+  updateProject,
   updateTask,
   updateTeam,
   upsertUser
@@ -67,6 +69,7 @@ function mapProject(project: any) {
     tenant_id: project.tenantId,
     key: project.key,
     name: project.name,
+    is_initiative: project.isInitiative,
     team_id: project.teamId,
     status: project.status,
     start_date: project.startDate?.toISOString() ?? null,
@@ -221,6 +224,25 @@ export async function coreRoutes(app: FastifyInstance) {
 
     const project = await createProject(parsed.data);
     return reply.status(201).send(ok(request, mapProject(project)));
+  });
+
+  app.patch('/core/projects/:project_id', {
+    preHandler: [app.authenticate, app.requirePermission('core.project.manage')]
+  }, async (request, reply) => {
+    const parsed = updateProjectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Invalid request body', { issues: parsed.error.issues }));
+    }
+
+    const { project_id: projectId } = request.params as { project_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const project = await updateProject(projectId, tenantId, parsed.data);
+
+    if (!project) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Project not found'));
+    }
+
+    return reply.status(200).send(ok(request, mapProject(project)));
   });
 
   app.get('/core/projects/:project_id', {

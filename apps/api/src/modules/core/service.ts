@@ -9,6 +9,7 @@ import type {
   CreateTeamInput,
   CreateUserInput,
   ListQueryInput,
+  UpdateProjectInput,
   UpdateTaskInput,
   UpdateTeamInput
 } from './schema.js';
@@ -66,12 +67,31 @@ export async function createProject(input: CreateProjectInput) {
       tenantId: input.tenant_id,
       key: input.key,
       name: input.name,
+      isInitiative: input.is_initiative ?? true,
       teamId: input.team_id,
       status: input.status,
       startDate: input.start_date ? new Date(input.start_date) : null,
       targetEndDate: input.target_end_date ? new Date(input.target_end_date) : null,
       syncConfig: (input.sync_config ?? undefined) as Prisma.InputJsonValue | undefined,
       customFields: (input.custom_fields ?? undefined) as Prisma.InputJsonValue | undefined,
+      tags: input.tags
+    }
+  });
+}
+
+export async function updateProject(projectId: string, tenantId: string, input: UpdateProjectInput) {
+  const project = await prisma.project.findFirst({ where: { id: projectId, tenantId } });
+  if (!project) return null;
+
+  return prisma.project.update({
+    where: { id: projectId },
+    data: {
+      name: input.name,
+      isInitiative: input.is_initiative,
+      teamId: input.team_id === undefined ? undefined : input.team_id,
+      status: input.status,
+      startDate: input.start_date === undefined ? undefined : (input.start_date ? new Date(input.start_date) : null),
+      targetEndDate: input.target_end_date === undefined ? undefined : (input.target_end_date ? new Date(input.target_end_date) : null),
       tags: input.tags
     }
   });
@@ -396,10 +416,13 @@ export async function listProjectSources(projectId: string, tenantId: string) {
 // ─── List operations with cursor pagination ────────────────────────────────────
 
 export async function listProjects(tenantId: string, query: ListQueryInput) {
-  const { limit, cursor, status } = query;
+  const { limit, cursor, status, is_initiative } = query;
   const where: Prisma.ProjectWhereInput = { tenantId };
   if (status) {
     where.status = status as Prisma.EnumProjectStatusFilter;
+  }
+  if (is_initiative !== undefined) {
+    where.isInitiative = is_initiative === 'true';
   }
 
   const rows = await prisma.project.findMany({

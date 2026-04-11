@@ -21,6 +21,7 @@ export const createProjectSchema = z.object({
   tenant_id: z.string().min(1),
   key: z.string().min(1).max(24),
   name: z.string().min(1),
+  is_initiative: z.boolean().optional(),
   team_id: z.string().uuid().optional(),
   status: z.enum(['planning', 'active', 'on_hold', 'done']).optional().default('planning'),
   start_date: z.string().datetime().optional(),
@@ -28,6 +29,16 @@ export const createProjectSchema = z.object({
   sync_config: z.record(z.unknown()).optional(),
   custom_fields: z.record(z.unknown()).optional(),
   tags: z.array(z.string()).optional().default([])
+});
+
+export const updateProjectSchema = z.object({
+  name: z.string().min(1).optional(),
+  is_initiative: z.boolean().optional(),
+  team_id: z.string().uuid().nullable().optional(),
+  status: z.enum(['planning', 'active', 'on_hold', 'done']).optional(),
+  start_date: z.string().datetime().nullable().optional(),
+  target_end_date: z.string().datetime().nullable().optional(),
+  tags: z.array(z.string()).optional()
 });
 
 export const createEpicSchema = z.object({
@@ -101,6 +112,7 @@ export const listQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(25),
   cursor: z.string().uuid().optional(),
   status: z.string().optional(),
+  is_initiative: z.enum(['true', 'false']).optional(),
   project_id: z.string().uuid().optional(),
   epic_id: z.string().uuid().optional(),
   assignee_id: z.string().uuid().optional()
@@ -109,6 +121,7 @@ export const listQuerySchema = z.object({
 export type CreateTeamInput = z.infer<typeof createTeamSchema>;
 export type UpdateTeamInput = z.infer<typeof updateTeamSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectSchema>;
+export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
 export type CreateEpicInput = z.infer<typeof createEpicSchema>;
 export type CreateTaskInput = z.infer<typeof createTaskSchema>;
 export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
