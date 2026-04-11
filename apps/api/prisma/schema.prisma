@@ -314,9 +314,26 @@ model Project {
   team           Team?         @relation(fields: [teamId], references: [id], onDelete: SetNull)
   epics          Epic[]
   tasks          Task[]
+  sources        ProjectSource[]
 
   @@unique([tenantId, key])
   @@index([tenantId])
+}
+
+model ProjectSource {
+  id          String              @id @default(uuid())
+  tenantId    String
+  projectId   String
+  provider    IntegrationProvider
+  externalId  String              // JIRA project key (e.g. "AUTH") or GitHub repo full_name (e.g. "org/repo")
+  displayName String?
+  createdAt   DateTime            @default(now())
+
+  project     Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, provider, externalId])
+  @@index([tenantId])
+  @@index([projectId])
 }
 
 model Epic {

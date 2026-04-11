@@ -66,6 +66,9 @@ All responses follow this wrapper:
 | `/core/projects` | POST | `core.project.manage` |
 | `/core/projects` | GET | `core.project.read` |
 | `/core/projects/:project_id` | GET | `core.project.read` |
+| `/core/projects/:project_id/sources` | GET | `core.project.read` |
+| `/core/projects/:project_id/sources` | POST | `core.project.manage` |
+| `/core/projects/:project_id/sources/:source_id` | DELETE | `core.project.manage` |
 | `/core/epics` | POST | `core.epic.manage` |
 | `/core/epics` | GET | `core.epic.read` |
 | `/core/epics/:epic_id` | GET | `core.epic.read` |
@@ -367,11 +370,11 @@ List all projects for the tenant.
 
 ### GET /core/projects/:project_id
 
-Get a single project by ID.
+Get a single project by ID. The response includes the `sources` array with all associated external sources.
 
 **Permission:** `core.project.read`
 
-**Response:** Single project object (same shape as create response `data`).
+**Response:** Single project object (same shape as create response `data`) with `sources: ProjectSource[]`.
 
 **Error Scenarios:**
 
@@ -379,6 +382,137 @@ Get a single project by ID.
 |---|---|---|
 | 401 | `UNAUTHORIZED` | — |
 | 404 | `NOT_FOUND` | Project not found in this tenant |
+
+---
+
+### GET /core/projects/:project_id/sources
+
+List all external sources associated with a project.
+
+**Permission:** `core.project.read`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `project_id` | string (UUID) | Target project |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "src-001",
+        "tenant_id": "tenant-7a4b",
+        "project_id": "proj-aa1234",
+        "provider": "jira",
+        "external_id": "PLAT",
+        "display_name": "Platform Board",
+        "created_at": "2026-04-10T20:00:00Z"
+      },
+      {
+        "id": "src-002",
+        "tenant_id": "tenant-7a4b",
+        "project_id": "proj-aa1234",
+        "provider": "github",
+        "external_id": "acme/platform-api",
+        "display_name": null,
+        "created_at": "2026-04-10T20:01:00Z"
+      }
+    ]
+  },
+  "meta": { "request_id": "req_005", "version": "v1", "timestamp": "2026-04-10T20:00:00Z" },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `NOT_FOUND` | Project not found |
+
+---
+
+### POST /core/projects/:project_id/sources
+
+Associate an external source (JIRA board or GitHub repo) with a project. Idempotent — re-posting the same `(provider, external_id)` updates `display_name`.
+
+**Permission:** `core.project.manage`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `project_id` | string (UUID) | Target project |
+
+**Request Body:**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `provider` | enum | ✅ | `jira` \| `github` |
+| `external_id` | string | ✅ | JIRA project key (e.g. `AUTH`) or GitHub `org/repo` (e.g. `acme/platform-api`) |
+| `display_name` | string | ❌ | Human-readable label |
+
+**Request Example:**
+
+```json
+{
+  "provider": "github",
+  "external_id": "acme/platform-api",
+  "display_name": "Platform API repo"
+}
+```
+
+**Response — 201 Created:**
+
+```json
+{
+  "data": {
+    "id": "src-002",
+    "tenant_id": "tenant-7a4b",
+    "project_id": "proj-aa1234",
+    "provider": "github",
+    "external_id": "acme/platform-api",
+    "display_name": "Platform API repo",
+    "created_at": "2026-04-10T20:01:00Z"
+  },
+  "meta": { "request_id": "req_006", "version": "v1", "timestamp": "2026-04-10T20:01:00Z" },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Missing `provider` or `external_id` |
+| 404 | `NOT_FOUND` | Project not found |
+
+---
+
+### DELETE /core/projects/:project_id/sources/:source_id
+
+Remove an external source from a project.
+
+**Permission:** `core.project.manage`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `project_id` | string (UUID) | Target project |
+| `source_id` | string (UUID) | ID of the `ProjectSource` record |
+
+**Response — 204 No Content**
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `NOT_FOUND` | Source or project not found |
 
 ---
 

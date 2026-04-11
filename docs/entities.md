@@ -89,7 +89,7 @@ Agrupador de pessoas. Pode refletir o agrupamento da integração (JIRA project 
 
 ### Project
 
-Unidade principal de organização. Mapeia para um JIRA Project e/ou repositório(s) GitHub.
+Unidade principal de organização. Mapeia para um JIRA Project e/ou repositório(s) GitHub via `ProjectSource`.
 
 | Campo              | Tipo        | Descrição                                      |
 |--------------------|-------------|------------------------------------------------|
@@ -97,15 +97,36 @@ Unidade principal de organização. Mapeia para um JIRA Project e/ou repositóri
 | `key`              | string      | Chave curta (ex: `AUTH`, `PLAT`) — unique      |
 | `name`             | string      |                                                |
 | `team_id`          | UUID?       | Time responsável                               |
-| `repository_ids`   | UUID[]      | Repositórios GitHub associados                 |
 | `sla_template_id`  | UUID?       | SLA padrão do projeto                          |
 | `status`           | enum        | `planning` \| `active` \| `on_hold` \| `done` |
 | `start_date`       | date?       |                                                |
 | `target_end_date`  | date?       |                                                |
-| `sync_config`      | JSONB       | Frequência e opções de sync por connector      |
+| `sync_config`      | JSONB       | Opções de sync globais (frequência, etc.)      |
 | `custom_fields`    | JSONB       | Campos adicionais (flexível)                   |
 | `tags`             | string[]    |                                                |
 | `tenant_id`        | UUID        | FK -> Tenant                                   |
+
+---
+
+### ProjectSource
+
+Associação explícita entre um Project e uma fonte externa (JIRA board ou repositório GitHub). Um projeto pode ter N fontes de provedores diferentes.
+
+| Campo          | Tipo    | Descrição                                                  |
+|----------------|---------|------------------------------------------------------------|
+| `id`           | UUID    |                                                            |
+| `project_id`   | UUID    | FK → Project                                               |
+| `provider`     | enum    | `jira` \| `github`                                         |
+| `external_id`  | string  | JIRA project key (ex: `AUTH`) ou GitHub `org/repo`         |
+| `display_name` | string? | Nome de exibição opcional                                  |
+| `tenant_id`    | UUID    | FK -> Tenant                                               |
+
+**Unique:** `(project_id, provider, external_id)` — sem duplicatas por projeto/provider/fonte.
+
+**Exemplo:** projeto `PLAT` com 3 fontes:
+- `{ provider: "jira", external_id: "PLAT" }`
+- `{ provider: "github", external_id: "acme/platform-api" }`
+- `{ provider: "github", external_id: "acme/platform-infra" }`
 
 ---
 
