@@ -222,6 +222,7 @@ function makeTask(overrides: Partial<TaskForCogs> = {}): TaskForCogs {
     id: 'task-1',
     status: 'done',
     hoursActual: 8,
+    cycleTimeHours: null,
     hoursEstimated: 10,
     storyPoints: 3,
     epicId: 'epic-1',

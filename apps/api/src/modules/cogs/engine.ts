@@ -186,6 +186,7 @@ export type TaskForCogs = {
   id: string;
   status: string;
   hoursActual: number | null;
+  cycleTimeHours: number | null;
   hoursEstimated: number | null;
   storyPoints: number | null;
   epicId: string | null;
@@ -206,7 +207,7 @@ export type DerivedCogsInput = {
   totalCost: number;
   category: 'engineering' | 'overhead';
   subcategory: string | null;
-  source: 'timetracking' | 'story_points' | 'estimate';
+  source: 'timetracking' | 'cycle_time' | 'story_points' | 'estimate';
   confidence: 'high' | 'medium' | 'low';
   metadata: Record<string, unknown>;
 };
@@ -239,8 +240,8 @@ export function deriveTaskCogs(
     return { kind: 'skip', reason: 'task_not_terminal' };
   }
 
-  // Cancelled with no actual hours → pure skip (no cost was incurred)
-  if (isCancelled && !task.hoursActual) {
+  // Cancelled with no actual hours or cycle time → pure skip (no cost was incurred)
+  if (isCancelled && !task.hoursActual && !task.cycleTimeHours) {
     return { kind: 'skip', reason: 'cancelled_no_hours' };
   }
 
@@ -254,6 +255,11 @@ export function deriveTaskCogs(
     hoursWorked = task.hoursActual;
     source = 'timetracking';
     confidence = 'high';
+  } else if (task.cycleTimeHours != null && task.cycleTimeHours > 0) {
+    hoursWorked = task.cycleTimeHours;
+    source = 'cycle_time';
+    confidence = 'high';
+    meta.cycle_time_source = 'sla_computed';
   } else if (task.hoursEstimated != null && task.hoursEstimated > 0) {
     hoursWorked = task.hoursEstimated;
     source = 'estimate';

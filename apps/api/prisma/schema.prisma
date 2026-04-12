@@ -488,6 +488,7 @@ enum CogsCategory {
 
 enum CogsSource {
   timetracking   // direct from JIRA worklogs or integration
+  cycle_time     // derived from SLA cycleTimeHours (startedAt → completedAt)
   story_points   // estimated from SP × velocity
   estimate       // manual estimate (approved)
   manual         // flat entry by manager

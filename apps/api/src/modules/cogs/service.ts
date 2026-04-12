@@ -18,6 +18,7 @@ import type {
   ListCogsEntriesQuery,
   CogsRollupQuery,
   CreateCogsBudgetInput,
+  UpdateCogsBudgetInput,
   BurnRateQuery,
   EstimateFromSpInput
 } from './schema.js';
@@ -286,6 +287,26 @@ export async function listCogsBudgets(tenantId: string, query: { project_id?: st
   });
 }
 
+export async function updateCogsBudget(tenantId: string, id: string, input: UpdateCogsBudgetInput) {
+  const existing = await prisma.cogsBudget.findFirst({ where: { id, tenantId } });
+  if (!existing) return null;
+  return prisma.cogsBudget.update({
+    where: { id },
+    data: {
+      ...(input.budget_amount !== undefined && { budgetAmount: input.budget_amount }),
+      ...(input.currency !== undefined && { currency: input.currency }),
+      ...(input.notes !== undefined && { notes: input.notes })
+    }
+  });
+}
+
+export async function deleteCogsBudget(tenantId: string, id: string): Promise<boolean> {
+  const existing = await prisma.cogsBudget.findFirst({ where: { id, tenantId } });
+  if (!existing) return false;
+  await prisma.cogsBudget.delete({ where: { id } });
+  return true;
+}
+
 // ── Burn rate ─────────────────────────────────────────────────────────────────
 
 export async function getBurnRate(tenantId: string, query: BurnRateQuery) {
@@ -394,11 +415,13 @@ const TASK_FOR_COGS_SELECT = {
   id: true,
   status: true,
   hoursActual: true,
+  cycleTimeHours: true,
   hoursEstimated: true,
   storyPoints: true,
   epicId: true,
   projectId: true,
   assigneeId: true,
+  startedAt: true,
   completedAt: true
 } as const;
 
@@ -469,8 +492,15 @@ export async function generateCogsForTask(
     task.project?.team ?? null
   );
 
+  // If cycleTimeHours wasn't stored by the SLA module, compute it from timestamps
+  const cycleTimeHours =
+    task.cycleTimeHours ??
+    (task.startedAt && task.completedAt
+      ? Math.round((task.completedAt.getTime() - task.startedAt.getTime()) / 36000) / 100
+      : null);
+
   const derivation = deriveTaskCogs(
-    { ...task, status: task.status as string },
+    { ...task, cycleTimeHours, status: task.status as string },
     rate,
     overheadRate,
     velocity

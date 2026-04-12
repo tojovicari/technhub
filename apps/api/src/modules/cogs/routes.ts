@@ -7,6 +7,8 @@ import {
   listCogsEntriesAuditQuerySchema,
   cogsRollupQuerySchema,
   createCogsBudgetSchema,
+  updateCogsBudgetSchema,
+  budgetParamsSchema,
   burnRateQuerySchema,
   estimateFromSpSchema,
   initiativeParamsSchema,
@@ -19,6 +21,8 @@ import {
   computeCogsRollup,
   createCogsBudget,
   listCogsBudgets,
+  updateCogsBudget,
+  deleteCogsBudget,
   getBurnRate,
   getEpicCogsAnalysis,
   generateInitiativeCogs,
@@ -176,6 +180,50 @@ export async function cogsRoutes(app: FastifyInstance) {
 
       const budgets = await listCogsBudgets(tenantId, parsed.data);
       return reply.status(200).send(ok(req, { data: budgets }));
+    }
+  );
+
+  // ── PATCH /cogs/budgets/:id — update budget amount/notes ───────────────────
+  app.patch(
+    '/cogs/budgets/:id',
+    { preHandler: [app.authenticate, app.requirePermission('cogs.budget.manage')] },
+    async (req, reply) => {
+      const paramsParsed = budgetParamsSchema.safeParse(req.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid id'));
+      }
+      const bodyParsed = updateCogsBudgetSchema.safeParse(req.body);
+      if (!bodyParsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid body', { issues: bodyParsed.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+
+      const updated = await updateCogsBudget(tenantId, paramsParsed.data.id, bodyParsed.data);
+      if (!updated) return reply.status(404).send(fail(req, 'NOT_FOUND', 'Budget not found'));
+      return reply.status(200).send(ok(req, updated));
+    }
+  );
+
+  // ── DELETE /cogs/budgets/:id — remove a budget ─────────────────────────────
+  app.delete(
+    '/cogs/budgets/:id',
+    { preHandler: [app.authenticate, app.requirePermission('cogs.budget.manage')] },
+    async (req, reply) => {
+      const paramsParsed = budgetParamsSchema.safeParse(req.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid id'));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+
+      const deleted = await deleteCogsBudget(tenantId, paramsParsed.data.id);
+      if (!deleted) return reply.status(404).send(fail(req, 'NOT_FOUND', 'Budget not found'));
+      return reply.status(204).send();
     }
   );
 

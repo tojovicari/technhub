@@ -91,6 +91,16 @@ export const createCogsBudgetSchema = z.object({
 
 export type CreateCogsBudgetInput = z.infer<typeof createCogsBudgetSchema>;
 
+export const updateCogsBudgetSchema = z.object({
+  budget_amount: z.number().positive().optional(),
+  currency: z.string().length(3).optional(),
+  notes: z.string().max(500).nullable().optional()
+});
+
+export type UpdateCogsBudgetInput = z.infer<typeof updateCogsBudgetSchema>;
+
+export const budgetParamsSchema = z.object({ id: z.string().uuid() });
+
 // ── Burn Rate query ───────────────────────────────────────────────────────────
 
 export const burnRateQuerySchema = z.object({
