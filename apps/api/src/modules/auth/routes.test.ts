@@ -26,7 +26,9 @@ vi.mock('../../modules/auth/service.js', () => ({
   login: vi.fn(),
   refresh: vi.fn(),
   logout: vi.fn(),
-  getMe: vi.fn()
+  getMe: vi.fn(),
+  createInvite: vi.fn(),
+  registerByInvite: vi.fn()
 }));
 
 import { buildApp } from '../../app.js';
@@ -96,6 +98,26 @@ describe('auth routes', () => {
       });
       expect(res.statusCode).toBe(400);
       expect(res.json().error.code).toBe('VALIDATION_ERROR');
+    });
+
+    it('409 when tenant already exists', async () => {
+      vi.mocked(svc.register).mockRejectedValueOnce(
+        Object.assign(new Error('Tenant already exists'), { code: 'TENANT_ALREADY_EXISTS' })
+      );
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/register',
+        payload: {
+          tenant_id: 'ten_existing',
+          email: 'new@example.com',
+          password: 'Abcd1234',
+          full_name: 'New User'
+        }
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.code).toBe('TENANT_ALREADY_EXISTS');
     });
 
     it('409 when email already taken', async () => {
@@ -216,6 +238,90 @@ describe('auth routes', () => {
     it('401 without token', async () => {
       const res = await app.inject({ method: 'GET', url: '/api/v1/auth/me' });
       expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── POST /auth/invites ───────────────────────────────────────────────────
+
+  describe('POST /api/v1/auth/invites', () => {
+    it('201 creates invite and returns token', async () => {
+      vi.mocked(svc.createInvite).mockResolvedValueOnce({
+        id: 'inv-1',
+        tenant_id: 'ten_test',
+        email: 'invited@example.com',
+        role: 'viewer',
+        invite_token: 'raw-token-abc',
+        expires_at: new Date(Date.now() + 48 * 3600 * 1000).toISOString()
+      });
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/invites',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: { email: 'invited@example.com', role: 'viewer' }
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().data.invite_token).toBe('raw-token-abc');
+    });
+
+    it('401 without token', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/invites',
+        payload: { email: 'x@x.com' }
+      });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('400 when email is invalid', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/invites',
+        headers: { Authorization: `Bearer ${token}` },
+        payload: { email: 'not-an-email' }
+      });
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
+  // ── POST /auth/register/invite ───────────────────────────────────────────
+
+  describe('POST /api/v1/auth/register/invite', () => {
+    it('201 creates account via invite', async () => {
+      vi.mocked(svc.registerByInvite).mockResolvedValueOnce(makeAccount());
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/register/invite',
+        payload: {
+          invite_token: 'raw-token-abc',
+          password: 'Abcd1234',
+          full_name: 'Glauber Test'
+        }
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().data.email).toBe('glauber@example.com');
+    });
+
+    it('400 on invalid or expired invite token', async () => {
+      vi.mocked(svc.registerByInvite).mockRejectedValueOnce(
+        Object.assign(new Error('Invalid or expired invite token'), { code: 'INVALID_INVITE_TOKEN' })
+      );
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/register/invite',
+        payload: {
+          invite_token: 'bad-token',
+          password: 'Abcd1234',
+          full_name: 'X'
+        }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('INVALID_INVITE_TOKEN');
     });
   });
 });

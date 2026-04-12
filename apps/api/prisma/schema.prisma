@@ -13,13 +13,15 @@ model Tenant {
   slug             String            @unique
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
-  users            User[]
-  connections      IntegrationConnection[]
-  teams            Team[]
-  projects         Project[]
-  epics            Epic[]
-  tasks            Task[]
-  platformAccounts PlatformAccount[]
+  users                User[]
+  connections          IntegrationConnection[]
+  teams                Team[]
+  projects             Project[]
+  epics                Epic[]
+  tasks                Task[]
+  platformAccounts     PlatformAccount[]
+  invites              Invite[]
+  permissionProfiles   PermissionProfile[]
 }
 
 enum PlatformRole {
@@ -42,6 +44,7 @@ model PlatformAccount {
 
   tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   refreshTokens PlatformRefreshToken[]
+  iamAssignments UserPermissionProfile[]
 
   @@index([tenantId])
 }
@@ -57,6 +60,21 @@ model PlatformRefreshToken {
   account   PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@index([accountId])
+}
+
+model Invite {
+  id        String       @id @default(uuid())
+  tenantId  String
+  email     String
+  role      PlatformRole @default(viewer)
+  tokenHash String       @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime     @default(now())
+
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 model User {
@@ -393,11 +411,30 @@ model Task {
   reporter         User?                  @relation("TaskReporter", fields: [reporterId], references: [id], onDelete: SetNull)
   connection       IntegrationConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
 
+  blockerDeps   TaskDependency[] @relation("BlockerDeps")
+  blockedDeps   TaskDependency[] @relation("BlockedDeps")
+
   @@unique([tenantId, source, sourceId])
   @@index([tenantId])
   @@index([projectId])
   @@index([epicId])
   @@index([status])
+}
+
+// Blocking relationship between tasks: blocker must finish before blocked can start
+model TaskDependency {
+  id        String   @id @default(uuid())
+  tenantId  String
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker   Task     @relation("BlockerDeps", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked   Task     @relation("BlockedDeps", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([tenantId])
+  @@index([blockedId])
 }
 
 model SlaTemplate {
@@ -563,4 +600,42 @@ model CogsBudget {
   @@unique([tenantId, projectId, teamId, period])
   @@index([tenantId])
   @@index([tenantId, period])
+}
+
+// ── IAM Module ────────────────────────────────────────────────────────────────
+
+model PermissionProfile {
+  id             String   @id @default(uuid())
+  tenantId       String
+  name           String
+  description    String?
+  permissionKeys String[]
+  isSystem       Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignments UserPermissionProfile[]
+
+  @@index([tenantId])
+  @@index([tenantId, isActive])
+}
+
+model UserPermissionProfile {
+  id                  String   @id @default(uuid())
+  tenantId            String
+  accountId           String
+  permissionProfileId String
+  grantedBy           String
+  grantedAt           DateTime @default(now())
+  expiresAt           DateTime?
+  revokedAt           DateTime?
+
+  account           PlatformAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  permissionProfile PermissionProfile @relation(fields: [permissionProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, permissionProfileId])
+  @@index([tenantId])
+  @@index([accountId])
 }

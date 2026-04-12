@@ -38,6 +38,12 @@ tags:
     description: Rule-based actionable recommendations
   - name: Capacity
     description: Team capacity utilization
+  - name: Roadmap
+    description: Gantt-structured project and epic timeline
+  - name: Dependencies
+    description: Task dependency graph (read). Write endpoints live in Core module.
+  - name: Export
+    description: CSV export for BI tools
 
 security:
   - BearerAuth: []
@@ -126,13 +132,19 @@ components:
     SlaRiskItem:
       type: object
       properties:
-        instanceId:          { type: string, format: uuid }
+        instanceId:          { type: string, description: Same as taskId since SLA state machine was removed }
         taskId:              { type: string, format: uuid }
+        task_title:          { type: string }
+        priority:            { type: string, enum: [P0, P1, P2, P3, P4] }
+        project_id:          { type: string, format: uuid }
+        epic_id:             { type: string, format: uuid, nullable: true }
+        assignee_id:         { type: string, format: uuid, nullable: true }
         elapsedPercent:      { type: number, description: Percentage of SLA window elapsed }
         riskScore:           { type: number, minimum: 0, maximum: 100 }
         riskLevel:           { $ref: '#/components/schemas/SlaRiskLevel' }
         hoursUntilDeadline:  { type: number, description: Hours remaining (0 if past deadline) }
         deadlineAt:          { type: string, format: date-time }
+        minutes_remaining:   { type: integer, description: Negative when deadline has passed }
 
     AnomalyPoint:
       type: object
@@ -180,8 +192,78 @@ components:
         team_id:                   { type: string, format: uuid, nullable: true }
         capacity_hours_per_person: { type: number }
         total_users:               { type: integer }
+        total_capacity_hours:      { type: number }
+        total_logged_hours:        { type: number }
         overloaded_count:          { type: integer }
         utilization:               { type: array, items: { $ref: '#/components/schemas/CapacityUser' } }
+
+    DependencyStatus:
+      type: string
+      enum: [ready, blocked, done, cancelled]
+      description: |
+        - **ready** — no open blockers
+        - **blocked** — has at least one open blocker
+        - **done** — task status is done
+        - **cancelled** — task status is cancelled
+
+    DependencyNode:
+      type: object
+      properties:
+        task_id:           { type: string, format: uuid }
+        task_title:        { type: string }
+        status:            { type: string }
+        dependency_status: { $ref: '#/components/schemas/DependencyStatus' }
+        epic_id:           { type: string, format: uuid, nullable: true }
+        assignee_id:       { type: string, format: uuid, nullable: true }
+        story_points:      { type: integer, nullable: true }
+        due_date:          { type: string, format: date, nullable: true }
+
+    DependencyEdge:
+      type: object
+      properties:
+        blocker_id: { type: string, format: uuid }
+        blocked_id: { type: string, format: uuid }
+
+    DependencyGraph:
+      type: object
+      properties:
+        nodes: { type: array, items: { $ref: '#/components/schemas/DependencyNode' } }
+        edges: { type: array, items: { $ref: '#/components/schemas/DependencyEdge' } }
+
+    VelocityForecastSummary:
+      type: object
+      properties:
+        forecasted_points_per_week: { type: number }
+        trend:                      { $ref: '#/components/schemas/Trend' }
+        confidence_score:           { type: integer, minimum: 0, maximum: 100 }
+
+    GanttEpicItem:
+      type: object
+      properties:
+        epic_id:                 { type: string, format: uuid }
+        epic_name:               { type: string }
+        status:                  { type: string }
+        start_date:              { type: string, format: date, nullable: true }
+        target_end_date:         { type: string, format: date, nullable: true }
+        estimated_end_date:      { type: string, format: date, nullable: true, description: Null when velocity is zero }
+        completion_percent:      { type: integer, minimum: 0, maximum: 100 }
+        total_story_points:      { type: integer }
+        remaining_story_points:  { type: integer }
+        is_delayed:              { type: boolean }
+        weeks_overdue:           { type: integer, nullable: true, description: Null when no target_end_date }
+        confidence_score:        { type: integer, minimum: 0, maximum: 100 }
+
+    GanttProjectItem:
+      type: object
+      properties:
+        project_id:       { type: string, format: uuid }
+        project_name:     { type: string }
+        project_key:      { type: string }
+        status:           { type: string }
+        start_date:       { type: string, format: date, nullable: true }
+        target_end_date:  { type: string, format: date, nullable: true }
+        velocity_forecast: { $ref: '#/components/schemas/VelocityForecastSummary' }
+        epics:            { type: array, items: { $ref: '#/components/schemas/GanttEpicItem' } }
 
     ApiResponse:
       type: object
@@ -424,5 +506,129 @@ paths:
                   - properties:
                       data: { $ref: '#/components/schemas/CapacityReport' }
         '400': { description: Validation error (missing or malformed period) }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  # ── Roadmap ──────────────────────────────────────────────────────────────────────────
+
+  /intel/roadmap:
+    get:
+      summary: Project roadmap timeline (Gantt)
+      description: |
+        Returns a Gantt-structured list of projects and their epics, each enriched
+        with velocity-based completion forecasts and delay indicators.
+
+        Epics without `target_end_date` have `weeks_overdue: null`.
+        Epics with zero velocity have `estimated_end_date: null`.
+        By default all non-cancelled epics are returned.
+      tags: [Roadmap]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: intel.read
+      parameters:
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,    in: query, schema: { type: string, format: uuid } }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [backlog, active, completed, cancelled]
+          description: Filter epics by status. Omit to return all non-cancelled.
+      responses:
+        '200':
+          description: Roadmap items
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/GanttProjectItem' }
+        '400': { description: Invalid status value }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  # ── Dependencies ───────────────────────────────────────────────────────────────────
+
+  /intel/dependencies:
+    get:
+      summary: Task dependency graph
+      description: |
+        Returns blocking relationships between tasks as a nodes-and-edges graph.
+        Only tasks that appear in at least one dependency edge are included.
+
+        `dependency_status` is computed from the task's own status and whether
+        any of its blockers are still open.
+
+        To **write** dependencies use:
+        - `POST /core/tasks/{task_id}/dependencies`
+        - `DELETE /core/tasks/{task_id}/dependencies/{blocked_id}`
+      tags: [Dependencies]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: intel.read
+      parameters:
+        - { name: project_id, in: query, schema: { type: string, format: uuid }, description: Return deps involving tasks in this project }
+        - { name: epic_id,    in: query, schema: { type: string, format: uuid }, description: Return deps involving tasks in this epic }
+      responses:
+        '200':
+          description: Dependency graph
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiResponse'
+                  - properties:
+                      data: { $ref: '#/components/schemas/DependencyGraph' }
+        '400': { description: Validation error }
+        '401': { description: Unauthenticated }
+        '403': { description: Unauthorized }
+
+  # ── Export ────────────────────────────────────────────────────────────────────────────
+
+  /intel/export:
+    get:
+      summary: CSV / BI export
+      description: |
+        Export data as a CSV file. Returns `text/csv` with `Content-Disposition: attachment`.
+
+        | type | Columns |
+        |---|---|
+        | `tasks` | id, title, task_type, priority, status, epic_id, project_id, assignee_id, story_points, hours_estimated, hours_actual, started_at, completed_at, due_date, cycle_time_hours, created_at |
+        | `epics` | id, name, status, project_id, owner_id, start_date, target_end_date, actual_end_date, total_tasks, completed_tasks, total_story_points, actual_hours, health_score, created_at |
+        | `velocity` | week_start, points, forecasted_points_per_week, trend, confidence_score |
+        | `capacity` | user_id, hours_worked, capacity_hours, utilization_percent, status |
+        | `anomalies` | metric_name, project_id, date, value, z_score, direction |
+
+        `period` is required when `type=capacity`.
+      tags: [Export]
+      security: [{ BearerAuth: [] }]
+      x-required-permission: intel.read
+      parameters:
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [tasks, epics, velocity, capacity, anomalies]
+        - { name: project_id, in: query, schema: { type: string, format: uuid } }
+        - { name: team_id,    in: query, schema: { type: string, format: uuid } }
+        - name: period
+          in: query
+          schema:
+            type: string
+            pattern: '^\\d{4}-(Q[1-4]|\\d{2})$'
+          description: 'Required for capacity export. YYYY-Qn or YYYY-MM'
+      responses:
+        '200':
+          description: CSV file
+          content:
+            text/csv:
+              schema: { type: string }
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+              example: 'attachment; filename="cto-ai-tasks-2026-04-12.csv"'
+        '400': { description: Missing or invalid type; missing period for capacity }
         '401': { description: Unauthenticated }
         '403': { description: Unauthorized }

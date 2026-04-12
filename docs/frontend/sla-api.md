@@ -8,7 +8,9 @@
 
 ## Overview
 
-The SLA module manages Service Level Agreement templates and tracks compliance per task. A template defines conditions (which tasks it applies to), priority-based time targets, and escalation rules. When a task matches a template, an **SLA instance** is created and tracked automatically.
+The SLA module manages Service Level Agreement templates and tracks compliance per task. A template defines conditions (which tasks it applies to), priority-based time targets, and escalation rules.
+
+> **Architecture note:** The SLA module uses a **template-based compliance** model. Tasks are evaluated against active templates on each sync event using the SLA Engine (worker). The older `SlaInstance` state-machine model was removed — compliance is now computed on-demand via `GET /sla/compliance`. The `/sla/instances` and `/sla/summary` endpoints are kept as compatibility shims but always reflect compliance data.
 
 ---
 
@@ -21,7 +23,7 @@ The SLA module manages Service Level Agreement templates and tracks compliance p
 | `/sla/templates/:id` | GET | `sla.template.read` |
 | `/sla/templates/:id` | PATCH | `sla.template.manage` |
 | `/sla/templates/:id` | DELETE | `sla.template.manage` |
-| `/sla/evaluate` | POST | `sla.evaluate` |
+| `/sla/compliance` | GET | `sla.template.read` |
 | `/sla/instances` | GET | `sla.template.read` |
 | `/sla/summary` | GET | `sla.template.read` |
 | `/sla/summary/by-template` | GET | `sla.template.read` |
@@ -272,56 +274,9 @@ Soft-deactivate or permanently delete an SLA template.
 
 ---
 
-### POST /sla/evaluate
+### GET /sla/compliance
 
-Evaluate which SLA template(s) apply to a given task and create/update SLA instances.
-
-**Permission:** `sla.evaluate`
-
-**Use case:** Call this after creating or updating a task, especially on priority or status change, to ensure SLA tracking is current.
-
-**Request Body:**
-
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `task_id` | string (UUID) | ✅ | Task to evaluate |
-
-**Request Example:**
-
-```json
-{ "task_id": "task-cc9012" }
-```
-
-**Response — 200 OK:**
-
-```json
-{
-  "data": {
-    "task_id": "task-cc9012",
-    "matched_templates": ["sla-tpl-001"],
-    "created_instances": ["sla-inst-aaa111"],
-    "superseded_instances": []
-  },
-  "meta": { "request_id": "req_003", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
-  "error": null
-}
-```
-
-> If the task already had running instances and a different template now matches, old instances are marked `superseded`.
-
-**Error Scenarios:**
-
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Missing or invalid `task_id` |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-
----
-
-### GET /sla/instances
-
-List SLA instances for the tenant. Use to build compliance dashboards and breach reports.
+Returns template-by-template compliance data computed from task snapshots. This is the **primary SLA analytics endpoint**.
 
 **Permission:** `sla.template.read`
 
@@ -329,61 +284,70 @@ List SLA instances for the tenant. Use to build compliance dashboards and breach
 
 | Param | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `task_id` | string (UUID) | ❌ | — | Filter to instances for a specific task |
-| `status` | string | ❌ | — | `running` \| `met` \| `at_risk` \| `breached` \| `superseded` |
-| `limit` | integer | ❌ | 25 | Max 100 |
-| `cursor` | string (UUID) | ❌ | — | Pagination cursor |
+| `from` | string (ISO 8601) | ❌ | start of current month | Start of evaluation window |
+| `to` | string (ISO 8601) | ❌ | now | End of evaluation window |
+| `project_id` | string (UUID) | ❌ | — | Restrict to a specific project |
 
 **Response — 200 OK:**
 
 ```json
 {
   "data": {
-    "items": [
+    "period": { "from": "2026-04-01T00:00:00.000Z", "to": "2026-04-12T10:00:00.000Z" },
+    "templates": [
       {
-        "id": "sla-inst-aaa111",
-        "task_id": "task-cc9012",
-        "sla_template_id": "sla-tpl-001",
-        "tenant_id": "tenant-7a4b",
-        "target_minutes": 240,
-        "started_at": "2026-04-10T10:00:00Z",
-        "deadline_at": "2026-04-10T14:00:00Z",
-        "completed_at": null,
-        "status": "at_risk",
-        "actual_minutes": null,
-        "breach_minutes": null,
-        "created_at": "2026-04-10T10:00:00Z",
-        "updated_at": "2026-04-10T13:20:00Z",
-        "template": {
-          "id": "sla-tpl-001",
-          "name": "Critical Bug SLA"
+        "template_id": "sla-tpl-001",
+        "template_name": "Critical Bug SLA",
+        "summary": {
+          "total": 10,
+          "running": 3,
+          "at_risk": 1,
+          "met": 5,
+          "breached": 2,
+          "compliance_rate": 71.4
         },
-        "task_snapshot": {
-          "title": "Login failure on checkout",
-          "assignee_id": "usr_99",
-          "priority": "P1",
-          "project_id": "proj-payments-001"
-        }
+        "tasks": [
+          {
+            "task_id": "task-cc9012",
+            "task_title": "Login failure on checkout",
+            "priority": "P1",
+            "started_at": "2026-04-10T10:00:00Z",
+            "target_minutes": 240,
+            "elapsed_minutes": 380,
+            "status": "breached"
+          }
+        ]
       }
-    ],
-    "next_cursor": null
+    ]
   },
-  "meta": { "request_id": "req_004", "version": "v1", "timestamp": "2026-04-10T14:00:00Z" },
+  "meta": { "request_id": "req_003", "version": "v1", "timestamp": "2026-04-12T10:00:00Z" },
   "error": null
 }
 ```
 
-> **`task_snapshot`** — local read-model maintained by the SLA module from `core.task.updated.v1`
-> events. Present when the task has been synced at least once via an integration connector.
-> `null` for manually created tasks or tasks not yet synced after the snapshot feature was deployed.
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Invalid query params |
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+
+---
+
+### GET /sla/instances
+
+> ⚠️ **Deprecated compatibility shim.** This endpoint always returns an empty list. The `SlaInstance` model was removed — use `GET /sla/compliance` instead.
+
+**Permission:** `sla.template.read`
+
+**Response — 200 OK:** Always `{ "data": { "items": [], "next_cursor": null } }`
 
 ---
 
 ### GET /sla/summary
 
-Returns aggregated SLA metrics for the tenant. Use for executive scorecards and compliance overview panels.
-
-**Permission:** `sla.template.read`
+> ℹ️ **Compatibility shim** — delegates to `GET /sla/compliance` and aggregates all templates into a single summary. Prefer `/sla/compliance` for new integrations.
 
 **Query Params:**
 

@@ -3,6 +3,7 @@ import { fail, ok } from '../../lib/http.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
 import {
   addProjectSourceSchema,
+  addTaskDependencySchema,
   addTeamMemberSchema,
   createEpicSchema,
   createProjectSchema,
@@ -16,6 +17,7 @@ import {
 } from './schema.js';
 import {
   addProjectSource,
+  addTaskDependency,
   addTeamMember,
   createEpic,
   createProject,
@@ -27,11 +29,13 @@ import {
   listEpics,
   listProjectSources,
   listProjects,
+  listTaskDependencies,
   listTasks,
   listTeamMembers,
   listTeams,
   listUsers,
   removeProjectSource,
+  removeTaskDependency,
   removeTeamMember,
   updateProject,
   updateTask,
@@ -129,7 +133,6 @@ function mapTask(task: any) {
     started_at: task.startedAt?.toISOString() ?? null,
     completed_at: task.completedAt?.toISOString() ?? null,
     due_date: task.dueDate?.toISOString() ?? null,
-    sla_status: task.slaStatus,
     cycle_time_hours: task.cycleTimeHours,
     related_pr_ids: task.relatedPrIds,
     tags: task.tags,
@@ -511,5 +514,61 @@ export async function coreRoutes(app: FastifyInstance) {
     const tenantId = (request.user as { tenant_id: string }).tenant_id;
     const { items, nextCursor } = await listTasks(tenantId, parsed.data);
     return reply.status(200).send(ok(request, { items: items.map(mapTask), next_cursor: nextCursor }));
+  });
+
+  // ── Task dependencies ─────────────────────────────────────────────────────────
+
+  app.get('/core/tasks/:task_id/dependencies', {
+    preHandler: [app.authenticate, app.requirePermission('core.task.read')]
+  }, async (request, reply) => {
+    const { task_id: taskId } = request.params as { task_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+
+    const result = await listTaskDependencies(tenantId, taskId);
+    if (!result) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Task not found'));
+    }
+    return reply.status(200).send(ok(request, result));
+  });
+
+  app.post('/core/tasks/:task_id/dependencies', {
+    preHandler: [app.authenticate, app.requirePermission('core.task.manage')]
+  }, async (request, reply) => {
+    const parsed = addTaskDependencySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Invalid request body', { issues: parsed.error.issues }));
+    }
+
+    const { task_id: blockerId } = request.params as { task_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const result = await addTaskDependency(tenantId, blockerId, parsed.data.blocked_id);
+
+    if ('error' in result) {
+      if (result.error === 'SELF_LOOP') {
+        return reply.status(400).send(fail(request, 'BAD_REQUEST', 'A task cannot depend on itself'));
+      }
+      if (result.error === 'BLOCKER_NOT_FOUND') {
+        return reply.status(404).send(fail(request, 'NOT_FOUND', 'Blocker task not found'));
+      }
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Blocked task not found'));
+    }
+
+    return reply.status(201).send(ok(request, {
+      blocker_id: blockerId,
+      blocked_id: parsed.data.blocked_id
+    }));
+  });
+
+  app.delete('/core/tasks/:task_id/dependencies/:blocked_id', {
+    preHandler: [app.authenticate, app.requirePermission('core.task.manage')]
+  }, async (request, reply) => {
+    const { task_id: blockerId, blocked_id: blockedId } = request.params as { task_id: string; blocked_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+
+    const deleted = await removeTaskDependency(tenantId, blockerId, blockedId);
+    if (!deleted) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Dependency not found'));
+    }
+    return reply.status(204).send();
   });
 }

@@ -132,3 +132,11 @@ export type CreateUserInput = z.infer<typeof createUserSchema>;
 export type AddTeamMemberInput = z.infer<typeof addTeamMemberSchema>;
 export type AddProjectSourceInput = z.infer<typeof addProjectSourceSchema>;
 export type ListQueryInput = z.infer<typeof listQuerySchema>;
+
+// ── Task dependencies ─────────────────────────────────────────────────────────
+
+export const addTaskDependencySchema = z.object({
+  blocked_id: z.string().uuid()
+});
+
+export type AddTaskDependencyInput = z.infer<typeof addTaskDependencySchema>;

@@ -5,7 +5,9 @@ import {
   computeSlaRiskScore,
   detectAnomalies,
   generateRecommendations,
-  computeCapacityUtilization
+  computeCapacityUtilization,
+  buildGanttEpicItem,
+  computeDependencyStatuses
 } from './engine.js';
 
 // ── forecastVelocity ──────────────────────────────────────────────────────────
@@ -332,5 +334,108 @@ describe('computeCapacityUtilization', () => {
     const r = computeCapacityUtilization([{ userId: 'u1', hoursWorked: 120 }], 160);
     expect(r[0].capacityHours).toBe(160);
     expect(r[0].hoursWorked).toBe(120);
+  });
+});
+
+// ── buildGanttEpicItem ────────────────────────────────────────────────────────────
+
+describe('buildGanttEpicItem', () => {
+  const BASE = {
+    epicId: 'e1', epicName: 'Auth', epicStatus: 'active',
+    startDate: new Date('2026-03-01'), targetEndDate: new Date('2026-04-30'),
+    totalStoryPoints: 40, completedTasks: 6, totalTasks: 10,
+    remainingStoryPoints: 20, velocityPerWeek: 10, confidenceScore: 75
+  };
+
+  it('computes completion_percent correctly', () => {
+    const r = buildGanttEpicItem(BASE);
+    expect(r.completion_percent).toBe(60); // 6/10
+  });
+
+  it('marks is_delayed when estimated end is past target', () => {
+    // velocity=10, remaining=20 → 2 weeks from ref=2026-04-25 → estimated=2026-05-09 > target=2026-04-30
+    const r = buildGanttEpicItem({ ...BASE, referenceDate: new Date('2026-04-25') });
+    expect(r.is_delayed).toBe(true);
+    expect(r.weeks_overdue).toBeGreaterThan(0);
+  });
+
+  it('is_delayed false when estimated end is before target', () => {
+    // velocity=10, remaining=20 → 2 weeks from ref=2026-04-01 → estimated=2026-04-15 < target=2026-04-30
+    const r = buildGanttEpicItem({ ...BASE, referenceDate: new Date('2026-04-01') });
+    expect(r.is_delayed).toBe(false);
+    expect(r.weeks_overdue).toBe(0);
+  });
+
+  it('handles zero velocity gracefully: no estimated_end_date', () => {
+    const r = buildGanttEpicItem({ ...BASE, velocityPerWeek: 0 });
+    expect(r.estimated_end_date).toBeNull();
+  });
+
+  it('handles no targetEndDate: weeks_overdue is null', () => {
+    const r = buildGanttEpicItem({ ...BASE, targetEndDate: null });
+    expect(r.weeks_overdue).toBeNull();
+  });
+
+  it('completion_percent is 0 when totalTasks is 0', () => {
+    const r = buildGanttEpicItem({ ...BASE, totalTasks: 0, completedTasks: 0 });
+    expect(r.completion_percent).toBe(0);
+  });
+
+  it('includes start_date and target_end_date as ISO date strings', () => {
+    const r = buildGanttEpicItem(BASE);
+    expect(r.start_date).toBe('2026-03-01');
+    expect(r.target_end_date).toBe('2026-04-30');
+  });
+});
+
+// ── computeDependencyStatuses ───────────────────────────────────────────────────
+
+describe('computeDependencyStatuses', () => {
+  it('ready when task has no blockers', () => {
+    const tasks = [{ taskId: 't1', status: 'in_progress' }];
+    const map = computeDependencyStatuses(tasks, []);
+    expect(map.get('t1')).toBe('ready');
+  });
+
+  it('blocked when blocker is still open', () => {
+    const tasks = [
+      { taskId: 't1', status: 'in_progress' },
+      { taskId: 't2', status: 'todo' }
+    ];
+    // t1 blocks t2
+    const map = computeDependencyStatuses(tasks, [{ blocker_id: 't1', blocked_id: 't2' }]);
+    expect(map.get('t2')).toBe('blocked');
+    expect(map.get('t1')).toBe('ready'); // t1 itself has no open blockers
+  });
+
+  it('ready when all blockers are done', () => {
+    const tasks = [
+      { taskId: 't1', status: 'done' },
+      { taskId: 't2', status: 'in_progress' }
+    ];
+    const map = computeDependencyStatuses(tasks, [{ blocker_id: 't1', blocked_id: 't2' }]);
+    expect(map.get('t2')).toBe('ready'); // blocker t1 is done
+  });
+
+  it('done tasks remain done regardless of edges', () => {
+    const tasks = [
+      { taskId: 't1', status: 'in_progress' },
+      { taskId: 't2', status: 'done' }
+    ];
+    const map = computeDependencyStatuses(tasks, [{ blocker_id: 't1', blocked_id: 't2' }]);
+    expect(map.get('t2')).toBe('done');
+  });
+
+  it('cancelled tasks remain cancelled', () => {
+    const tasks = [{ taskId: 't1', status: 'cancelled' }];
+    const map = computeDependencyStatuses(tasks, []);
+    expect(map.get('t1')).toBe('cancelled');
+  });
+
+  it('handles tasks with unknown blocker (missing from list) as open', () => {
+    // t2 has a blocker t1 that is not in the tasks list — treated as open
+    const tasks = [{ taskId: 't2', status: 'todo' }];
+    const map = computeDependencyStatuses(tasks, [{ blocker_id: 't1', blocked_id: 't2' }]);
+    expect(map.get('t2')).toBe('blocked');
   });
 });

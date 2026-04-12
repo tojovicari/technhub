@@ -384,3 +384,156 @@ export function computeCapacityUtilization(
     };
   });
 }
+
+// ── Roadmap / Gantt ───────────────────────────────────────────────────────────
+
+export interface GanttEpicItem {
+  epic_id: string;
+  epic_name: string;
+  status: string;
+  start_date: string | null;        // ISO date
+  target_end_date: string | null;   // ISO date from epic.targetEndDate
+  estimated_end_date: string | null; // ISO date from velocity forecast
+  completion_percent: number;        // 0–100
+  total_story_points: number;
+  remaining_story_points: number;
+  is_delayed: boolean;
+  weeks_overdue: number | null;      // null when no targetEndDate
+  confidence_score: number;
+}
+
+export interface GanttProjectItem {
+  project_id: string;
+  project_name: string;
+  project_key: string;
+  status: string;
+  start_date: string | null;
+  target_end_date: string | null;
+  epics: GanttEpicItem[];
+}
+
+/**
+ * Build a Gantt-friendly epic item from epic data + pre-computed forecast values.
+ */
+export function buildGanttEpicItem(params: {
+  epicId: string;
+  epicName: string;
+  epicStatus: string;
+  startDate: Date | null;
+  targetEndDate: Date | null;
+  totalStoryPoints: number;
+  completedTasks: number;
+  totalTasks: number;
+  remainingStoryPoints: number;
+  velocityPerWeek: number;
+  confidenceScore: number;
+  referenceDate?: Date;
+}): GanttEpicItem {
+  const ref = params.referenceDate ?? new Date();
+
+  const completion = params.totalTasks > 0
+    ? Math.round((params.completedTasks / params.totalTasks) * 100)
+    : 0;
+
+  let estimatedEndDate: string | null = null;
+  let isDelayed = false;
+  let weeksOverdue: number | null = null;
+
+  if (params.velocityPerWeek > 0 && params.remainingStoryPoints >= 0) {
+    const weeksRemaining = Math.ceil(params.remainingStoryPoints / params.velocityPerWeek);
+    const estimated = new Date(ref);
+    estimated.setDate(estimated.getDate() + weeksRemaining * 7);
+    estimatedEndDate = estimated.toISOString().split('T')[0];
+
+    if (params.targetEndDate) {
+      const diffMs = estimated.getTime() - params.targetEndDate.getTime();
+      weeksOverdue = diffMs > 0 ? Math.ceil(diffMs / (7 * 24 * 3_600_000)) : 0;
+      isDelayed = weeksOverdue > 0;
+    }
+  } else if (params.targetEndDate && ref > params.targetEndDate) {
+    // No velocity data but already past target
+    isDelayed = true;
+    weeksOverdue = Math.ceil((ref.getTime() - params.targetEndDate.getTime()) / (7 * 24 * 3_600_000));
+  }
+
+  return {
+    epic_id: params.epicId,
+    epic_name: params.epicName,
+    status: params.epicStatus,
+    start_date: params.startDate ? params.startDate.toISOString().split('T')[0] : null,
+    target_end_date: params.targetEndDate ? params.targetEndDate.toISOString().split('T')[0] : null,
+    estimated_end_date: estimatedEndDate,
+    completion_percent: completion,
+    total_story_points: params.totalStoryPoints,
+    remaining_story_points: params.remainingStoryPoints,
+    is_delayed: isDelayed,
+    weeks_overdue: weeksOverdue,
+    confidence_score: params.confidenceScore
+  };
+}
+
+// ── Dependency Graph ──────────────────────────────────────────────────────────
+
+export type DependencyStatus = 'blocked' | 'ready' | 'done' | 'cancelled';
+
+export interface DependencyNode {
+  task_id: string;
+  task_title: string;
+  status: string;
+  dependency_status: DependencyStatus;
+  epic_id: string | null;
+  assignee_id: string | null;
+  story_points: number | null;
+  due_date: string | null;
+}
+
+export interface DependencyEdge {
+  blocker_id: string;
+  blocked_id: string;
+}
+
+export interface DependencyGraph {
+  nodes: DependencyNode[];
+  edges: DependencyEdge[];
+}
+
+/**
+ * Compute dependency_status for each task node given its status and blocking edges.
+ *
+ * Rules:
+ *   - done/cancelled tasks → keep their own status label
+ *   - tasks with any open blocker (not done/cancelled) → 'blocked'
+ *   - tasks with no open blockers → 'ready'
+ */
+export function computeDependencyStatuses(
+  tasks: Array<{ taskId: string; status: string }>,
+  edges: DependencyEdge[]
+): Map<string, DependencyStatus> {
+  const terminalStatuses = new Set(['done', 'cancelled']);
+
+  // Build set of (blockedId → set of blockerIds still open)
+  const openBlockers = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    const blockerTask = tasks.find(t => t.taskId === edge.blocker_id);
+    const isOpen = !blockerTask || !terminalStatuses.has(blockerTask.status);
+    if (isOpen) {
+      const set = openBlockers.get(edge.blocked_id) ?? new Set<string>();
+      set.add(edge.blocker_id);
+      openBlockers.set(edge.blocked_id, set);
+    }
+  }
+
+  const result = new Map<string, DependencyStatus>();
+  for (const task of tasks) {
+    if (task.status === 'done') {
+      result.set(task.taskId, 'done');
+    } else if (task.status === 'cancelled') {
+      result.set(task.taskId, 'cancelled');
+    } else if ((openBlockers.get(task.taskId)?.size ?? 0) > 0) {
+      result.set(task.taskId, 'blocked');
+    } else {
+      result.set(task.taskId, 'ready');
+    }
+  }
+  return result;
+}

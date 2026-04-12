@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: CTO.ai Core API
   version: 1.0.0
-  description: Tenant-scoped Core API for teams, projects, epics, and tasks.
+  description: Tenant-scoped Core API for teams, projects, epics, tasks, users, and task dependencies.
 servers:
   - url: /api/v1
 security:
@@ -10,7 +10,33 @@ security:
 tags:
   - name: Core
 paths:
+
+  # ── Teams ──────────────────────────────────────────────────────────────────
+
   /core/teams:
+    get:
+      tags: [Core]
+      summary: List teams
+      operationId: listTeams
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: cursor
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      x-required-permissions:
+        - core.team.read
     post:
       tags: [Core]
       summary: Create team
@@ -18,10 +44,140 @@ paths:
       responses:
         '201':
           description: Created
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
       x-required-permissions:
         - core.team.manage
 
+  /core/teams/{team_id}:
+    patch:
+      tags: [Core]
+      summary: Update team
+      operationId: updateTeam
+      parameters:
+        - in: path
+          name: team_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Updated
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+      x-required-permissions:
+        - core.team.manage
+
+  /core/teams/{team_id}/members:
+    get:
+      tags: [Core]
+      summary: List team members
+      operationId: listTeamMembers
+      parameters:
+        - in: path
+          name: team_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Team not found
+      x-required-permissions:
+        - core.team.read
+    post:
+      tags: [Core]
+      summary: Add team member
+      operationId: addTeamMember
+      parameters:
+        - in: path
+          name: team_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Member added
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Team or user not found
+      x-required-permissions:
+        - core.team.manage
+
+  /core/teams/{team_id}/members/{user_id}:
+    delete:
+      tags: [Core]
+      summary: Remove team member
+      operationId: removeTeamMember
+      parameters:
+        - in: path
+          name: team_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Member removed
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+      x-required-permissions:
+        - core.team.manage
+
+  # ── Projects ───────────────────────────────────────────────────────────────
+
   /core/projects:
+    get:
+      tags: [Core]
+      summary: List projects
+      operationId: listProjects
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: cursor
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      x-required-permissions:
+        - core.project.read
     post:
       tags: [Core]
       summary: Create project
@@ -29,6 +185,12 @@ paths:
       responses:
         '201':
           description: Created
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
       x-required-permissions:
         - core.project.manage
 
@@ -54,8 +216,130 @@ paths:
           description: Not found
       x-required-permissions:
         - core.project.read
+    patch:
+      tags: [Core]
+      summary: Update project
+      operationId: updateProject
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Updated
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+      x-required-permissions:
+        - core.project.manage
+
+  /core/projects/{project_id}/sources:
+    get:
+      tags: [Core]
+      summary: List project sources
+      operationId: listProjectSources
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Project not found
+      x-required-permissions:
+        - core.project.read
+    post:
+      tags: [Core]
+      summary: Add project source
+      operationId: addProjectSource
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '201':
+          description: Source added
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Project not found
+      x-required-permissions:
+        - core.project.manage
+
+  /core/projects/{project_id}/sources/{source_id}:
+    delete:
+      tags: [Core]
+      summary: Remove project source
+      operationId: removeProjectSource
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: source_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Source removed
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Not found
+      x-required-permissions:
+        - core.project.manage
+
+  # ── Epics ──────────────────────────────────────────────────────────────────
 
   /core/epics:
+    get:
+      tags: [Core]
+      summary: List epics
+      operationId: listEpics
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: cursor
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      x-required-permissions:
+        - core.epic.read
     post:
       tags: [Core]
       summary: Create epic
@@ -63,6 +347,12 @@ paths:
       responses:
         '201':
           description: Created
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
       x-required-permissions:
         - core.epic.manage
 
@@ -89,7 +379,32 @@ paths:
       x-required-permissions:
         - core.epic.read
 
+  # ── Tasks ──────────────────────────────────────────────────────────────────
+
   /core/tasks:
+    get:
+      tags: [Core]
+      summary: List tasks
+      operationId: listTasks
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: cursor
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      x-required-permissions:
+        - core.task.read
     post:
       tags: [Core]
       summary: Create task
@@ -97,6 +412,12 @@ paths:
       responses:
         '201':
           description: Created
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
       x-required-permissions:
         - core.task.write
 
@@ -135,6 +456,8 @@ paths:
       responses:
         '200':
           description: Updated
+        '400':
+          description: Validation error
         '401':
           description: Unauthorized
         '403':
@@ -143,6 +466,124 @@ paths:
           description: Not found
       x-required-permissions:
         - core.task.write
+
+  /core/tasks/{task_id}/dependencies:
+    get:
+      tags: [Core]
+      summary: List task dependencies (tasks that block this task)
+      operationId: listTaskDependencies
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Task not found
+      x-required-permissions:
+        - core.task.read
+    post:
+      tags: [Core]
+      summary: Add task dependency (this task blocks another)
+      operationId: addTaskDependency
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema:
+            type: string
+            description: The blocker task id
+      responses:
+        '201':
+          description: Dependency created
+        '400':
+          description: Self-loop or validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Blocker or blocked task not found
+      x-required-permissions:
+        - core.task.manage
+
+  /core/tasks/{task_id}/dependencies/{blocked_id}:
+    delete:
+      tags: [Core]
+      summary: Remove task dependency
+      operationId: removeTaskDependency
+      parameters:
+        - in: path
+          name: task_id
+          required: true
+          schema:
+            type: string
+            description: The blocker task id
+        - in: path
+          name: blocked_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Dependency removed
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: Dependency not found
+      x-required-permissions:
+        - core.task.manage
+
+  # ── Users ──────────────────────────────────────────────────────────────────
+
+  /core/users:
+    get:
+      tags: [Core]
+      summary: List users
+      operationId: listUsers
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+        - in: query
+          name: cursor
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      x-required-permissions:
+        - core.user.read
+    post:
+      tags: [Core]
+      summary: Upsert user (create or update by email)
+      operationId: upsertUser
+      responses:
+        '201':
+          description: Created or updated
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      x-required-permissions:
+        - core.user.manage
 
 components:
   securitySchemes:

@@ -494,3 +494,89 @@ export async function listTasks(tenantId: string, query: ListQueryInput) {
   const items = hasMore ? rows.slice(0, limit) : rows;
   return { items, nextCursor: hasMore ? items[items.length - 1].id : null };
 }
+
+// ── Task dependencies ─────────────────────────────────────────────────────────
+
+export async function addTaskDependency(
+  tenantId: string,
+  blockerId: string,
+  blockedId: string
+) {
+  if (blockerId === blockedId) {
+    return { error: 'SELF_LOOP' } as const;
+  }
+
+  // Verify both tasks belong to this tenant
+  const [blocker, blocked] = await Promise.all([
+    prisma.task.findFirst({ where: { id: blockerId, tenantId }, select: { id: true } }),
+    prisma.task.findFirst({ where: { id: blockedId, tenantId }, select: { id: true } })
+  ]);
+
+  if (!blocker) return { error: 'BLOCKER_NOT_FOUND' } as const;
+  if (!blocked) return { error: 'BLOCKED_NOT_FOUND' } as const;
+
+  try {
+    const dep = await prisma.taskDependency.create({
+      data: { tenantId, blockerId, blockedId }
+    });
+    return { dep };
+  } catch {
+    // Unique constraint → already exists — treat as idempotent success
+    const existing = await prisma.taskDependency.findUnique({
+      where: { blockerId_blockedId: { blockerId, blockedId } }
+    });
+    return { dep: existing! };
+  }
+}
+
+export async function removeTaskDependency(
+  tenantId: string,
+  blockerId: string,
+  blockedId: string
+) {
+  const deleted = await prisma.taskDependency.deleteMany({
+    where: { tenantId, blockerId, blockedId }
+  });
+  return deleted.count > 0;
+}
+
+export async function listTaskDependencies(tenantId: string, taskId: string) {
+  // Verify task exists
+  const task = await prisma.task.findFirst({ where: { id: taskId, tenantId }, select: { id: true } });
+  if (!task) return null;
+
+  const [blocking, blockedBy] = await Promise.all([
+    prisma.taskDependency.findMany({
+      where: { tenantId, blockerId: taskId },
+      select: {
+        blockedId: true,
+        blocked: { select: { id: true, title: true, status: true, priority: true, epicId: true } }
+      }
+    }),
+    prisma.taskDependency.findMany({
+      where: { tenantId, blockedId: taskId },
+      select: {
+        blockerId: true,
+        blocker: { select: { id: true, title: true, status: true, priority: true, epicId: true } }
+      }
+    })
+  ]);
+
+  return {
+    task_id: taskId,
+    blocks: blocking.map(d => ({
+      task_id: d.blocked.id,
+      title: d.blocked.title,
+      status: d.blocked.status,
+      priority: d.blocked.priority,
+      epic_id: d.blocked.epicId
+    })),
+    blocked_by: blockedBy.map(d => ({
+      task_id: d.blocker.id,
+      title: d.blocker.title,
+      status: d.blocker.status,
+      priority: d.blocker.priority,
+      epic_id: d.blocker.epicId
+    }))
+  };
+}

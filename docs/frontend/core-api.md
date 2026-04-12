@@ -76,6 +76,9 @@ All responses follow this wrapper:
 | `/core/tasks` | GET | `core.task.read` |
 | `/core/tasks/:task_id` | GET | `core.task.read` |
 | `/core/tasks/:task_id` | PATCH | `core.task.write` |
+| `/core/tasks/:task_id/dependencies` | GET | `core.task.read` |
+| `/core/tasks/:task_id/dependencies` | POST | `core.task.manage` |
+| `/core/tasks/:task_id/dependencies/:blocked_id` | DELETE | `core.task.manage` |
 | `/core/users` | POST | `core.user.manage` |
 | `/core/users` | GET | `core.user.read` |
 
@@ -781,6 +784,93 @@ Update a task (partial update — only send what changed).
 | 401 | `UNAUTHORIZED` | — |
 | 403 | `FORBIDDEN` | Permission denied |
 | 404 | `NOT_FOUND` | Task not found in this tenant |
+
+---
+
+### GET /core/tasks/:task_id/dependencies
+
+List all tasks that block the given task (i.e., tasks that must complete before this one can start).
+
+**Permission:** `core.task.read`
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "blockers": [
+      { "id": "task-aaa", "title": "Setup auth", "status": "in_progress" }
+    ],
+    "blocked_by_count": 1
+  },
+  "meta": { "request_id": "req_dep1", "version": "v1", "timestamp": "2026-04-12T10:00:00Z" },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 404 | `NOT_FOUND` | Task not found in this tenant |
+
+---
+
+### POST /core/tasks/:task_id/dependencies
+
+Declare that `:task_id` blocks another task (`:task_id` must finish before `blocked_id` can start).
+
+**Permission:** `core.task.manage`
+
+**Request Body:**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `blocked_id` | string (UUID) | ✅ | The task that depends on this one |
+
+**Request Example:**
+
+```json
+{ "blocked_id": "task-bbb" }
+```
+
+**Response — 201 Created:**
+
+```json
+{
+  "data": { "blocker_id": "task-aaa", "blocked_id": "task-bbb" },
+  "meta": { "request_id": "req_dep2", "version": "v1", "timestamp": "2026-04-12T10:00:00Z" },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | `blocked_id` equals `:task_id` (self-loop) |
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Blocker or blocked task not found |
+
+---
+
+### DELETE /core/tasks/:task_id/dependencies/:blocked_id
+
+Remove a blocking dependency between two tasks.
+
+**Permission:** `core.task.manage`
+
+**Response — 204 No Content**
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Dependency not found |
 
 ---
 

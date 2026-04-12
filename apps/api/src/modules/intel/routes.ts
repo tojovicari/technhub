@@ -7,7 +7,10 @@ import {
   slaRiskQuerySchema,
   anomaliesQuerySchema,
   recommendationsQuerySchema,
-  capacityQuerySchema
+  capacityQuerySchema,
+  roadmapQuerySchema,
+  dependencyQuerySchema,
+  exportQuerySchema
 } from './schema.js';
 import {
   getVelocityForecast,
@@ -15,7 +18,10 @@ import {
   getSlaRisk,
   getAnomalies,
   getRecommendations,
-  getCapacity
+  getCapacity,
+  getRoadmap,
+  getDependencies,
+  getExport
 } from './service.js';
 
 export async function intelRoutes(app: FastifyInstance) {
@@ -133,6 +139,73 @@ export async function intelRoutes(app: FastifyInstance) {
 
       const result = await getCapacity(tenantId, parsed.data);
       return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── GET /intel/roadmap ───────────────────────────────────────────────────────
+  app.get(
+    '/intel/roadmap',
+    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = roadmapQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+
+      const result = await getRoadmap(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── GET /intel/dependencies ──────────────────────────────────────────────────
+  app.get(
+    '/intel/dependencies',
+    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = dependencyQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+
+      const result = await getDependencies(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── GET /intel/export ────────────────────────────────────────────────────────
+  app.get(
+    '/intel/export',
+    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = exportQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+
+      try {
+        const csv = await getExport(tenantId, parsed.data);
+        const filename = `cto-ai-${parsed.data.type}-${new Date().toISOString().split('T')[0]}.csv`;
+        return reply
+          .status(200)
+          .header('Content-Type', 'text/csv; charset=utf-8')
+          .header('Content-Disposition', `attachment; filename="${filename}"`)
+          .send(csv);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Export failed';
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', message));
+      }
     }
   );
 }

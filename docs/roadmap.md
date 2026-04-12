@@ -46,6 +46,7 @@ Fase 4                                                        │  Inteligência
 | 1.8 | Dashboard básico: status por projeto, tasks por assignee | P0  |
 | 1.9 | Autenticação: OAuth2 + JWT                       | P0         |
 | 1.10 | Documentação de API (OpenAPI spec)              | P1         |
+| 1.11 | IAM: Permission Profiles + RBAC por tenant      | P0         |
 
 **Critérios de Aceitação da Fase 1:**
 - [ ] Sync full de JIRA e GitHub completado sem erros em ambiente de staging
@@ -123,25 +124,25 @@ Fase 4                                                        │  Inteligência
 
 **Entregáveis:**
 
-| # | Tarefa                                                        | Prioridade |
-|---|---------------------------------------------------------------|------------|
-| 4.1 | Forecast de sprint velocity (regressão simples sobre histórico) | P0      |
-| 4.2 | Estimativa de término de épico (baseada em velocity e tasks restantes) | P0 |
-| 4.3 | Risk scoring: probabilidade de SLA breach                    | P1         |
-| 4.4 | Anomaly detection: alertas proativos de degradação de métricas| P1        |
-| 4.5 | Recomendações automáticas (ex: "time sobrecarregado", "epic atrasado") | P1 |
-| 4.6 | Roadmap timeline visual (Gantt leve)                         | P1         |
-| 4.7 | Dependency tracking entre tasks/épicos                       | P2         |
-| 4.8 | Dashboard de capacity (FTE disponível vs comprometido)       | P1         |
-| 4.9 | Custom dashboard builder (drag-drop widgets)                 | P2         |
-| 4.10 | Export de dados: CSV, API aberta para BI tools              | P2         |
-| 4.11 | Integração PagerDuty/Opsgenie (MTTR aprimorado)             | P3         |
-| 4.12 | Skill matrix do time                                         | P3         |
+| # | Tarefa                                                        | Prioridade | Status |
+|---|---------------------------------------------------------------|------------|--------|
+| 4.1 | Forecast de sprint velocity (regressão simples sobre histórico) | P0      | ✅ Implementado |
+| 4.2 | Estimativa de término de épico (baseada em velocity e tasks restantes) | P0 | ✅ Implementado |
+| 4.3 | Risk scoring: probabilidade de SLA breach                    | P1         | ✅ Implementado |
+| 4.4 | Anomaly detection: alertas proativos de degradação de métricas| P1        | ✅ Implementado |
+| 4.5 | Recomendações automáticas (ex: "time sobrecarregado", "epic atrasado") | P1 | ✅ Implementado |
+| 4.6 | Roadmap timeline visual (Gantt leve)                         | P1         | ✅ Implementado (`GET /intel/roadmap`) |
+| 4.7 | Dependency tracking entre tasks/épicos                       | P2         | ✅ Implementado (`GET /intel/dependencies` + writes em Core) |
+| 4.8 | Dashboard de capacity (FTE disponível vs comprometido)       | P1         | ✅ Implementado (`GET /intel/capacity`) |
+| 4.9 | Custom dashboard builder (drag-drop widgets)                 | P2         | ❌ Pós-fase (frontend only) |
+| 4.10 | Export de dados: CSV, API aberta para BI tools              | P2         | ✅ Implementado (`GET /intel/export`) |
+| 4.11 | Integração PagerDuty/Opsgenie (MTTR aprimorado)             | P3         | ❌ Backlog futuro |
+| 4.12 | Skill matrix do time                                         | P3         | ❌ Backlog futuro |
 
 **Critérios de Aceitação da Fase 4:**
 - [ ] Forecasts com accuracy > 80% medida retroativamente
 - [ ] Anomaly detection com < 10% de falsos positivos
-- [ ] API pública documentada e versionada (v1)
+- [x] API pública documentada e versionada (v1)
 
 ---
 

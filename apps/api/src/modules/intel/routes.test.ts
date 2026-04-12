@@ -48,7 +48,10 @@ vi.mock('./service.js', () => ({
   getSlaRisk: vi.fn(),
   getAnomalies: vi.fn(),
   getRecommendations: vi.fn(),
-  getCapacity: vi.fn()
+  getCapacity: vi.fn(),
+  getRoadmap: vi.fn(),
+  getDependencies: vi.fn(),
+  getExport: vi.fn()
 }));
 
 import { buildApp } from '../../app.js';
@@ -110,8 +113,42 @@ const makeCapacity = () => ({
   team_id: null,
   capacity_hours_per_person: 160,
   total_users: 1,
+  total_capacity_hours: 160,
+  total_logged_hours: 120,
   overloaded_count: 0,
   utilization: [{ userId: 'user-1', hoursWorked: 120, capacityHours: 160, utilizationPercent: 75, status: 'normal' }]
+});
+
+const makeRoadmap = () => ([{
+  project_id: PROJ_ID,
+  project_name: 'Auth',
+  project_key: 'AUTH',
+  status: 'active',
+  start_date: '2026-01-01',
+  target_end_date: '2026-06-30',
+  velocity_forecast: { forecasted_points_per_week: 18.5, trend: 'stable', confidence_score: 80 },
+  epics: [{
+    epic_id: EPIC_ID,
+    epic_name: 'Auth Revamp',
+    status: 'active',
+    start_date: '2026-01-01',
+    target_end_date: '2026-04-30',
+    estimated_end_date: '2026-04-27',
+    completion_percent: 60,
+    total_story_points: 40,
+    remaining_story_points: 16,
+    is_delayed: false,
+    weeks_overdue: 0,
+    confidence_score: 80
+  }]
+}]);
+
+const makeDependencies = () => ({
+  nodes: [
+    { task_id: 'dddddddd-dddd-4ddd-dddd-dddddddddddd', task_title: 'Setup DB', status: 'done', dependency_status: 'done', epic_id: EPIC_ID, assignee_id: null, story_points: 3, due_date: null },
+    { task_id: 'eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee', task_title: 'Auth API', status: 'in_progress', dependency_status: 'ready', epic_id: EPIC_ID, assignee_id: null, story_points: 5, due_date: null }
+  ],
+  edges: [{ blocker_id: 'dddddddd-dddd-4ddd-dddd-dddddddddddd', blocked_id: 'eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee' }]
 });
 
 // ── Test suite ────────────────────────────────────────────────────────────────
@@ -304,6 +341,132 @@ describe('Intel routes', () => {
         method: 'GET',
         url: '/api/v1/intel/capacity?period=2026-04'
       });
+      expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── GET /intel/roadmap ────────────────────────────────────────────────────
+
+  describe('GET /api/v1/intel/roadmap', () => {
+    it('200: returns roadmap with projects and epics', async () => {
+      vi.mocked(intelSvc.getRoadmap).mockResolvedValueOnce(makeRoadmap() as any);
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/intel/roadmap?project_id=${PROJ_ID}`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(200);
+      const data = res.json().data;
+      expect(data).toHaveLength(1);
+      expect(data[0].project_id).toBe(PROJ_ID);
+      expect(data[0].epics).toHaveLength(1);
+      expect(data[0].epics[0].completion_percent).toBe(60);
+    });
+
+    it('200: accepts epic status filter', async () => {
+      vi.mocked(intelSvc.getRoadmap).mockResolvedValueOnce([] as any);
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/intel/roadmap?status=active',
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('400: invalid status value', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/intel/roadmap?status=unknown',
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('401: no token', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/v1/intel/roadmap' });
+      expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── GET /intel/dependencies ───────────────────────────────────────────────
+
+  describe('GET /api/v1/intel/dependencies', () => {
+    it('200: returns nodes and edges graph', async () => {
+      vi.mocked(intelSvc.getDependencies).mockResolvedValueOnce(makeDependencies() as any);
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/intel/dependencies?epic_id=${EPIC_ID}`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(200);
+      const data = res.json().data;
+      expect(data.nodes).toHaveLength(2);
+      expect(data.edges).toHaveLength(1);
+      expect(data.nodes.find((n: any) => n.dependency_status === 'done')).toBeTruthy();
+    });
+
+    it('200: accepts project_id filter', async () => {
+      vi.mocked(intelSvc.getDependencies).mockResolvedValueOnce({ nodes: [], edges: [] } as any);
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/intel/dependencies?project_id=${PROJ_ID}`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('401: no token', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/v1/intel/dependencies' });
+      expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── GET /intel/export ─────────────────────────────────────────────────────
+
+  describe('GET /api/v1/intel/export', () => {
+    it('200: returns CSV with correct content-type for tasks', async () => {
+      vi.mocked(intelSvc.getExport).mockResolvedValueOnce('id,title\nt1,Fix bug' as any);
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/intel/export?type=tasks',
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toMatch(/text\/csv/);
+      expect(res.headers['content-disposition']).toMatch(/attachment/);
+      expect(res.payload).toContain('id,title');
+    });
+
+    it('200: returns CSV for epics', async () => {
+      vi.mocked(intelSvc.getExport).mockResolvedValueOnce('id,name\ne1,Auth' as any);
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/intel/export?type=epics',
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('400: missing required type param', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/intel/export',
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('400: invalid type value', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/intel/export?type=unknown',
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('401: no token', async () => {
+      const res = await app.inject({ method: 'GET', url: '/api/v1/intel/export?type=tasks' });
       expect(res.statusCode).toBe(401);
     });
   });

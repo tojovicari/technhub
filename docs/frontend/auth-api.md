@@ -32,11 +32,13 @@ The Auth module handles **platform user authentication** — the people who log 
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/auth/register` | public | Create a platform account |
+| `POST` | `/auth/register` | public | Create a new tenant + first account (`org_admin`) |
 | `POST` | `/auth/login` | public | Authenticate, receive tokens |
 | `POST` | `/auth/refresh` | public | Rotate refresh token |
 | `POST` | `/auth/logout` | 🔒 | Revoke refresh token |
 | `GET` | `/auth/me` | 🔒 | Get current account info |
+| `POST` | `/auth/invites` | 🔒 `iam.invite.manage` | Invite a user to the tenant |
+| `POST` | `/auth/register/invite` | public | Accept an invite and create account |
 
 ---
 
@@ -46,29 +48,31 @@ The Auth module handles **platform user authentication** — the people who log 
 
 ### POST /auth/register
 
-Create a new platform account.
+Cria um novo tenant e o primeiro account, que recebe automaticamente o papel `org_admin`.
+
+> **Fluxo de onboarding:** use este endpoint apenas para criar um tenant novo. Para adicionar membros a um tenant existente, use `POST /auth/invites` + `POST /auth/register/invite`.
 
 **Auth:** Public (no token required)
 
 **Request Body:**
 
-| Field | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `tenant_id` | string | ✅ | — | Tenant this account belongs to |
-| `email` | string | ✅ | — | Must be unique globally |
-| `password` | string | ✅ | — | Min 8 chars, ≥1 uppercase, ≥1 digit |
-| `full_name` | string | ✅ | — | Display name |
-| `role` | string | ❌ | `viewer` | `org_admin` \| `manager` \| `viewer` |
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `tenant_id` | string | ✅ | ID do novo tenant (deve ser único) |
+| `email` | string | ✅ | Must be unique globally |
+| `password` | string | ✅ | Min 8 chars, ≥1 uppercase, ≥1 digit |
+| `full_name` | string | ✅ | Display name |
+
+> `role` não é informado — o primeiro usuário é sempre `org_admin`.
 
 **Request Example:**
 
 ```json
 {
-  "tenant_id": "ten_1",
+  "tenant_id": "acme-corp",
   "email": "glauber@example.com",
   "password": "Abcd1234",
-  "full_name": "Glauber Vicari",
-  "role": "org_admin"
+  "full_name": "Glauber Vicari"
 }
 ```
 
@@ -78,7 +82,7 @@ Create a new platform account.
 {
   "data": {
     "id": "29f95970-c13d-4ece-a8f3-55db7b2f410f",
-    "tenant_id": "ten_1",
+    "tenant_id": "acme-corp",
     "email": "glauber@example.com",
     "full_name": "Glauber Vicari",
     "role": "org_admin",
@@ -95,6 +99,7 @@ Create a new platform account.
 | Status | Code | When |
 |---|---|---|
 | `400` | `VALIDATION_ERROR` | Invalid email, weak password, missing fields |
+| `409` | `TENANT_ALREADY_EXISTS` | Tenant ID já em uso — use convite para adicionar membros |
 | `409` | `EMAIL_TAKEN` | Email already registered |
 
 ---
@@ -275,6 +280,111 @@ Returns the full profile of the currently authenticated platform account.
 |---|---|---|
 | `401` | `UNAUTHORIZED` | Missing or invalid access token |
 | `404` | `NOT_FOUND` | Account deleted or disabled after token was issued |
+
+---
+
+### POST /auth/invites 🔒
+
+Gera um convite para um novo membro ingressar no tenant do chamador. O `invite_token` retornado deve ser enviado ao convidado (por e-mail ou outro canal) — ele não é armazenado em texto puro no servidor.
+
+**Auth:** `Authorization: Bearer <access_token>` + permissão `iam.invite.manage` (role `org_admin`)
+
+**Request Body:**
+
+| Field | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `email` | string | ✅ | — | E-mail do convidado |
+| `role` | string | ❌ | `viewer` | `org_admin` \| `manager` \| `viewer` |
+
+**Request Example:**
+
+```json
+{
+  "email": "carlos@acme.io",
+  "role": "manager"
+}
+```
+
+**Response — 201 Created:**
+
+```json
+{
+  "data": {
+    "id": "inv-uuid",
+    "tenant_id": "acme-corp",
+    "email": "carlos@acme.io",
+    "role": "manager",
+    "invite_token": "a3f8e2c...",
+    "expires_at": "2026-04-14T19:00:00.000Z"
+  },
+  "meta": { "request_id": "req-6", "version": "v1", "timestamp": "2026-04-12T19:00:00Z" },
+  "error": null
+}
+```
+
+> O `invite_token` é retornado **apenas nesta resposta**. Armazene-o ou envie-o imediatamente — não há como recuperá-lo depois.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Email inválido ou role inválido |
+| `401` | `UNAUTHORIZED` | Token ausente ou inválido |
+| `403` | `FORBIDDEN` | Sem permissão `iam.invite.manage` |
+
+---
+
+### POST /auth/register/invite
+
+Cria uma nova `PlatformAccount` consumindo um token de convite. O convite é invalidado na mesma transação.
+
+**Auth:** Public (no token required)
+
+**Request Body:**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `invite_token` | string | ✅ | Token recebido via convite |
+| `password` | string | ✅ | Min 8 chars, ≥1 uppercase, ≥1 digit |
+| `full_name` | string | ✅ | Display name |
+
+> `email`, `role` e `tenant_id` são lidos do convite — não precisam ser informados.
+
+**Request Example:**
+
+```json
+{
+  "invite_token": "a3f8e2c...",
+  "password": "Abcd1234",
+  "full_name": "Carlos Mendes"
+}
+```
+
+**Response — 201 Created:**
+
+```json
+{
+  "data": {
+    "id": "usr-uuid",
+    "tenant_id": "acme-corp",
+    "email": "carlos@acme.io",
+    "full_name": "Carlos Mendes",
+    "role": "manager",
+    "is_active": true,
+    "created_at": "2026-04-12T19:05:00.000Z"
+  },
+  "meta": { "request_id": "req-7", "version": "v1", "timestamp": "2026-04-12T19:05:00Z" },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Senha fraca ou campos ausentes |
+| `400` | `INVALID_INVITE_TOKEN` | Token inválido, expirado (48h) ou já utilizado |
+| `409` | `EMAIL_TAKEN` | E-mail do convite já possui conta |
 
 ---
 

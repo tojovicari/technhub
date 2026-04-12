@@ -11,6 +11,7 @@ import { slaRoutes } from './modules/sla/routes.js';
 import { doraRoutes } from './modules/dora/routes.js';
 import { cogsRoutes } from './modules/cogs/routes.js';
 import { intelRoutes } from './modules/intel/routes.js';
+import { iamRoutes } from './modules/iam/routes.js';
 import { registerAuth } from './plugins/auth.js';
 
 export function buildApp() {
@@ -45,6 +46,7 @@ export function buildApp() {
   app.register(doraRoutes, { prefix: '/api/v1' });
   app.register(cogsRoutes, { prefix: '/api/v1' });
   app.register(intelRoutes, { prefix: '/api/v1' });
+  app.register(iamRoutes, { prefix: '/api/v1' });
   startIntegrationsWorker(app);
   startSlaScheduler(app);
 

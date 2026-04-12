@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'crypto';
 import { prisma } from '../../lib/prisma.js';
 import { hashPassword, verifyPassword } from '../../lib/password.js';
-import type { LoginInput, RefreshInput, RegisterInput } from './schema.js';
+import type { CreateInviteInput, LoginInput, RefreshInput, RegisterByInviteInput, RegisterInput } from './schema.js';
 
 const ACCESS_TOKEN_TTL = '1h';
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const INVITE_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
   org_admin: ['*'],
@@ -20,6 +21,31 @@ function tokenHash(raw: string) {
   return createHash('sha256').update(raw).digest('hex');
 }
 
+async function resolvePermissions(accountId: string, role: string): Promise<string[]> {
+  const rolePerms = ROLE_PERMISSIONS[role] ?? [];
+
+  // wildcard — no need to merge profile keys
+  if (rolePerms.includes('*')) return rolePerms;
+
+  const now = new Date();
+  const assignments = await prisma.userPermissionProfile.findMany({
+    where: {
+      accountId,
+      revokedAt: null,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      permissionProfile: { isActive: true }
+    },
+    select: { permissionProfile: { select: { permissionKeys: true } } }
+  });
+
+  const profileKeys = assignments.flatMap(a => a.permissionProfile.permissionKeys);
+
+  // if any profile has wildcard, grant full access
+  if (profileKeys.includes('*')) return ['*'];
+
+  return [...new Set([...rolePerms, ...profileKeys])];
+}
+
 async function ensureTenant(tenantId: string) {
   await prisma.tenant.upsert({
     where: { id: tenantId },
@@ -29,6 +55,11 @@ async function ensureTenant(tenantId: string) {
 }
 
 export async function register(input: RegisterInput) {
+  const tenantExists = await prisma.tenant.findUnique({ where: { id: input.tenant_id } });
+  if (tenantExists) {
+    throw Object.assign(new Error('Tenant already exists'), { code: 'TENANT_ALREADY_EXISTS' });
+  }
+
   await ensureTenant(input.tenant_id);
 
   const existing = await prisma.platformAccount.findUnique({
@@ -47,9 +78,76 @@ export async function register(input: RegisterInput) {
       email: input.email,
       passwordHash,
       fullName: input.full_name,
-      role: input.role
+      role: 'org_admin'
     }
   });
+
+  return {
+    id: account.id,
+    tenant_id: account.tenantId,
+    email: account.email,
+    full_name: account.fullName,
+    role: account.role,
+    is_active: account.isActive,
+    created_at: account.createdAt.toISOString()
+  };
+}
+
+export async function createInvite(tenantId: string, input: CreateInviteInput) {
+  const rawToken = randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+
+  const invite = await prisma.invite.create({
+    data: {
+      tenantId,
+      email: input.email,
+      role: input.role,
+      tokenHash: tokenHash(rawToken),
+      expiresAt
+    }
+  });
+
+  return {
+    id: invite.id,
+    tenant_id: invite.tenantId,
+    email: invite.email,
+    role: invite.role,
+    invite_token: rawToken,
+    expires_at: invite.expiresAt.toISOString()
+  };
+}
+
+export async function registerByInvite(input: RegisterByInviteInput) {
+  const hash = tokenHash(input.invite_token);
+
+  const invite = await prisma.invite.findUnique({ where: { tokenHash: hash } });
+
+  if (!invite || invite.usedAt || invite.expiresAt < new Date()) {
+    throw Object.assign(new Error('Invalid or expired invite token'), { code: 'INVALID_INVITE_TOKEN' });
+  }
+
+  const existing = await prisma.platformAccount.findUnique({ where: { email: invite.email } });
+  if (existing) {
+    throw Object.assign(new Error('Email already registered'), { code: 'EMAIL_TAKEN' });
+  }
+
+  const passwordHash = await hashPassword(input.password);
+
+  const [account] = await prisma.$transaction([
+    prisma.platformAccount.create({
+      data: {
+        tenantId: invite.tenantId,
+        email: invite.email,
+        passwordHash,
+        fullName: input.full_name,
+        role: invite.role
+      }
+    }),
+    prisma.invite.update({
+      where: { id: invite.id },
+      data: { usedAt: new Date() }
+    })
+  ]);
 
   return {
     id: account.id,
@@ -79,12 +177,14 @@ export async function login(
     throw Object.assign(new Error('Invalid credentials'), { code: 'INVALID_CREDENTIALS' });
   }
 
+  const permissions = await resolvePermissions(account.id, account.role);
+
   const accessToken = signToken(
     {
       sub: account.id,
       tenant_id: account.tenantId,
       roles: [account.role],
-      permissions: ROLE_PERMISSIONS[account.role] ?? []
+      permissions
     },
     { expiresIn: ACCESS_TOKEN_TTL }
   );
@@ -158,12 +258,14 @@ export async function refresh(
   ]);
 
   const account = stored.account;
+  const permissions = await resolvePermissions(account.id, account.role);
+
   const accessToken = signToken(
     {
       sub: account.id,
       tenant_id: account.tenantId,
       roles: [account.role],
-      permissions: ROLE_PERMISSIONS[account.role] ?? []
+      permissions
     },
     { expiresIn: ACCESS_TOKEN_TTL }
   );

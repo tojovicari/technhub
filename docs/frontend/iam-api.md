@@ -51,32 +51,38 @@ List permission profiles for the tenant.
 
 ```json
 {
-  "data": [
-    {
-      "id": "profile-admin",
-      "tenant_id": "tenant-7a4b",
-      "name": "Admin",
-      "description": "Full access to all modules",
-      "permission_keys": ["*"],
-      "is_system": true,
-      "is_active": true
-    },
-    {
-      "id": "profile-engineer",
-      "tenant_id": "tenant-7a4b",
-      "name": "Engineer",
-      "description": "Standard engineer access — tasks, epics, DORA read",
-      "permission_keys": [
-        "core.task.read",
-        "core.task.write",
-        "core.epic.read",
-        "core.project.read",
-        "dora.read"
-      ],
-      "is_system": false,
-      "is_active": true
-    }
-  ],
+  "data": {
+    "items": [
+      {
+        "id": "profile-admin",
+        "tenant_id": "tenant-7a4b",
+        "name": "Admin",
+        "description": "Full access to all modules",
+        "permission_keys": ["*"],
+        "is_system": true,
+        "is_active": true,
+        "created_at": "2026-04-01T00:00:00Z",
+        "updated_at": "2026-04-01T00:00:00Z"
+      },
+      {
+        "id": "profile-engineer",
+        "tenant_id": "tenant-7a4b",
+        "name": "Engineer",
+        "description": "Standard engineer access — tasks, epics, DORA read",
+        "permission_keys": [
+          "core.task.read",
+          "core.task.write",
+          "core.epic.read",
+          "core.project.read",
+          "dora.read"
+        ],
+        "is_system": false,
+        "is_active": true,
+        "created_at": "2026-04-10T12:00:00Z",
+        "updated_at": "2026-04-10T12:00:00Z"
+      }
+    ]
+  },
   "meta": { "request_id": "req_001", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
   "error": null
 }

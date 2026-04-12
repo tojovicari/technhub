@@ -45,3 +45,27 @@ export const capacityQuerySchema = z.object({
   team_id:              z.string().uuid().optional(),
   capacity_hours:       z.coerce.number().min(1).default(160) // hours per person per period
 });
+
+// ── Roadmap / Gantt (4.6) ─────────────────────────────────────────────────────
+
+export const roadmapQuerySchema = z.object({
+  project_id: z.string().uuid().optional(),
+  team_id:    z.string().uuid().optional(),
+  status:     z.enum(['backlog', 'active', 'completed', 'cancelled']).optional()
+});
+
+// ── Dependency tracking (4.7) ─────────────────────────────────────────────────
+
+export const dependencyQuerySchema = z.object({
+  project_id: z.string().uuid().optional(),
+  epic_id:    z.string().uuid().optional()
+});
+
+// ── CSV/BI Export (4.10) ──────────────────────────────────────────────────────
+
+export const exportQuerySchema = z.object({
+  type:       z.enum(['tasks', 'epics', 'velocity', 'capacity', 'anomalies']),
+  project_id: z.string().uuid().optional(),
+  team_id:    z.string().uuid().optional(),
+  period:     z.string().regex(/^\d{4}-(Q[1-4]|\d{2})$/, 'Use YYYY-Qn or YYYY-MM').optional()
+});
