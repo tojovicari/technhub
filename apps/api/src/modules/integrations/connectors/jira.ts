@@ -253,7 +253,8 @@ async function syncIssues(
       created: string;
       resolutiondate?: string;
       'Epic Link'?: string;
-      customfield_10014?: string; // epic link (common custom field)
+      customfield_10014?: string; // epic link (classic projects)
+      parent?: { key: string; fields?: { issuetype?: { name: string } } }; // next-gen: parent epic
       labels?: string[];
       components?: Array<{ name: string }>;
     };
@@ -264,7 +265,7 @@ async function syncIssues(
 
   const issues = await client.paginate<JiraIssue>('/search/jql', 'issues', {
     jql,
-    fields: 'summary,description,issuetype,priority,status,assignee,reporter,customfield_10016,duedate,created,resolutiondate,customfield_10014,labels,components',
+    fields: 'summary,description,issuetype,priority,status,assignee,reporter,customfield_10016,duedate,created,resolutiondate,customfield_10014,parent,labels,components',
   });
 
   for (const issue of issues) {
@@ -292,8 +293,11 @@ async function syncIssues(
       reporterId = user?.id;
     }
 
-    // Epic Link via customfield_10014 (epic key string)
-    const epicKey = f.customfield_10014 ?? undefined;
+    // Epic Link: classic projects use customfield_10014; next-gen use parent.key when parent is an Epic
+    const epicKey =
+      f.customfield_10014 ??
+      (f.parent?.fields?.issuetype?.name?.toLowerCase() === 'epic' ? f.parent.key : undefined) ??
+      undefined;
     const epicId = epicKey ? epicMap.get(epicKey) : undefined;
 
     const task = await prisma.task.upsert({
