@@ -69,6 +69,8 @@ model User {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  hourlyRate  Float?
+
   tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   memberships TeamMember[]
   ledTeams    Team[]                  @relation("TeamLead")
@@ -254,6 +256,7 @@ model Team {
   description      String?
   leadId           String?
   budgetQuarterly  Float?
+  hourlyRate       Float?       // fallback rate when team members have no individual hourlyRate
   tags             String[]
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
@@ -519,6 +522,11 @@ model CogsEntry {
   source        CogsSource
   confidence    CogsConfidence @default(medium)
 
+  // revision tracking (for re-derived entries when a task is reopened and re-completed)
+  revision      Int            @default(1)
+  supersededAt  DateTime?      // set when this entry is replaced by a newer revision
+  isDerived     Boolean        @default(false) // true = auto-generated from task; false = manual
+
   // audit
   notes         String?
   approvedBy    String?        // userId of approver (required for estimate/manual)
@@ -535,6 +543,8 @@ model CogsEntry {
   @@index([tenantId, userId])
   @@index([tenantId, teamId])
   @@index([tenantId, category])
+  @@index([tenantId, taskId, isDerived])
+  @@index([supersededAt])
 }
 
 model CogsBudget {

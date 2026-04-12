@@ -4,10 +4,13 @@ import { ensureTenantScope } from '../../plugins/auth.js';
 import {
   createCogsEntrySchema,
   listCogsEntriesQuerySchema,
+  listCogsEntriesAuditQuerySchema,
   cogsRollupQuerySchema,
   createCogsBudgetSchema,
   burnRateQuerySchema,
-  estimateFromSpSchema
+  estimateFromSpSchema,
+  initiativeParamsSchema,
+  initiativeGenerateBodySchema
 } from './schema.js';
 import {
   createCogsEntry,
@@ -17,7 +20,9 @@ import {
   createCogsBudget,
   listCogsBudgets,
   getBurnRate,
-  getEpicCogsAnalysis
+  getEpicCogsAnalysis,
+  generateInitiativeCogs,
+  getInitiativeCogsSummary
 } from './service.js';
 import { z } from 'zod';
 
@@ -75,12 +80,12 @@ export async function cogsRoutes(app: FastifyInstance) {
     }
   );
 
-  // ── GET /cogs/entries — list entries (with filters) ─────────────────────────
+  // ── GET /cogs/entries — list entries (with filters + superseded audit) ────────
   app.get(
     '/cogs/entries',
     { preHandler: [app.authenticate, app.requirePermission('cogs.read')] },
     async (req, reply) => {
-      const parsed = listCogsEntriesQuerySchema.safeParse(req.query);
+      const parsed = listCogsEntriesAuditQuerySchema.safeParse(req.query);
       if (!parsed.success) {
         return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
       }
@@ -171,6 +176,62 @@ export async function cogsRoutes(app: FastifyInstance) {
 
       const budgets = await listCogsBudgets(tenantId, parsed.data);
       return reply.status(200).send(ok(req, { data: budgets }));
+    }
+  );
+
+  // ── POST /cogs/initiatives/:project_id/generate — derive COGS from tasks ────
+  app.post(
+    '/cogs/initiatives/:project_id/generate',
+    { preHandler: [app.authenticate, app.requirePermission('cogs.write')] },
+    async (req, reply) => {
+      const paramsParsed = initiativeParamsSchema.safeParse(req.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid project_id'));
+      }
+      const bodyParsed = initiativeGenerateBodySchema.safeParse(req.body ?? {});
+      if (!bodyParsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid body', { issues: bodyParsed.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+
+      try {
+        const result = await generateInitiativeCogs(
+          tenantId,
+          paramsParsed.data.project_id,
+          bodyParsed.data.overhead_rate
+        );
+        return reply.status(200).send(ok(req, result));
+      } catch (err: unknown) {
+        if (err instanceof Error && err.message === 'INITIATIVE_NOT_FOUND') {
+          return reply.status(404).send(fail(req, 'NOT_FOUND', 'Initiative not found or project is not an initiative'));
+        }
+        throw err;
+      }
+    }
+  );
+
+  // ── GET /cogs/initiatives/:project_id/summary — cost summary ─────────────────
+  app.get(
+    '/cogs/initiatives/:project_id/summary',
+    { preHandler: [app.authenticate, app.requirePermission('cogs.read')] },
+    async (req, reply) => {
+      const paramsParsed = initiativeParamsSchema.safeParse(req.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid project_id'));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+
+      const summary = await getInitiativeCogsSummary(tenantId, paramsParsed.data.project_id);
+      if (!summary) {
+        return reply.status(404).send(fail(req, 'NOT_FOUND', 'Initiative not found or project is not an initiative'));
+      }
+      return reply.status(200).send(ok(req, summary));
     }
   );
 

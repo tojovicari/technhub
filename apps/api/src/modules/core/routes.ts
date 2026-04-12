@@ -39,7 +39,7 @@ import {
   upsertUser
 } from './service.js';
 
-function mapTeam(team: { id: string; tenantId: string; name: string; description: string | null; leadId: string | null; budgetQuarterly: number | null; tags: string[] }) {
+function mapTeam(team: { id: string; tenantId: string; name: string; description: string | null; leadId: string | null; budgetQuarterly: number | null; hourlyRate: number | null; tags: string[] }) {
   return {
     id: team.id,
     tenant_id: team.tenantId,
@@ -47,6 +47,7 @@ function mapTeam(team: { id: string; tenantId: string; name: string; description
     description: team.description,
     lead_id: team.leadId,
     budget_quarterly: team.budgetQuarterly,
+    hourly_rate: team.hourlyRate,
     tags: team.tags
   };
 }
@@ -136,7 +137,7 @@ function mapTask(task: any) {
   };
 }
 
-function mapUser(user: { id: string; tenantId: string; email: string; fullName: string; role: string; isActive: boolean; createdAt: Date }) {
+function mapUser(user: { id: string; tenantId: string; email: string; fullName: string; role: string; isActive: boolean; hourlyRate: number | null; createdAt: Date }) {
   return {
     id: user.id,
     tenant_id: user.tenantId,
@@ -144,11 +145,12 @@ function mapUser(user: { id: string; tenantId: string; email: string; fullName: 
     full_name: user.fullName,
     role: user.role,
     is_active: user.isActive,
+    hourly_rate: user.hourlyRate,
     created_at: user.createdAt.toISOString()
   };
 }
 
-function mapTeamMember(member: { id: string; teamId: string; userId: string; tenantId: string; createdAt: Date; user: { id: string; tenantId: string; email: string; fullName: string; role: string; isActive: boolean; createdAt: Date } }) {
+function mapTeamMember(member: { id: string; teamId: string; userId: string; tenantId: string; createdAt: Date; user: { id: string; tenantId: string; email: string; fullName: string; role: string; isActive: boolean; hourlyRate: number | null; createdAt: Date } }) {
   return {
     id: member.id,
     team_id: member.teamId,

@@ -9,7 +9,9 @@ import {
   computeCostPerStoryPoint,
   computeBurnRate,
   computePlannedVsActual,
-  computeRoi
+  computeRoi,
+  resolveHourlyRate,
+  deriveTaskCogs
 } from './engine.js';
 import type {
   CreateCogsEntryInput,
@@ -119,7 +121,10 @@ export async function createCogsEntryFromStoryPoints(
 
 // ── List entries ──────────────────────────────────────────────────────────────
 
-export async function listCogsEntries(tenantId: string, query: ListCogsEntriesQuery) {
+export async function listCogsEntries(
+  tenantId: string,
+  query: ListCogsEntriesQuery & { superseded?: boolean }
+) {
   const where: Prisma.CogsEntryWhereInput = { tenantId };
   if (query.project_id) where.projectId = query.project_id;
   if (query.epic_id)    where.epicId = query.epic_id;
@@ -134,6 +139,9 @@ export async function listCogsEntries(tenantId: string, query: ListCogsEntriesQu
       ...(query.date_to && { lte: new Date(query.date_to) })
     };
   }
+  // superseded filter: true = only superseded entries, false = only active, undefined = all
+  if (query.superseded === true)  where.supersededAt = { not: null };
+  if (query.superseded === false) where.supersededAt = null;
 
   const limit = query.limit;
   const items = await prisma.cogsEntry.findMany({
@@ -377,6 +385,266 @@ export async function getEpicCogsAnalysis(tenantId: string, epicId: string) {
     planned_vs_actual: pva,
     cost_by_category: byCategory,
     total_hours: Math.round(entries.reduce((s, e) => s + e.hoursWorked, 0) * 100) / 100
+  };
+}
+
+// ── Initiative COGS derivation ────────────────────────────────────────────────
+
+const TASK_FOR_COGS_SELECT = {
+  id: true,
+  status: true,
+  hoursActual: true,
+  hoursEstimated: true,
+  storyPoints: true,
+  epicId: true,
+  projectId: true,
+  assigneeId: true,
+  completedAt: true
+} as const;
+
+const DEFAULT_OVERHEAD_RATE = 1.3;
+
+type TaskCogsOutcome = 'created' | 'recreated' | 'skipped' | 'no_rate';
+
+export interface GenerateCogsForTaskResult {
+  taskId: string;
+  outcome: TaskCogsOutcome;
+  reason?: string;
+  entryId?: string;
+  warning?: string;
+}
+
+/**
+ * Generate (or re-generate) a derived CogsEntry for a single task.
+ *
+ * Rules:
+ * - task must be 'done' or 'cancelled' (with hoursActual > 0).
+ * - If an active derived entry already exists, it is soft-deleted (supersededAt = now)
+ *   and a new revision is created (idempotent re-trigger).
+ * - Returns outcome: 'created' | 'recreated' | 'skipped' | 'no_rate'.
+ */
+export async function generateCogsForTask(
+  tenantId: string,
+  taskId: string,
+  overheadRate = DEFAULT_OVERHEAD_RATE
+): Promise<GenerateCogsForTaskResult> {
+  const task = await prisma.task.findFirst({
+    where: { id: taskId, tenantId },
+    select: {
+      ...TASK_FOR_COGS_SELECT,
+      assignee: { select: { id: true, hourlyRate: true } },
+      project: {
+        select: {
+          id: true,
+          isInitiative: true,
+          team: { select: { id: true, hourlyRate: true } }
+        }
+      }
+    }
+  });
+
+  if (!task) return { taskId, outcome: 'skipped', reason: 'task_not_found' };
+
+  // Compute velocity from recent done tasks in the same project
+  const recentTasks = await prisma.task.findMany({
+    where: {
+      tenantId,
+      projectId: task.projectId,
+      storyPoints: { gt: 0 },
+      hoursActual: { gt: 0 },
+      status: 'done'
+    },
+    select: { hoursActual: true, storyPoints: true },
+    orderBy: { completedAt: 'desc' },
+    take: 30
+  });
+  const velocity = computeVelocity(
+    recentTasks
+      .filter((t) => t.hoursActual != null && t.storyPoints != null)
+      .map((t) => ({ hoursActual: t.hoursActual!, storyPoints: t.storyPoints! }))
+  );
+
+  const rate = resolveHourlyRate(
+    task.assignee ?? null,
+    task.project?.team ?? null
+  );
+
+  const derivation = deriveTaskCogs(
+    { ...task, status: task.status as string },
+    rate,
+    overheadRate,
+    velocity
+  );
+
+  if (derivation.kind === 'skip') {
+    return { taskId, outcome: 'skipped', reason: derivation.reason };
+  }
+
+  const { input } = derivation;
+
+  // Soft-delete any existing active derived entry for this task
+  const existing = await prisma.cogsEntry.findFirst({
+    where: { tenantId, taskId, isDerived: true, supersededAt: null },
+    select: { id: true, revision: true }
+  });
+
+  const nextRevision = existing ? existing.revision + 1 : 1;
+  const isRecreate = existing != null;
+
+  await prisma.$transaction(async (tx) => {
+    if (existing) {
+      await tx.cogsEntry.update({
+        where: { id: existing.id },
+        data: { supersededAt: new Date() }
+      });
+    }
+
+    await tx.cogsEntry.create({
+      data: {
+        tenantId,
+        periodDate: input.periodDate,
+        userId: input.userId,
+        projectId: input.projectId,
+        epicId: input.epicId,
+        taskId: input.taskId,
+        hoursWorked: input.hoursWorked,
+        hourlyRate: input.hourlyRate,
+        overheadRate: input.overheadRate,
+        totalCost: input.totalCost,
+        category: input.category,
+        subcategory: input.subcategory,
+        source: input.source,
+        confidence: input.confidence,
+        isDerived: true,
+        revision: nextRevision,
+        notes: derivation.kind === 'no_rate'
+          ? 'No hourly rate configured for user or team — cost recorded as $0.'
+          : null,
+        metadata: {
+          ...input.metadata,
+          ...(isRecreate && { previous_entry_id: existing!.id })
+        } as Prisma.InputJsonValue
+      }
+    });
+  });
+
+  return {
+    taskId,
+    outcome: isRecreate ? 'recreated' : 'created',
+    ...(derivation.kind === 'no_rate' && { warning: 'no_rate_configured', outcome: 'no_rate' as TaskCogsOutcome })
+  };
+}
+
+/**
+ * Generate derived COGS for all terminal tasks (done|cancelled) in an initiative.
+ * Skips tasks that already have an up-to-date active derived entry.
+ * Returns a per-task summary for auditability.
+ */
+export async function generateInitiativeCogs(
+  tenantId: string,
+  projectId: string,
+  overheadRate = DEFAULT_OVERHEAD_RATE
+): Promise<{ results: GenerateCogsForTaskResult[]; stats: Record<TaskCogsOutcome | 'skipped', number> }> {
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, tenantId, isInitiative: true },
+    select: { id: true }
+  });
+  if (!project) throw new Error('INITIATIVE_NOT_FOUND');
+
+  const tasks = await prisma.task.findMany({
+    where: {
+      tenantId,
+      projectId,
+      status: { in: ['done', 'cancelled'] }
+    },
+    select: { id: true }
+  });
+
+  const results: GenerateCogsForTaskResult[] = [];
+  for (const t of tasks) {
+    const r = await generateCogsForTask(tenantId, t.id, overheadRate);
+    results.push(r);
+  }
+
+  const stats = { created: 0, recreated: 0, skipped: 0, no_rate: 0 } as Record<TaskCogsOutcome | 'skipped', number>;
+  for (const r of results) stats[r.outcome] = (stats[r.outcome] ?? 0) + 1;
+
+  return { results, stats };
+}
+
+/**
+ * Return a cost summary for an initiative: total, delivery, waste, breakdown by epic.
+ * Only considers active (non-superseded) derived entries.
+ */
+export async function getInitiativeCogsSummary(tenantId: string, projectId: string) {
+  const project = await prisma.project.findFirst({
+    where: { id: projectId, tenantId, isInitiative: true },
+    select: { id: true, name: true, status: true }
+  });
+  if (!project) return null;
+
+  const entries = await prisma.cogsEntry.findMany({
+    where: {
+      tenantId,
+      projectId,
+      isDerived: true,
+      supersededAt: null
+    },
+    select: {
+      totalCost: true,
+      hoursWorked: true,
+      category: true,
+      subcategory: true,
+      epicId: true,
+      confidence: true
+    }
+  });
+
+  const totalCost    = sumCost(entries);
+  const totalHours   = Math.round(entries.reduce((s, e) => s + e.hoursWorked, 0) * 100) / 100;
+
+  const deliveryEntries = entries.filter((e) => e.category === 'engineering');
+  const wasteEntries    = entries.filter((e) => e.subcategory === 'cancelled_task');
+
+  const deliveryCost = sumCost(deliveryEntries);
+  const wasteCost    = sumCost(wasteEntries);
+  const deliveryHours = Math.round(deliveryEntries.reduce((s, e) => s + e.hoursWorked, 0) * 100) / 100;
+  const wasteHours    = Math.round(wasteEntries.reduce((s, e) => s + e.hoursWorked, 0) * 100) / 100;
+
+  // Breakdown by epic
+  const epicMap: Record<string, { total_cost: number; hours: number; delivery_cost: number; waste_cost: number }> = {};
+  for (const e of entries) {
+    const key = e.epicId ?? '__project';
+    if (!epicMap[key]) epicMap[key] = { total_cost: 0, hours: 0, delivery_cost: 0, waste_cost: 0 };
+    epicMap[key].total_cost   = Math.round((epicMap[key].total_cost + e.totalCost) * 100) / 100;
+    epicMap[key].hours        = Math.round((epicMap[key].hours + e.hoursWorked) * 100) / 100;
+    if (e.category === 'engineering') {
+      epicMap[key].delivery_cost = Math.round((epicMap[key].delivery_cost + e.totalCost) * 100) / 100;
+    } else if (e.subcategory === 'cancelled_task') {
+      epicMap[key].waste_cost = Math.round((epicMap[key].waste_cost + e.totalCost) * 100) / 100;
+    }
+  }
+
+  // Confidence distribution
+  const confidenceDist: Record<string, number> = {};
+  for (const e of entries) {
+    confidenceDist[e.confidence] = (confidenceDist[e.confidence] ?? 0) + 1;
+  }
+
+  return {
+    project_id: projectId,
+    project_name: project.name,
+    project_status: project.status,
+    total_cost: totalCost,
+    delivery_cost: deliveryCost,
+    waste_cost: wasteCost,
+    waste_percent: totalCost > 0 ? Math.round((wasteCost / totalCost) * 10000) / 100 : 0,
+    total_hours: totalHours,
+    delivery_hours: deliveryHours,
+    waste_hours: wasteHours,
+    entry_count: entries.length,
+    confidence_distribution: confidenceDist,
+    by_epic: epicMap
   };
 }
 

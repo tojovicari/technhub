@@ -157,6 +157,145 @@ export function computeRoi(
   return round2(((businessValue - actualCost) / actualCost) * 100);
 }
 
+// ── Initiative derivation ─────────────────────────────────────────────────────
+
+export interface RateResolution {
+  hourlyRate: number;
+  source: 'user' | 'team' | 'none';
+}
+
+/**
+ * Resolve the effective hourly rate for a user.
+ * Priority: user.hourlyRate → team.hourlyRate → none.
+ * When source is 'none', hourlyRate is 0 and the caller should warn.
+ */
+export function resolveHourlyRate(
+  user: { hourlyRate?: number | null } | null,
+  team: { hourlyRate?: number | null } | null
+): RateResolution {
+  if (user?.hourlyRate != null && user.hourlyRate > 0) {
+    return { hourlyRate: user.hourlyRate, source: 'user' };
+  }
+  if (team?.hourlyRate != null && team.hourlyRate > 0) {
+    return { hourlyRate: team.hourlyRate, source: 'team' };
+  }
+  return { hourlyRate: 0, source: 'none' };
+}
+
+export type TaskForCogs = {
+  id: string;
+  status: string;
+  hoursActual: number | null;
+  hoursEstimated: number | null;
+  storyPoints: number | null;
+  epicId: string | null;
+  projectId: string;
+  assigneeId: string | null;
+  completedAt: Date | null;
+};
+
+export type DerivedCogsInput = {
+  taskId: string;
+  epicId: string | null;
+  projectId: string;
+  userId: string | null;
+  periodDate: Date;
+  hoursWorked: number;
+  hourlyRate: number;
+  overheadRate: number;
+  totalCost: number;
+  category: 'engineering' | 'overhead';
+  subcategory: string | null;
+  source: 'timetracking' | 'story_points' | 'estimate';
+  confidence: 'high' | 'medium' | 'low';
+  metadata: Record<string, unknown>;
+};
+
+export type DeriveTaskCogsResult =
+  | { kind: 'ok'; input: DerivedCogsInput }
+  | { kind: 'skip'; reason: string }
+  | { kind: 'no_rate'; input: DerivedCogsInput };
+
+/**
+ * Derive a CogsEntry input from a task's time data.
+ *
+ * Rules:
+ * - task.status === 'done'      → category: engineering
+ * - task.status === 'cancelled' + hoursActual > 0 → category: overhead / cancelled_task (waste)
+ * - task.status === 'cancelled' + no hours        → skip
+ * - Hour priority: hoursActual > hoursEstimated > storyPoints * velocity
+ * - When no rate is configured: returns kind:'no_rate' with totalCost = 0 for audit trail
+ */
+export function deriveTaskCogs(
+  task: TaskForCogs,
+  rate: RateResolution,
+  overheadRate: number,
+  velocity: number | null
+): DeriveTaskCogsResult {
+  const isDone = task.status === 'done';
+  const isCancelled = task.status === 'cancelled';
+
+  if (!isDone && !isCancelled) {
+    return { kind: 'skip', reason: 'task_not_terminal' };
+  }
+
+  // Cancelled with no actual hours → pure skip (no cost was incurred)
+  if (isCancelled && !task.hoursActual) {
+    return { kind: 'skip', reason: 'cancelled_no_hours' };
+  }
+
+  // Resolve hours and source
+  let hoursWorked: number;
+  let source: DerivedCogsInput['source'];
+  let confidence: DerivedCogsInput['confidence'];
+  const meta: Record<string, unknown> = {};
+
+  if (task.hoursActual != null && task.hoursActual > 0) {
+    hoursWorked = task.hoursActual;
+    source = 'timetracking';
+    confidence = 'high';
+  } else if (task.hoursEstimated != null && task.hoursEstimated > 0) {
+    hoursWorked = task.hoursEstimated;
+    source = 'estimate';
+    confidence = 'low';
+  } else if (task.storyPoints != null && task.storyPoints > 0 && velocity != null) {
+    hoursWorked = round2(task.storyPoints * velocity);
+    source = 'story_points';
+    confidence = 'medium';
+    meta.velocity_used = velocity;
+    meta.story_points = task.storyPoints;
+  } else {
+    return { kind: 'skip', reason: 'no_time_data' };
+  }
+
+  meta.hours_source = source;
+
+  const totalCost = round2(hoursWorked * rate.hourlyRate * overheadRate);
+
+  const input: DerivedCogsInput = {
+    taskId: task.id,
+    epicId: task.epicId,
+    projectId: task.projectId,
+    userId: task.assigneeId,
+    periodDate: task.completedAt ?? new Date(),
+    hoursWorked,
+    hourlyRate: rate.hourlyRate,
+    overheadRate,
+    totalCost,
+    category: isDone ? 'engineering' : 'overhead',
+    subcategory: isCancelled ? 'cancelled_task' : null,
+    source,
+    confidence: rate.source === 'none' ? 'low' : confidence,
+    metadata: { ...meta, rate_source: rate.source }
+  };
+
+  if (rate.source === 'none') {
+    return { kind: 'no_rate', input };
+  }
+
+  return { kind: 'ok', input };
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function round2(n: number): number {

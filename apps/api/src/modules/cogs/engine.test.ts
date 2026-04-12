@@ -8,8 +8,11 @@ import {
   computeCostPerStoryPoint,
   computeBurnRate,
   computePlannedVsActual,
-  computeRoi
+  computeRoi,
+  resolveHourlyRate,
+  deriveTaskCogs
 } from './engine.js';
+import type { TaskForCogs } from './engine.js';
 
 // ── computeEntryCost ──────────────────────────────────────────────────────────
 
@@ -185,5 +188,129 @@ describe('computeRoi', () => {
 
   it('null when actualCost = 0', () => {
     expect(computeRoi(2000, 0)).toBeNull();
+  });
+});
+
+// ── resolveHourlyRate ─────────────────────────────────────────────────────────
+
+describe('resolveHourlyRate', () => {
+  it('uses user rate when present', () => {
+    const r = resolveHourlyRate({ hourlyRate: 80 }, { hourlyRate: 50 });
+    expect(r).toEqual({ hourlyRate: 80, source: 'user' });
+  });
+
+  it('falls back to team rate when user has no rate', () => {
+    const r = resolveHourlyRate({ hourlyRate: null }, { hourlyRate: 50 });
+    expect(r).toEqual({ hourlyRate: 50, source: 'team' });
+  });
+
+  it('returns none when both are null', () => {
+    const r = resolveHourlyRate(null, null);
+    expect(r).toEqual({ hourlyRate: 0, source: 'none' });
+  });
+
+  it('ignores user rate of 0 and falls back to team', () => {
+    const r = resolveHourlyRate({ hourlyRate: 0 }, { hourlyRate: 60 });
+    expect(r).toEqual({ hourlyRate: 60, source: 'team' });
+  });
+});
+
+// ── deriveTaskCogs ────────────────────────────────────────────────────────────
+
+function makeTask(overrides: Partial<TaskForCogs> = {}): TaskForCogs {
+  return {
+    id: 'task-1',
+    status: 'done',
+    hoursActual: 8,
+    hoursEstimated: 10,
+    storyPoints: 3,
+    epicId: 'epic-1',
+    projectId: 'proj-1',
+    assigneeId: 'user-1',
+    completedAt: new Date('2026-04-01'),
+    ...overrides
+  };
+}
+
+const HIGH_RATE = { hourlyRate: 100, source: 'user' as const };
+const NO_RATE   = { hourlyRate: 0,   source: 'none' as const };
+
+describe('deriveTaskCogs', () => {
+  it('done task with hoursActual → engineering, source: timetracking, confidence: high', () => {
+    const result = deriveTaskCogs(makeTask(), HIGH_RATE, 1.3, null);
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.input.category).toBe('engineering');
+    expect(result.input.source).toBe('timetracking');
+    expect(result.input.confidence).toBe('high');
+    expect(result.input.hoursWorked).toBe(8);
+    expect(result.input.totalCost).toBe(1040); // 8 × 100 × 1.3
+  });
+
+  it('prefers hoursActual over hoursEstimated', () => {
+    const result = deriveTaskCogs(makeTask({ hoursActual: 8, hoursEstimated: 10 }), HIGH_RATE, 1.0, null);
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.input.hoursWorked).toBe(8);
+    expect(result.input.source).toBe('timetracking');
+  });
+
+  it('falls back to hoursEstimated when no hoursActual', () => {
+    const result = deriveTaskCogs(makeTask({ hoursActual: null }), HIGH_RATE, 1.0, null);
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.input.hoursWorked).toBe(10);
+    expect(result.input.source).toBe('estimate');
+    expect(result.input.confidence).toBe('low');
+  });
+
+  it('falls back to storyPoints × velocity when no hours', () => {
+    const result = deriveTaskCogs(makeTask({ hoursActual: null, hoursEstimated: null }), HIGH_RATE, 1.0, 4);
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.input.hoursWorked).toBe(12); // 3 SP × 4h/SP
+    expect(result.input.source).toBe('story_points');
+    expect(result.input.confidence).toBe('medium');
+  });
+
+  it('skips task with no time data at all', () => {
+    const result = deriveTaskCogs(
+      makeTask({ hoursActual: null, hoursEstimated: null, storyPoints: null }),
+      HIGH_RATE, 1.0, null
+    );
+    expect(result.kind).toBe('skip');
+    if (result.kind !== 'skip') return;
+    expect(result.reason).toBe('no_time_data');
+  });
+
+  it('cancelled task with hoursActual → overhead/cancelled_task (waste)', () => {
+    const result = deriveTaskCogs(makeTask({ status: 'cancelled' }), HIGH_RATE, 1.3, null);
+    expect(result.kind).toBe('ok');
+    if (result.kind !== 'ok') return;
+    expect(result.input.category).toBe('overhead');
+    expect(result.input.subcategory).toBe('cancelled_task');
+  });
+
+  it('cancelled task with no hours → skip', () => {
+    const result = deriveTaskCogs(
+      makeTask({ status: 'cancelled', hoursActual: null, hoursEstimated: null, storyPoints: null }),
+      HIGH_RATE, 1.0, null
+    );
+    expect(result.kind).toBe('skip');
+    if (result.kind !== 'skip') return;
+    expect(result.reason).toBe('cancelled_no_hours');
+  });
+
+  it('in_progress task → skipped', () => {
+    const result = deriveTaskCogs(makeTask({ status: 'in_progress' }), HIGH_RATE, 1.0, null);
+    expect(result.kind).toBe('skip');
+  });
+
+  it('no rate → kind: no_rate, totalCost: 0, confidence: low', () => {
+    const result = deriveTaskCogs(makeTask(), NO_RATE, 1.3, null);
+    expect(result.kind).toBe('no_rate');
+    if (result.kind !== 'no_rate') return;
+    expect(result.input.totalCost).toBe(0);
+    expect(result.input.confidence).toBe('low');
   });
 });

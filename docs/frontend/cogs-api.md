@@ -14,6 +14,7 @@ O módulo COGS (Cost of Goods Sold) registra o custo de engenharia de tasks, epi
 
 - **Inseridos manualmente** — taxa horária × horas trabalhadas × fator de overhead
 - **Estimados por story points** — baseado na velocidade histórica do time (horas/SP)
+- **Derivados automaticamente de iniciativas** — a partir de tasks concluídas/canceladas, usando `hours_actual` ou fallback por SP
 - **Futuramente sincronizados** — de integrações de time-tracking (Harvest, Toggl, etc.)
 
 O módulo também suporta **orçamentos por período** (mensal ou trimestral) e o cálculo de **burn rate** em tempo real.
@@ -32,6 +33,8 @@ O módulo também suporta **orçamentos por período** (mensal ou trimestral) e 
 | `/cogs/budgets` | `POST` | `cogs.budget.manage` |
 | `/cogs/budgets` | `GET` | `cogs.read` |
 | `/cogs/burn-rate` | `GET` | `cogs.read` |
+| `/cogs/initiatives/:project_id/generate` | `POST` | `cogs.write` |
+| `/cogs/initiatives/:project_id/summary` | `GET` | `cogs.read` |
 
 ---
 
@@ -730,6 +733,14 @@ Indica a qualidade/confiabilidade do dado de custo.
 4. GET /cogs/entries?project_id=<id>&limit=20            → tabela detalhada de entries
 ```
 
+### Custo de uma iniciativa (derivação automática)
+
+```
+1. POST /cogs/initiatives/:project_id/generate           → derivar/atualizar COGS de todas as tasks
+2. GET  /cogs/initiatives/:project_id/summary            → resumo: delivery cost, waste cost, por epic
+3. GET  /cogs/entries?project_id=<id>&superseded=true    → auditoria de entradas recalculadas
+```
+
 ### Detalhe de Epic (visão CTO)
 
 ```
@@ -762,3 +773,184 @@ Indica a qualidade/confiabilidade do dado de custo.
 | `data.data` nas listagens | Código mais verboso | Mover para `data.items` em v2 |
 | `hourly_rate: 0` no `/estimate` | `totalCost: 0` sempre | Resolver rate do user no servidor em v2 |
 | Sin paginação no `/budgets` | Pode crescer sem controle | Adicionar cursor em v2 |
+
+---
+
+## Endpoints de Iniciação de COGS por Iniciativa
+
+Esses endpoints derivam COGS automaticamente das tasks de uma iniciativa (`is_initiative: true`), eliminando lançamento manual para times sem timetracking integrado.
+
+---
+
+### POST /cogs/initiatives/:project_id/generate
+
+Derivan COGS para todas as tasks terminais (status `done` ou `cancelled` com horas) da iniciativa.
+
+**Permissão:** `cogs.write`
+
+**Comportamento:**
+- Tasks `done` → entry com `category: engineering`
+- Tasks `cancelled` com `hours_actual > 0` → entry com `category: overhead`, `subcategory: cancelled_task` (custo de desperdício)
+- Tasks `cancelled` sem horas → skip
+- Se já existe entry derivada ativa para a task, a anterior recebe `superseded_at` e uma nova é criada com `revision + 1`
+- Se nenhum `hourly_rate` configurado no user ou time: entry criada com `total_cost: 0`, `confidence: low` e nota de auditoria (outcome: `no_rate`)
+
+**Prioridade de taxa horária:**
+1. `user.hourly_rate` (assignee da task)
+2. `team.hourly_rate` (time do projeto)
+3. Sem taxa → outcome `no_rate`
+
+**Prioridade de horas:**
+1. `hours_actual` → `source: timetracking`, `confidence: high`
+2. `hours_estimated` → `source: estimate`, `confidence: low`
+3. `story_points × velocity` → `source: story_points`, `confidence: medium`
+4. Sem dado → skip
+
+#### URL Params
+
+| Param | Tipo | Descrição |
+|---|---|---|
+| `project_id` | string (UUID) | ID da iniciativa |
+
+#### Request Body
+
+| Campo | Tipo | Obrigatório | Padrão | Observação |
+|---|---|---|---|---|
+| `overhead_rate` | number (1–10) | ❌ | `1.3` | Multiplicador de overhead. `1.3` = 30% de overhead sobre o custo direto |
+
+#### Request Example
+
+```json
+{ "overhead_rate": 1.3 }
+```
+
+#### Response — 200 OK
+
+```json
+{
+  "data": {
+    "results": [
+      { "taskId": "task-1", "outcome": "created" },
+      { "taskId": "task-2", "outcome": "recreated" },
+      { "taskId": "task-3", "outcome": "skipped", "reason": "cancelled_no_hours" },
+      { "taskId": "task-4", "outcome": "no_rate", "warning": "no_rate_configured" }
+    ],
+    "stats": {
+      "created": 1,
+      "recreated": 1,
+      "skipped": 1,
+      "no_rate": 1
+    }
+  },
+  "meta": { "request_id": "req-5a", "version": "v1", "timestamp": "2026-04-12T10:00:00.000Z" },
+  "error": null
+}
+```
+
+> **`outcome` possíveis:**
+> - `created` — entry nova criada
+> - `recreated` — entry anterior supersedida, nova criada (task foi reaberta e reconcluída)
+> - `skipped` — não gerou entry; ver `reason`
+> - `no_rate` — entry criada com `total_cost: 0` por falta de taxa horária configurada
+>
+> **`reason` quando `skipped`:**
+> - `task_not_found` — task não existe
+> - `task_not_terminal` — task não está em status terminal
+> - `cancelled_no_hours` — cancelada sem horas registradas
+> - `no_time_data` — sem `hours_actual`, `hours_estimated` nem story points
+>
+> **Idempotência:** seguro chamar várias vezes. Tasks que já têm entry ativa são recalculadas com `outcome: recreated`. Para tasks sem mudança real nos dados, o custo da nova entry será idêntico ao anterior.
+
+#### Erros
+
+| Status | Code | Quando |
+|---|---|---|
+| 400 | `BAD_REQUEST` | `project_id` inválido ou `overhead_rate` fora do range |
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Sem `cogs.write` |
+| 404 | `NOT_FOUND` | Projeto não existe ou não é uma iniciativa (`is_initiative: false`) |
+
+---
+
+### GET /cogs/initiatives/:project_id/summary
+
+Resumo consolidado de COGS da iniciativa: custo de entrega vs. custo de desperdício, distribuição de confiança, and breakdown por epic.
+
+**Permissão:** `cogs.read`
+
+**Caso de uso:** dashboard executivo da iniciativa — widget de custo total, % de waste, custo por epic.
+
+> Considera apenas entries **ativas** (não supersedidas) e **derivadas** (`is_derived: true`). Entries manuais não entram neste summary.
+
+#### URL Params
+
+| Param | Tipo | Descrição |
+|---|---|---|
+| `project_id` | string (UUID) | ID da iniciativa |
+
+#### Response — 200 OK
+
+```json
+{
+  "data": {
+    "project_id": "fe4a4ed2-edc3-4155-a436-c92f6cf44d0b",
+    "project_name": "Platform Core",
+    "project_status": "active",
+    "total_cost": 15000,
+    "delivery_cost": 13000,
+    "waste_cost": 2000,
+    "waste_percent": 13.33,
+    "total_hours": 150,
+    "delivery_hours": 130,
+    "waste_hours": 20,
+    "entry_count": 25,
+    "confidence_distribution": {
+      "high": 20,
+      "medium": 3,
+      "low": 2
+    },
+    "by_epic": {
+      "epic-id-1": {
+        "total_cost": 8000,
+        "hours": 80,
+        "delivery_cost": 7000,
+        "waste_cost": 1000
+      },
+      "__project": {
+        "total_cost": 7000,
+        "hours": 70,
+        "delivery_cost": 6000,
+        "waste_cost": 1000
+      }
+    }
+  },
+  "meta": { "request_id": "req-5b", "version": "v1", "timestamp": "2026-04-12T10:00:00.000Z" },
+  "error": null
+}
+```
+
+> **`waste_percent`:** `(waste_cost / total_cost) × 100`. Times com alta % de waste têm problemas de cancelamento/replanejamento.
+>
+> **`confidence_distribution`:** quantas entries de cada nível de confiança. Use para alertar o usuário quando a maioria das entries é `low` (poucos dados reais de horas).
+>
+> **`by_epic`:** chave `__project` agrupa tasks sem epic associado.
+>
+> **Entries supersedidas:** não entram no cálculo. Use `GET /cogs/entries?project_id=X&superseded=true` para audit trail de recalculações.
+
+#### Erros
+
+| Status | Code | Quando |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Sem `cogs.read` |
+| 404 | `NOT_FOUND` | Projeto não existe ou não é uma iniciativa |
+
+---
+
+### GET /cogs/entries (atualização: filtro `superseded`)
+
+Além dos filtros existentes, agora suporta filtro de auditoria:
+
+| Param | Tipo | Observação |
+|---|---|---|
+| `superseded` | `true` \| `false` | `true` = apenas entries supersedidas (histórico); `false` = apenas ativas; omitir = todas |

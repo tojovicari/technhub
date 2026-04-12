@@ -27,6 +27,9 @@ Cada registro representa um custo associado a um período, vinculado opcionalmen
 | `category`      | enum        | `engineering` \| `overhead` \| `tooling` \| `cloud` \| `other` |
 | `source`        | enum        | `timetracking` \| `story_points` \| `estimate` \| `manual`    |
 | `confidence`    | enum        | `high` \| `medium` \| `low`                                   |
+| `is_derived`    | boolean     | `true` = gerado automaticamente da task; `false` = manual      |
+| `revision`      | int         | Incrementa a cada re-geração (task reaberta e re-concluída)    |
+| `superseded_at` | timestamp?  | Preenchido quando uma revisão mais nova substitui esta entrada  |
 | `notes`         | string?     |                                                                |
 | `approved_by`   | UUID?       | FK → User (para entradas manuais ou estimativas)               |
 | `created_at`    | timestamp   |                                                                |
@@ -60,6 +63,52 @@ Nem todo time usa timetracking. O sistema suporta diferentes abordagens de apura
 - Se nenhuma informação granular disponível: custo total do time / período ÷ tasks no período
 - Menos preciso, útil como fallback
 - Confiança: `low`
+
+---
+
+## Derivação Automática por Iniciativa
+
+Iniciativas (projetos com `is_initiative: true`) permitem **deriva automática de COGS** a partir das tasks concluídas ou canceladas. Isso elimina o lançamento manual para times que ainda não têm timetracking integrado.
+
+### Trigger
+
+A derivação ocorre quando a task muda de status para `done` ou `cancelled`. Um endpoint on-demand permite re-gerar toda a iniciativa.
+
+### Resolução de taxa horária
+
+Prioridade:
+1. `user.hourly_rate` — taxa individual configurada pelo manager
+2. `team.hourly_rate` — taxa fallback do time ao qual o assignee pertence
+3. **Sem taxa** — entry é criada com `total_cost: 0`, `confidence: low` e nota explicativa (auditável, não silencioso)
+
+### Prioridade de horas por task
+
+| Dado disponível | `source` | `confidence` |
+|---|---|---|
+| `hours_actual > 0` | `timetracking` | `high` |
+| `hours_estimated > 0` | `estimate` | `low` |
+| `story_points × velocity` | `story_points` | `medium` |
+| Nenhum | — | skip |
+
+`velocity` = média de `hours_actual / story_points` das últimas 30 tasks concluídas no projeto.
+
+### Tratamento de tarefas canceladas (Cost of Waste)
+
+Tasks canceladas **com `hours_actual > 0`** geram COGS como custo de desperdício:
+- `category: overhead`
+- `subcategory: cancelled_task`
+
+Tasks canceladas **sem nenhuma hora registrada** são ignoradas (nenhum custo foi incorrido).
+
+Isso permite surfaçar o *cost of waste* — horas investidas em trabalho descartado — como métrica separada do custo de entrega.
+
+### Re-geração ao reabrir tasks
+
+Se uma task volta de `done` para `in_progress` e depois é concluída novamente, o sistema:
+1. Marca a entrada anterior com `superseded_at = now()`
+2. Cria nova entrada com `revision = N+1` e `metadata.previous_entry_id`
+
+Entradas supersedidas são preservadas para auditoria e consultáveis via `GET /cogs/entries?superseded=true`.
 
 ---
 

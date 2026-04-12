@@ -35,11 +35,10 @@ type CanonicalTaskType = 'feature' | 'bug' | 'chore' | 'spike' | 'tech_debt';
 function resolveTaskType(
   labels: string[],
   typeMapping?: Record<string, string>,
+  fallbackOriginalType = 'unlabeled',
 ): { taskType: CanonicalTaskType | null; originalType: string } {
-  // originalType for GitHub is the first matching label that implies a type, or "unlabeled"
-  const l = labels.map(s => s.toLowerCase());
-
-  // 1. Tenant-configured de-para: check each label against the mapping
+  // Only tenant-configured mapping determines taskType — no built-in heuristics.
+  // This gives the tenant full control over classification via the type-mapping API.
   if (typeMapping) {
     for (const label of labels) {
       const mapped = typeMapping[label] as CanonicalTaskType | undefined;
@@ -47,31 +46,8 @@ function resolveTaskType(
     }
   }
 
-  // 2. Built-in heuristics
-  if (l.some(s => s === 'bug' || s === 'defect' || s === 'fix')) {
-    const orig = labels.find(s => ['bug', 'defect', 'fix'].includes(s.toLowerCase())) ?? 'bug';
-    return { taskType: 'bug', originalType: orig };
-  }
-  if (l.some(s => s.includes('tech-debt') || s.includes('technical-debt') || s === 'refactor')) {
-    const orig = labels.find(s => s.toLowerCase().includes('tech') || s.toLowerCase() === 'refactor') ?? 'tech-debt';
-    return { taskType: 'tech_debt', originalType: orig };
-  }
-  if (l.some(s => s === 'spike' || s === 'research' || s === 'investigation')) {
-    const orig = labels.find(s => ['spike', 'research', 'investigation'].includes(s.toLowerCase())) ?? 'spike';
-    return { taskType: 'spike', originalType: orig };
-  }
-  if (l.some(s => s === 'chore' || s === 'maintenance' || s === 'ci' || s === 'deps')) {
-    const orig = labels.find(s => ['chore', 'maintenance', 'ci', 'deps'].includes(s.toLowerCase())) ?? 'chore';
-    return { taskType: 'chore', originalType: orig };
-  }
-  if (l.some(s => s === 'feature' || s === 'enhancement' || s === 'improvement')) {
-    const orig = labels.find(s => ['feature', 'enhancement', 'improvement'].includes(s.toLowerCase())) ?? 'feature';
-    return { taskType: 'feature', originalType: orig };
-  }
-
-  // 3. No match — log and return null taskType
-  const originalType = labels[0] ?? 'unlabeled';
-  console.warn(`[github] No type match for labels [${labels.join(', ')}] — task saved without canonical taskType`);
+  // No mapping match — originalType is the first label (mapeável via API) or the fallback
+  const originalType = labels[0] ?? fallbackOriginalType;
   return { taskType: null, originalType };
 }
 
@@ -280,6 +256,7 @@ async function syncIssues(
         description: issue.body ?? undefined,
         taskType: taskType ?? undefined,
         originalType,
+        connectionId,
         status,
         assigneeId,
         epicId,
@@ -299,6 +276,8 @@ async function syncPullRequests(
   org: string,
   repoName: string,
   projectId: string,
+  connectionId: string,
+  typeMapping: Record<string, string> | undefined,
   since?: string,
 ): Promise<number> {
   const prs = await octokit.paginate(octokit.pulls.list, {
@@ -325,27 +304,44 @@ async function syncPullRequests(
       assigneeId = user?.id;
     }
 
+    const prLabels = (pr.labels ?? []).map((l: { name?: string } | string) =>
+      typeof l === 'string' ? l : (l.name ?? '')
+    ).filter(Boolean);
+    const { taskType: prTaskType, originalType: prOriginalType } = resolveTaskType(
+      prLabels,
+      typeMapping,
+      'pull_request',
+    );
+    const prPriority = resolveTaskPriority(prLabels);
+
     const prTask = await prisma.task.upsert({
       where: { tenantId_source_sourceId: { tenantId, source: 'github', sourceId } },
       create: {
         tenantId,
         projectId,
+        connectionId,
         source: 'github',
         sourceId,
         title: pr.title,
         description: pr.body ?? undefined,
-        taskType: 'feature',
-        priority: 'P2',
+        taskType: prTaskType ?? undefined,
+        originalType: prOriginalType,
+        priority: prPriority,
         status,
         assigneeId,
         startedAt: new Date(pr.created_at),
         completedAt: pr.merged_at ? new Date(pr.merged_at) : undefined,
+        tags: prLabels,
       },
       update: {
         title: pr.title,
+        taskType: prTaskType ?? undefined,
+        originalType: prOriginalType,
+        connectionId,
         status,
         assigneeId,
         completedAt: pr.merged_at ? new Date(pr.merged_at) : undefined,
+        tags: prLabels,
       },
     });
   }
@@ -402,7 +398,7 @@ export class GithubConnector implements IntegrationConnector {
     for (const { id: projectId, repoName } of projects) {
       synced += await syncMilestones(octokit, input.tenantId, org, repoName, projectId);
       synced += await syncIssues(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
-      synced += await syncPullRequests(octokit, input.tenantId, org, repoName, projectId, since);
+      synced += await syncPullRequests(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
     }
 
     return {

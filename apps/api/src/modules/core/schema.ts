@@ -6,6 +6,7 @@ export const createTeamSchema = z.object({
   description: z.string().optional(),
   lead_id: z.string().uuid().optional(),
   budget_quarterly: z.number().optional(),
+  hourly_rate: z.number().min(0).optional(),
   tags: z.array(z.string()).optional().default([])
 });
 
@@ -14,6 +15,7 @@ export const updateTeamSchema = z.object({
   description: z.string().nullable().optional(),
   lead_id: z.string().uuid().nullable().optional(),
   budget_quarterly: z.number().nullable().optional(),
+  hourly_rate: z.number().min(0).nullable().optional(),
   tags: z.array(z.string()).optional()
 });
 
@@ -95,6 +97,7 @@ export const createUserSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(1),
   role: z.string().min(1),
+  hourly_rate: z.number().min(0).nullable().optional(),
   external_id: z.string().optional()
 });
 

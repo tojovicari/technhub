@@ -36,6 +36,7 @@ export async function createTeam(input: CreateTeamInput) {
       description: input.description,
       leadId: input.lead_id,
       budgetQuarterly: input.budget_quarterly,
+      hourlyRate: input.hourly_rate,
       tags: input.tags
     }
   });
@@ -54,6 +55,7 @@ export async function updateTeam(teamId: string, tenantId: string, input: Update
       description: input.description === undefined ? undefined : input.description,
       leadId: input.lead_id === undefined ? undefined : input.lead_id,
       budgetQuarterly: input.budget_quarterly === undefined ? undefined : input.budget_quarterly,
+      hourlyRate: input.hourly_rate === undefined ? undefined : input.hourly_rate,
       tags: input.tags
     }
   });
@@ -293,11 +295,13 @@ export async function upsertUser(input: CreateUserInput) {
       tenantId: input.tenant_id,
       email: input.email,
       fullName: input.full_name,
-      role: input.role
+      role: input.role,
+      hourlyRate: input.hourly_rate
     },
     update: {
       fullName: input.full_name,
-      role: input.role
+      role: input.role,
+      ...(input.hourly_rate !== undefined && { hourlyRate: input.hourly_rate })
     }
   });
 }

@@ -43,7 +43,9 @@ vi.mock('./service.js', () => ({
   createCogsBudget: vi.fn(),
   listCogsBudgets: vi.fn(),
   getBurnRate: vi.fn(),
-  getEpicCogsAnalysis: vi.fn()
+  getEpicCogsAnalysis: vi.fn(),
+  generateInitiativeCogs: vi.fn(),
+  getInitiativeCogsSummary: vi.fn()
 }));
 
 import { buildApp } from '../../app.js';
@@ -56,6 +58,7 @@ const TENANT = 'ten_test';
 const ENTRY_ID = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
 const EPIC_ID  = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
 const BUDGET_ID = 'cccccccc-cccc-4ccc-cccc-cccccccccccc';
+const PROJECT_ID = 'dddddddd-dddd-4ddd-dddd-dddddddddddd';
 
 function makeEntry(overrides: Record<string, unknown> = {}) {
   return {
@@ -342,6 +345,131 @@ describe('COGS routes', () => {
 
     it('401: no token', async () => {
       const res = await app.inject({ method: 'GET', url: '/api/v1/cogs/burn-rate?period=2026-Q2' });
+      expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── POST /cogs/initiatives/:project_id/generate ────────────────────────
+
+  describe('POST /api/v1/cogs/initiatives/:project_id/generate', () => {
+    it('200: returns generation stats', async () => {
+      vi.mocked(cogsSvc.generateInitiativeCogs).mockResolvedValueOnce({
+        results: [
+          { taskId: 'task-1', outcome: 'created' },
+          { taskId: 'task-2', outcome: 'skipped', reason: 'cancelled_no_hours' }
+        ],
+        stats: { created: 1, recreated: 0, skipped: 1, no_rate: 0 }
+      } as any);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/cogs/initiatives/${PROJECT_ID}/generate`,
+        headers: { authorization: `Bearer ${token}` },
+        body: { overhead_rate: 1.3 }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.stats.created).toBe(1);
+      expect(cogsSvc.generateInitiativeCogs).toHaveBeenCalledWith(TENANT, PROJECT_ID, 1.3);
+    });
+
+    it('200: uses default overhead_rate when body is empty', async () => {
+      vi.mocked(cogsSvc.generateInitiativeCogs).mockResolvedValueOnce({
+        results: [], stats: { created: 0, recreated: 0, skipped: 0, no_rate: 0 }
+      } as any);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/cogs/initiatives/${PROJECT_ID}/generate`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(cogsSvc.generateInitiativeCogs).toHaveBeenCalledWith(TENANT, PROJECT_ID, 1.3);
+    });
+
+    it('404: initiative not found', async () => {
+      vi.mocked(cogsSvc.generateInitiativeCogs).mockRejectedValueOnce(new Error('INITIATIVE_NOT_FOUND'));
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/cogs/initiatives/${PROJECT_ID}/generate`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('400: invalid overhead_rate', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/cogs/initiatives/${PROJECT_ID}/generate`,
+        headers: { authorization: `Bearer ${token}` },
+        body: { overhead_rate: 0.5 } // below min 1
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('401: no token', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/cogs/initiatives/${PROJECT_ID}/generate`
+      });
+      expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── GET /cogs/initiatives/:project_id/summary ─────────────────────────
+
+  describe('GET /api/v1/cogs/initiatives/:project_id/summary', () => {
+    it('200: returns initiative cost summary', async () => {
+      vi.mocked(cogsSvc.getInitiativeCogsSummary).mockResolvedValueOnce({
+        project_id: PROJECT_ID,
+        project_name: 'Platform Core',
+        project_status: 'active',
+        total_cost: 15000,
+        delivery_cost: 13000,
+        waste_cost: 2000,
+        waste_percent: 13.33,
+        total_hours: 150,
+        delivery_hours: 130,
+        waste_hours: 20,
+        entry_count: 25,
+        confidence_distribution: { high: 20, medium: 3, low: 2 },
+        by_epic: { 'epic-1': { total_cost: 8000, hours: 80, delivery_cost: 7000, waste_cost: 1000 } }
+      } as any);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/cogs/initiatives/${PROJECT_ID}/summary`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      const body = res.json().data;
+      expect(body.total_cost).toBe(15000);
+      expect(body.waste_cost).toBe(2000);
+      expect(body.waste_percent).toBe(13.33);
+      expect(body.confidence_distribution.high).toBe(20);
+    });
+
+    it('404: non-initiative project', async () => {
+      vi.mocked(cogsSvc.getInitiativeCogsSummary).mockResolvedValueOnce(null);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/cogs/initiatives/${PROJECT_ID}/summary`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('401: no token', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/cogs/initiatives/${PROJECT_ID}/summary`
+      });
       expect(res.statusCode).toBe(401);
     });
   });

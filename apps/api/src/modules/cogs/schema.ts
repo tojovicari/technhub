@@ -114,3 +114,24 @@ export const estimateFromSpSchema = z.object({
 });
 
 export type EstimateFromSpInput = z.infer<typeof estimateFromSpSchema>;
+
+// ── Initiative generation ─────────────────────────────────────────────────────
+
+export const initiativeParamsSchema = z.object({
+  project_id: z.string().uuid()
+});
+
+export const initiativeGenerateBodySchema = z.object({
+  overhead_rate: z.number().min(1).max(10).default(1.3)
+});
+
+export type InitiativeGenerateBody = z.infer<typeof initiativeGenerateBodySchema>;
+
+// ── List entries (superseded audit filter) ────────────────────────────────────
+
+export const listCogsEntriesAuditQuerySchema = listCogsEntriesQuerySchema.extend({
+  superseded: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => (v === 'true' ? true : v === 'false' ? false : undefined))
+});
