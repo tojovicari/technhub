@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: CTO.ai Integrations API
+  title: moasy.tech Integrations API
   version: 1.0.0
   description: Tenant-scoped integration connections and sync jobs with secure secret handling.
 servers:

@@ -2,7 +2,7 @@
 
 ## Visão Geral
 
-O CTO.ai roda como **monolito modular** no Fly.io: um único app Node.js + Fastify com todos os módulos no mesmo processo, banco Postgres gerenciado pelo Fly.
+O moasy.tech roda como **monolito modular** no Fly.io: um único app Node.js + Fastify com todos os módulos no mesmo processo, banco Postgres gerenciado pelo Fly.
 
 Essa estratégia cobre:
 - Infraestrutura mínima (Fase 1)

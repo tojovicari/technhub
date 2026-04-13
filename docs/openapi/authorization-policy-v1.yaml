@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: CTO.ai Authorization Policy API
+  title: moasy.tech Authorization Policy API
   version: 1.0.0
   description: |
     Cross-module authorization contract for backend enforcement.

@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
-  title: CTO.ai Auth API
+  title: moasy.tech Auth API
   version: 1.0.0
   description: |
-    Platform authentication for CTO.ai users (CTOs, Tech Managers, viewers).
+    Platform authentication for moasy.tech users (CTOs, Tech Managers, viewers).
     Separate from `core/users`, which represents integration-sourced collaborators.
     Uses email + password with JWT access tokens and rotating refresh tokens.
 servers:

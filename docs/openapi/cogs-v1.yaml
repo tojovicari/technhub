@@ -1,6 +1,6 @@
 openapi: '3.1.0'
 info:
-  title: CTO.ai – COGS (Cost of Goods Sold) API
+  title: moasy.tech – COGS (Cost of Goods Sold) API
   version: '1.0.0'
   description: |
     REST API for recording engineering cost entries, computing rollups and burn-rate,

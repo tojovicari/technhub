@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: CTO.ai — SLA API
+  title: moasy.tech — SLA API
   version: v1
   description: |
-    SLA Templates and Instances for CTO.ai.
+    SLA Templates and Instances for moasy.tech.
     Defines compliance rules per task type/priority, evaluates breaches, and exposes dashboard data.
 
 servers:

@@ -181,9 +181,9 @@ SMTP_HOST=sandbox.smtp.mailtrap.io   # qualquer SMTP em prod (ex: smtp.sendgrid.
 SMTP_PORT=2525                       # 587 ou 465 em prod
 SMTP_USER=your-smtp-user
 SMTP_PASS=your-smtp-password
-COMMS_FROM_EMAIL=no-reply@cto.ai
-COMMS_FROM_NAME=CTO.ai
-APP_BASE_URL=https://app.cto.ai
+COMMS_FROM_EMAIL=no-reply@moasy.tech
+COMMS_FROM_NAME=moasy.tech
+APP_BASE_URL=https://app.moasy.tech
 COMMS_WORKER_INTERVAL_MS=5000
 ```
 

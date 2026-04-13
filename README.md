@@ -1,4 +1,4 @@
-# CTO.ai — Plataforma de Gestão de Área de Tech
+# moasy.tech — Plataforma de Gestão de Área de Tech
 
 > Centraliza dados de JIRA e GitHub para fornecer **visibilidade operacional e estratégica** em tempo real para Tech Managers, CTOs e lideranças técnicas.
 
@@ -13,7 +13,7 @@ Líderes de tecnologia tomam decisões com dados fragmentados:
 - SLAs em outro sistema
 - DORA metrics... em nenhum lugar
 
-O CTO.ai unifica tudo isso em uma plataforma modular, extensível e orientada a decisão.
+O moasy.tech unifica tudo isso em uma plataforma modular, extensível e orientada a decisão.
 
 ---
 
@@ -31,7 +31,7 @@ O CTO.ai unifica tudo isso em uma plataforma modular, extensível e orientada a 
 ## Estrutura do Projeto
 
 ```
-cto_ai/
+moasy_tech/
 ├── README.md                   ← você está aqui
 ├── SISTEMA_GESTAO_TECH.md      ← documento original de planejamento
 ├── .github/
@@ -155,7 +155,7 @@ npm run db:up
 ```
 
 Opcao B (Postgres local ja instalado):
-- garantir um banco `cto_ai` local
+- garantir um banco `moasy_tech` local
 - manter `DATABASE_URL` no [apps/api/.env](apps/api/.env)
 
 ### 4) Controle de datamodel e migration

@@ -136,7 +136,7 @@ O campo `condition` é avaliado na ordem de prioridade do template (`priority` n
 ## Tipos do Provider e Normalização de Tipos
 
 Cada provider (Jira, GitHub) tem seus próprios tipos de issue — `Incident`, `Security Finding`,
-`Customer Request`, etc. — que não existem no enum canônico do CTO.ai (`bug`, `feature`, `chore`,
+`Customer Request`, etc. — que não existem no enum canônico do moasy.tech (`bug`, `feature`, `chore`,
 `spike`, `tech_debt`). O sistema resolve isso com dois mecanismos complementares:
 
 ### `original_type` — o tipo exato do provider
@@ -360,7 +360,7 @@ atualizada a cada evento `core.task.updated.v1` recebido. Nunca acessa a tabela 
 | `title`       | string  | Título da task no provider             |
 | `assignee_id` | UUID?   | ID do usuário responsável              |
 | `priority`    | string  | Prioridade (P0–P4)                     |
-| `project_id`  | UUID    | Projeto canônico no CTO.ai             |
+| `project_id`  | UUID    | Projeto canônico no moasy.tech             |
 
 ---
 
@@ -890,7 +890,7 @@ mínimo monitorado. Evita que tasks fiquem sem SLA por omissão.
 | `priority`      | Jira priority / GitHub milestone label | `{ "field": "priority", "op": "in", "value": ["P0","P1"] }` |
 | `labels`        | Jira labels / GitHub labels | `{ "field": "labels", "op": "contains", "value": "production" }` |
 | `component`     | Jira component / GitHub team label | `{ "field": "component", "op": "in", "value": ["payments"] }` |
-| `project_id`    | Projeto canônico no CTO.ai | filtrado via `project_ids` no template |
+| `project_id`    | Projeto canônico no moasy.tech | filtrado via `project_ids` no template |
 | `source`        | `"jira"` ou `"github"` | `{ "field": "source", "op": "eq", "value": "jira" }` |
 | `status`        | Status normalizado da task | controla quando o clock inicia (`in_progress`) e para (`done`) |
 

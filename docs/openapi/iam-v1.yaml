@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: CTO.ai IAM API
+  title: moasy.tech IAM API
   version: 1.0.0
   description: Tenant-scoped IAM for roles, permission profiles, and user assignments.
 servers:

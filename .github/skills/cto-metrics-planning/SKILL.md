@@ -1,6 +1,6 @@
 ---
 name: cto-metrics-planning
-description: "Use when defining DORA, SLA, COGS, and health metric plans, scorecards, and executive decision views for CTO.ai"
+description: "Use when defining DORA, SLA, COGS, and health metric plans, scorecards, and executive decision views for moasy.tech"
 ---
 
 # Skill: CTO Metrics Planning

@@ -1033,4 +1033,4 @@ List all users in the tenant.
 |---|---|
 | `jira` | Synced from Jira |
 | `github` | Synced from GitHub |
-| `manual` | Created directly in CTO.ai |
+| `manual` | Created directly in moasy.tech |

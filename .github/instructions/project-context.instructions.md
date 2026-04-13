@@ -1,12 +1,12 @@
 ---
 applyTo: "**"
-description: "Use when planning, implementing, or reviewing features in CTO.ai; provides domain context, priorities, and architectural constraints"
+description: "Use when planning, implementing, or reviewing features in moasy.tech; provides domain context, priorities, and architectural constraints"
 ---
 
 # Project Context
 
 ## Product Intent
-CTO.ai centralizes operational and strategic engineering data for technical leadership.
+moasy.tech centralizes operational and strategic engineering data for technical leadership.
 Audience: CTOs, Tech Managers, Staff+ engineers, and finance partners.
 
 ## Priority Outcomes

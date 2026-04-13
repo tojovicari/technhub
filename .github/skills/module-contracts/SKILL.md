@@ -1,6 +1,6 @@
 ---
 name: module-contracts
-description: "Use when designing or reviewing interactions between modules, API/event contracts, ownership boundaries, and compatibility strategy in CTO.ai"
+description: "Use when designing or reviewing interactions between modules, API/event contracts, ownership boundaries, and compatibility strategy in moasy.tech"
 ---
 
 # Skill: Module Contracts

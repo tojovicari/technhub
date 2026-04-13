@@ -1,6 +1,6 @@
 openapi: '3.1.0'
 info:
-  title: CTO.ai – Intelligence & Forecasting API
+  title: moasy.tech – Intelligence & Forecasting API
   version: '1.0.0'
   description: |
     REST API for predictive analytics and actionable recommendations.

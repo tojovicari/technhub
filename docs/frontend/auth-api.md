@@ -8,9 +8,9 @@
 
 ## Overview
 
-The Auth module handles **platform user authentication** — the people who log in to use CTO.ai (CTOs, Tech Managers, viewers).
+The Auth module handles **platform user authentication** — the people who log in to use moasy.tech (CTOs, Tech Managers, viewers).
 
-> **Important distinction:** `core/users` represents integration-sourced collaborators (devs pulled from GitHub/Jira). Platform accounts (`auth/*`) are the humans operating the CTO.ai dashboard. These are two separate entities.
+> **Important distinction:** `core/users` represents integration-sourced collaborators (devs pulled from GitHub/Jira). Platform accounts (`auth/*`) are the humans operating the moasy.tech dashboard. These are two separate entities.
 
 **Key concepts:**
 - Registration creates a `PlatformAccount` with hashed password (no plaintext ever stored)

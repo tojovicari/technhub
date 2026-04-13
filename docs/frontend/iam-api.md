@@ -8,7 +8,7 @@
 
 ## Overview
 
-The IAM (Identity and Access Management) module manages **permission profiles** — named sets of permission keys that can be assigned to users. This is the RBAC layer for the entire CTO.ai platform.
+The IAM (Identity and Access Management) module manages **permission profiles** — named sets of permission keys that can be assigned to users. This is the RBAC layer for the entire moasy.tech platform.
 
 **Key concepts:**
 - A **Permission Profile** is a named group of permission keys (e.g. `["core.task.read", "dora.read"]`)

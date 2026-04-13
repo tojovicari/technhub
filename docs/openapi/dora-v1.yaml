@@ -1,6 +1,6 @@
 openapi: '3.1.0'
 info:
-  title: CTO.ai – DORA Metrics API
+  title: moasy.tech – DORA Metrics API
   version: '1.0.0'
   description: |
     REST API for ingesting deployment events, computing DORA metrics scorecard,

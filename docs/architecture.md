@@ -2,7 +2,7 @@
 
 ## Visão Geral
 
-O CTO.ai é dividido em camadas horizontais com responsabilidades bem definidas, permitindo que cada módulo evolua independentemente.
+O moasy.tech é dividido em camadas horizontais com responsabilidades bem definidas, permitindo que cada módulo evolua independentemente.
 
 Regra obrigatoria de boundary: modulos trocam dados somente por contratos versionados (API/eventos). Nenhum modulo le ou escreve diretamente no storage interno de outro modulo.
 

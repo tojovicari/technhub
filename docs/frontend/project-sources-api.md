@@ -8,7 +8,7 @@
 
 ## Overview
 
-A **ProjectSource** é o vínculo explícito entre um projeto CTO.ai e uma fonte externa de dados — um board do JIRA ou um repositório do GitHub.
+A **ProjectSource** é o vínculo explícito entre um projeto moasy.tech e uma fonte externa de dados — um board do JIRA ou um repositório do GitHub.
 
 Sem esse vínculo, o sistema não sabe de onde deve buscar epics, tasks, PRs e deploys para um projeto. Com ele, um único projeto pode agregar **múltiplos boards JIRA e múltiplos repos GitHub** ao mesmo tempo.
 

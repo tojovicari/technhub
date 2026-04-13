@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: CTO.ai Core API
+  title: moasy.tech Core API
   version: 1.0.0
   description: Tenant-scoped Core API for teams, projects, epics, tasks, users, and task dependencies.
 servers:

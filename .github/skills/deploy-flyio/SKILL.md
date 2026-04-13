@@ -1,6 +1,6 @@
 ---
 name: deploy-flyio
-description: "Use when planning, executing, or reviewing a Fly.io deployment for CTO.ai — covers Dockerfile, fly.toml, secrets, migrations, health checks, CI/CD, and rollback"
+description: "Use when planning, executing, or reviewing a Fly.io deployment for moasy.tech — covers Dockerfile, fly.toml, secrets, migrations, health checks, CI/CD, and rollback"
 ---
 
 # Skill: Deploy Fly.io

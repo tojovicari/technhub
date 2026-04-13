@@ -1,4 +1,4 @@
-# Copilot Instructions - CTO.ai
+# Copilot Instructions - moasy.tech
 
 ## Project Focus
 This project builds a modular platform for Tech Managers and CTOs.

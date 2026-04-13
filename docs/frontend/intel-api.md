@@ -8,7 +8,7 @@
 
 ## Overview
 
-The Intel module is the **read-only** predictive analytics layer of CTO.ai. It derives insights from data owned by Core, DORA, SLA, and COGS modules and exposes actionable forecasts, risk scores, anomaly reports, and recommendations for technical leadership.
+The Intel module is the **read-only** predictive analytics layer of moasy.tech. It derives insights from data owned by Core, DORA, SLA, and COGS modules and exposes actionable forecasts, risk scores, anomaly reports, and recommendations for technical leadership.
 
 **All routes require:** `intel.read` permission. No write operations exist in this module.
 

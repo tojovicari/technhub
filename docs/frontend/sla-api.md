@@ -482,7 +482,7 @@ Returns the same metrics as `/sla/summary` but broken down per template, sorted 
 | `labels` | string[] | Jira labels or GitHub issue labels |
 | `component` | string | Jira component or team label |
 | `source` | string | `"jira"` \| `"github"` |
-| `project_id` | string | Canonical project ID in CTO.ai |
+| `project_id` | string | Canonical project ID in moasy.tech |
 | `sprint_name` | string | Jira sprint name — use `contains` op |
 | `story_points` | number | Use `gte` / `lte` for range matching |
 

@@ -1,6 +1,6 @@
 ---
 name: contract-governance
-description: "Use when validating that API/event contracts, permissions, payload schemas, and docs remain consistent as modules evolve in CTO.ai"
+description: "Use when validating that API/event contracts, permissions, payload schemas, and docs remain consistent as modules evolve in moasy.tech"
 ---
 
 # Skill: Contract Governance

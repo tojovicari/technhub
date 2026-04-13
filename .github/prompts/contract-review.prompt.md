@@ -5,7 +5,7 @@ description: "Review a proposed feature for module-boundary safety and propose A
 
 # Contract Review Prompt
 
-Review this proposal under CTO.ai architecture constraints.
+Review this proposal under moasy.tech architecture constraints.
 
 Input:
 {{input:feature_or_change}}
