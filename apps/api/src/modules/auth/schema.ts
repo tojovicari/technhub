@@ -34,8 +34,21 @@ export const registerByInviteSchema = z.object({
   full_name: z.string().min(1)
 });
 
+export const updatePreferencesSchema = z.object({
+  locale: z.enum(['pt-BR', 'en-US', 'es-ES']).optional(),
+  theme: z.enum(['light', 'dark', 'system']).optional()
+}).refine(data => Object.keys(data).length > 0, {
+  message: 'At least one preference field must be provided'
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
 export type CreateInviteInput = z.infer<typeof createInviteSchema>;
 export type RegisterByInviteInput = z.infer<typeof registerByInviteSchema>;
+export type UpdatePreferencesInput = z.infer<typeof updatePreferencesSchema>;
+
+export type AccountPreferences = {
+  locale: 'pt-BR' | 'en-US' | 'es-ES';
+  theme: 'light' | 'dark' | 'system';
+};

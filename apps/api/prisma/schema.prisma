@@ -22,6 +22,7 @@ model Tenant {
   platformAccounts     PlatformAccount[]
   invites              Invite[]
   permissionProfiles   PermissionProfile[]
+  notifications        Notification[]
 }
 
 enum PlatformRole {
@@ -39,6 +40,7 @@ model PlatformAccount {
   role          PlatformRole           @default(viewer)
   isActive      Boolean                @default(true)
   coreUserId    String?                @unique
+  preferences   Json?
   lastLoginAt   DateTime?
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt
@@ -603,6 +605,36 @@ model CogsBudget {
   @@unique([tenantId, projectId, teamId, period])
   @@index([tenantId])
   @@index([tenantId, period])
+}
+
+// ── Comms Module ─────────────────────────────────────────────────────────────
+
+enum NotificationStatus {
+  queued
+  processing
+  sent
+  failed
+}
+
+model Notification {
+  id          String             @id @default(uuid())
+  tenantId    String
+  channel     String             // 'email' | 'slack' | 'whatsapp'
+  recipient   String
+  templateKey String
+  payload     Json
+  status      NotificationStatus @default(queued)
+  attempts    Int                @default(0)
+  lastError   String?
+  nextRetryAt DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  tenant      Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([status, nextRetryAt])
 }
 
 // ── IAM Module ────────────────────────────────────────────────────────────────

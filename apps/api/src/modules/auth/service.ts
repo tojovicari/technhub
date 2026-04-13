@@ -1,7 +1,17 @@
 import { createHash, randomBytes } from 'crypto';
 import { prisma } from '../../lib/prisma.js';
 import { hashPassword, verifyPassword } from '../../lib/password.js';
-import type { CreateInviteInput, LoginInput, RefreshInput, RegisterByInviteInput, RegisterInput } from './schema.js';
+import type { AccountPreferences, CreateInviteInput, LoginInput, RefreshInput, RegisterByInviteInput, RegisterInput, UpdatePreferencesInput } from './schema.js';
+
+function parsePreferences(raw: unknown): AccountPreferences | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const p = raw as Record<string, unknown>;
+  return {
+    locale: (p['locale'] as AccountPreferences['locale']) ?? 'pt-BR',
+    theme: (p['theme'] as AccountPreferences['theme']) ?? 'system'
+  };
+}
+import { enqueueNotification } from '../comms/service.js';
 
 const ACCESS_TOKEN_TTL = '1h';
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -113,7 +123,7 @@ export async function createInvite(tenantId: string, input: CreateInviteInput) {
     }
   });
 
-  return {
+  const result = {
     id: invite.id,
     tenant_id: invite.tenantId,
     email: invite.email,
@@ -121,6 +131,20 @@ export async function createInvite(tenantId: string, input: CreateInviteInput) {
     invite_token: rawToken,
     expires_at: invite.expiresAt.toISOString()
   };
+
+  await enqueueNotification({
+    tenantId:    tenantId,
+    channel:     'email',
+    recipient:   invite.email,
+    templateKey: 'invite',
+    payload:     {
+      email:        invite.email,
+      invite_token: rawToken,
+      expires_at:   invite.expiresAt.toISOString(),
+    },
+  });
+
+  return result;
 }
 
 export async function registerByInvite(input: RegisterByInviteInput) {
@@ -316,6 +340,24 @@ export async function getMe(accountId: string) {
     is_active: account.isActive,
     core_user_id: account.coreUserId ?? null,
     last_login_at: account.lastLoginAt?.toISOString() ?? null,
-    created_at: account.createdAt.toISOString()
+    created_at: account.createdAt.toISOString(),
+    preferences: parsePreferences(account.preferences)
   };
+}
+
+export async function updatePreferences(accountId: string, input: UpdatePreferencesInput) {
+  const account = await prisma.platformAccount.findUnique({ where: { id: accountId } });
+  if (!account || !account.isActive) {
+    throw Object.assign(new Error('Account not found'), { code: 'NOT_FOUND' });
+  }
+
+  const current = parsePreferences(account.preferences) ?? { locale: 'pt-BR' as const, theme: 'system' as const };
+  const merged: AccountPreferences = { ...current, ...input };
+
+  await prisma.platformAccount.update({
+    where: { id: accountId },
+    data: { preferences: merged }
+  });
+
+  return { preferences: merged };
 }

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
-import { loginSchema, refreshSchema, registerSchema, createInviteSchema, registerByInviteSchema } from './schema.js';
-import { getMe, login, logout, refresh, register, createInvite, registerByInvite } from './service.js';
+import { loginSchema, refreshSchema, registerSchema, createInviteSchema, registerByInviteSchema, updatePreferencesSchema } from './schema.js';
+import { getMe, login, logout, refresh, register, createInvite, registerByInvite, updatePreferences } from './service.js';
 
 export async function authRoutes(app: FastifyInstance) {
   // POST /auth/register
@@ -155,6 +155,33 @@ export async function authRoutes(app: FastifyInstance) {
       try {
         const account = await getMe(user.sub);
         return reply.status(200).send(ok(request, account));
+      } catch (err: unknown) {
+        const e = err as { code?: string };
+        if (e.code === 'NOT_FOUND') {
+          return reply.status(404).send(fail(request, 'NOT_FOUND', 'Account not found'));
+        }
+        throw err;
+      }
+    }
+  );
+
+  // PATCH /auth/me/preferences  (requires auth)
+  app.patch(
+    '/auth/me/preferences',
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const parsed = updatePreferencesSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send(
+          fail(request, 'BAD_REQUEST', 'Invalid preferences', { issues: parsed.error.issues })
+        );
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const user = request.user as any;
+      try {
+        const result = await updatePreferences(user.sub, parsed.data);
+        return reply.status(200).send(ok(request, result));
       } catch (err: unknown) {
         const e = err as { code?: string };
         if (e.code === 'NOT_FOUND') {

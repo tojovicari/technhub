@@ -223,7 +223,8 @@ describe('auth routes', () => {
     it('200 returns current account', async () => {
       vi.mocked(svc.getMe).mockResolvedValueOnce({
         ...makeAccount(),
-        last_login_at: null
+        last_login_at: null,
+        preferences: null
       });
 
       const res = await app.inject({

@@ -36,7 +36,8 @@ The Auth module handles **platform user authentication** — the people who log 
 | `POST` | `/auth/login` | public | Authenticate, receive tokens |
 | `POST` | `/auth/refresh` | public | Rotate refresh token |
 | `POST` | `/auth/logout` | 🔒 | Revoke refresh token |
-| `GET` | `/auth/me` | 🔒 | Get current account info |
+| `GET` | `/auth/me` | 🔒 | Get current account info (inclui `preferences`) |
+| `PATCH` | `/auth/me/preferences` | 🔒 | Update account preferences (locale, theme) |
 | `POST` | `/auth/invites` | 🔒 `iam.invite.manage` | Invite a user to the tenant |
 | `POST` | `/auth/register/invite` | public | Accept an invite and create account |
 
