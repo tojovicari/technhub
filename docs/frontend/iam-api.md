@@ -24,7 +24,11 @@ The IAM (Identity and Access Management) module manages **permission profiles** 
 |---|---|---|
 | `/iam/permission-profiles` | GET | `iam.permission_profile.read` |
 | `/iam/permission-profiles` | POST | `iam.permission_profile.manage` |
+| `/iam/permission-profiles/:profile_id` | GET | `iam.permission_profile.read` |
 | `/iam/permission-profiles/:profile_id` | PATCH | `iam.permission_profile.manage` |
+| `/iam/permission-profiles/:profile_id` | DELETE | `iam.permission_profile.manage` |
+| `/iam/permission-profiles/:profile_id/users` | GET | `iam.permission_profile.read` |
+| `/iam/users/:user_id/permission-profiles` | GET | `iam.permission_profile.read` |
 | `/iam/users/:user_id/permission-profiles` | POST | `iam.permission_profile.assign` |
 | `/iam/users/:user_id/permission-profiles/:profile_id` | DELETE | `iam.permission_profile.assign` |
 
@@ -89,6 +93,48 @@ List permission profiles for the tenant.
 ```
 
 > `permission_keys: ["*"]` means the profile grants all permissions (wildcard — typically reserved for admin).
+
+---
+
+### GET /iam/permission-profiles/:profile_id
+
+Fetch a single permission profile by ID.
+
+**Permission:** `iam.permission_profile.read`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `profile_id` | string | Profile ID |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "id": "profile-engineer",
+    "tenant_id": "tenant-7a4b",
+    "name": "Engineer",
+    "description": "Standard engineer access",
+    "permission_keys": ["core.task.read", "core.task.write", "dora.read"],
+    "is_system": false,
+    "is_active": true,
+    "created_at": "2026-04-10T12:00:00Z",
+    "updated_at": "2026-04-10T12:00:00Z"
+  },
+  "meta": { "request_id": "req_003", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | Invalid token |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Profile not found |
 
 ---
 
@@ -200,6 +246,140 @@ Update a permission profile. All fields optional.
 | 400 | `BAD_REQUEST` | Empty `permission_keys` array |
 | 401 | `UNAUTHORIZED` | — |
 | 403 | `FORBIDDEN` | Permission denied or attempting to modify a system profile |
+| 404 | `NOT_FOUND` | Profile not found |
+
+---
+
+### DELETE /iam/permission-profiles/:profile_id
+
+Permanently delete a permission profile.
+
+**Permission:** `iam.permission_profile.manage`
+
+> System profiles (`is_system: true`) cannot be deleted — returns `403`.
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `profile_id` | string | Profile to delete |
+
+**Response — 204 No Content** (empty body)
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied or profile is a system profile |
+| 404 | `NOT_FOUND` | Profile not found |
+
+---
+
+### GET /iam/users/:user_id/permission-profiles
+
+List all permission profile assignments for a specific user.
+
+**Permission:** `iam.permission_profile.read`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `user_id` | string | The user whose assignments to list |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "assignment-001",
+        "tenant_id": "tenant-7a4b",
+        "account_id": "user-dd3456",
+        "permission_profile_id": "profile-finance-viewer",
+        "granted_by": "user-f31a9b",
+        "granted_at": "2026-04-10T12:00:00Z",
+        "expires_at": "2026-12-31T23:59:59Z",
+        "revoked_at": null,
+        "profile": {
+          "id": "profile-finance-viewer",
+          "name": "Finance Viewer",
+          "permission_keys": ["cogs.read", "intel.read"],
+          "is_system": false,
+          "is_active": true
+        }
+      }
+    ]
+  },
+  "meta": { "request_id": "req_005", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "error": null
+}
+```
+
+> Each item includes an inline `profile` object with the key details of the assigned profile.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | User not found |
+
+---
+
+### GET /iam/permission-profiles/:profile_id/users
+
+List all users currently assigned to a permission profile.
+
+**Permission:** `iam.permission_profile.read`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `profile_id` | string | The profile whose assignees to list |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "assignment-001",
+        "tenant_id": "tenant-7a4b",
+        "account_id": "user-dd3456",
+        "permission_profile_id": "profile-finance-viewer",
+        "granted_by": "user-f31a9b",
+        "granted_at": "2026-04-10T12:00:00Z",
+        "expires_at": null,
+        "revoked_at": null,
+        "account": {
+          "id": "user-dd3456",
+          "email": "alice@acme.com",
+          "full_name": "Alice Smith",
+          "role": "engineer",
+          "is_active": true
+        }
+      }
+    ]
+  },
+  "meta": { "request_id": "req_006", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "error": null
+}
+```
+
+> Each item includes an inline `account` object with the user details.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
 | 404 | `NOT_FOUND` | Profile not found |
 
 ---

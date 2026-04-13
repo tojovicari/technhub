@@ -10,7 +10,11 @@ import {
 import {
   assignPermissionProfile,
   createPermissionProfile,
+  deletePermissionProfile,
+  getPermissionProfile,
   listPermissionProfiles,
+  listProfileUsers,
+  listUserAssignments,
   revokePermissionProfile,
   updatePermissionProfile
 } from './service.js';
@@ -46,9 +50,23 @@ export async function iamRoutes(app: FastifyInstance) {
     return reply.status(201).send(ok(request, profile));
   });
 
+  // GET /iam/permission-profiles/:profile_id
+  app.get('/iam/permission-profiles/:profile_id', {
+    preHandler: [app.authenticate, app.requirePermission('iam.permission_profile.read')]
+  }, async (request, reply) => {
+    const { profile_id: profileId } = request.params as { profile_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const profile = await getPermissionProfile(profileId, tenantId);
+
+    if (!profile) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Permission profile not found'));
+    }
+
+    return reply.status(200).send(ok(request, profile));
+  });
+
   // PATCH /iam/permission-profiles/:profile_id
-  app.patch('/iam/permission-profiles/:profile_id', {
-    preHandler: [app.authenticate, app.requirePermission('iam.permission_profile.manage')]
+  app.patch('/iam/permission-profiles/:profile_id', {    preHandler: [app.authenticate, app.requirePermission('iam.permission_profile.manage')]
   }, async (request, reply) => {
     const parsed = updatePermissionProfileSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -68,6 +86,55 @@ export async function iamRoutes(app: FastifyInstance) {
     }
 
     return reply.status(200).send(ok(request, result));
+  });
+
+  // DELETE /iam/permission-profiles/:profile_id
+  app.delete('/iam/permission-profiles/:profile_id', {
+    preHandler: [app.authenticate, app.requirePermission('iam.permission_profile.manage')]
+  }, async (request, reply) => {
+    const { profile_id: profileId } = request.params as { profile_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const result = await deletePermissionProfile(profileId, tenantId);
+
+    if (!result) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Permission profile not found'));
+    }
+
+    if (typeof result === 'object' && result.error === 'SYSTEM_PROFILE') {
+      return reply.status(403).send(fail(request, 'FORBIDDEN', 'System profiles cannot be deleted'));
+    }
+
+    return reply.status(204).send();
+  });
+
+  // GET /iam/users/:user_id/permission-profiles
+  app.get('/iam/users/:user_id/permission-profiles', {
+    preHandler: [app.authenticate, app.requirePermission('iam.permission_profile.read')]
+  }, async (request, reply) => {
+    const { user_id: userId } = request.params as { user_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const result = await listUserAssignments(userId, tenantId);
+
+    if (!result) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'User not found'));
+    }
+
+    return reply.status(200).send(ok(request, { items: result }));
+  });
+
+  // GET /iam/permission-profiles/:profile_id/users
+  app.get('/iam/permission-profiles/:profile_id/users', {
+    preHandler: [app.authenticate, app.requirePermission('iam.permission_profile.read')]
+  }, async (request, reply) => {
+    const { profile_id: profileId } = request.params as { profile_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const result = await listProfileUsers(profileId, tenantId);
+
+    if (!result) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Permission profile not found'));
+    }
+
+    return reply.status(200).send(ok(request, { items: result }));
   });
 
   // POST /iam/users/:user_id/permission-profiles
