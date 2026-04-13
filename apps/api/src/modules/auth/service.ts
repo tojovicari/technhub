@@ -72,13 +72,18 @@ export async function register(input: RegisterInput) {
 
   const passwordHash = await hashPassword(input.password);
 
+  const coreUser = await prisma.user.findFirst({
+    where: { email: input.email, tenantId: input.tenant_id }
+  });
+
   const account = await prisma.platformAccount.create({
     data: {
       tenantId: input.tenant_id,
       email: input.email,
       passwordHash,
       fullName: input.full_name,
-      role: 'org_admin'
+      role: 'org_admin',
+      coreUserId: coreUser?.id ?? null
     }
   });
 
@@ -89,6 +94,7 @@ export async function register(input: RegisterInput) {
     full_name: account.fullName,
     role: account.role,
     is_active: account.isActive,
+    core_user_id: account.coreUserId ?? null,
     created_at: account.createdAt.toISOString()
   };
 }
@@ -133,6 +139,10 @@ export async function registerByInvite(input: RegisterByInviteInput) {
 
   const passwordHash = await hashPassword(input.password);
 
+  const coreUser = await prisma.user.findFirst({
+    where: { email: invite.email, tenantId: invite.tenantId }
+  });
+
   const [account] = await prisma.$transaction([
     prisma.platformAccount.create({
       data: {
@@ -140,7 +150,8 @@ export async function registerByInvite(input: RegisterByInviteInput) {
         email: invite.email,
         passwordHash,
         fullName: input.full_name,
-        role: invite.role
+        role: invite.role,
+        coreUserId: coreUser?.id ?? null
       }
     }),
     prisma.invite.update({
@@ -156,6 +167,7 @@ export async function registerByInvite(input: RegisterByInviteInput) {
     full_name: account.fullName,
     role: account.role,
     is_active: account.isActive,
+    core_user_id: account.coreUserId ?? null,
     created_at: account.createdAt.toISOString()
   };
 }
@@ -302,6 +314,7 @@ export async function getMe(accountId: string) {
     full_name: account.fullName,
     role: account.role,
     is_active: account.isActive,
+    core_user_id: account.coreUserId ?? null,
     last_login_at: account.lastLoginAt?.toISOString() ?? null,
     created_at: account.createdAt.toISOString()
   };

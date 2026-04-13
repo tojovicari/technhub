@@ -38,11 +38,13 @@ model PlatformAccount {
   fullName      String
   role          PlatformRole           @default(viewer)
   isActive      Boolean                @default(true)
+  coreUserId    String?                @unique
   lastLoginAt   DateTime?
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt
 
   tenant        Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  coreUser      User?                  @relation(fields: [coreUserId], references: [id], onDelete: SetNull)
   refreshTokens PlatformRefreshToken[]
   iamAssignments UserPermissionProfile[]
 
@@ -95,6 +97,7 @@ model User {
   ownedEpics  Epic[]                  @relation("EpicOwner")
   assignedTasks Task[]                @relation("TaskAssignee")
   reportedTasks Task[]                @relation("TaskReporter")
+  platformAccount PlatformAccount?
 
   @@unique([tenantId, email])
   @@index([tenantId])

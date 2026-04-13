@@ -140,7 +140,7 @@ function mapTask(task: any) {
   };
 }
 
-function mapUser(user: { id: string; tenantId: string; email: string; fullName: string; role: string; isActive: boolean; hourlyRate: number | null; createdAt: Date }) {
+function mapUser(user: { id: string; tenantId: string; email: string; fullName: string; role: string; isActive: boolean; hourlyRate: number | null; createdAt: Date; platformAccount?: { id: string } | null }) {
   return {
     id: user.id,
     tenant_id: user.tenantId,
@@ -149,6 +149,8 @@ function mapUser(user: { id: string; tenantId: string; email: string; fullName: 
     role: user.role,
     is_active: user.isActive,
     hourly_rate: user.hourlyRate,
+    has_account: user.platformAccount != null,
+    account_id: user.platformAccount?.id ?? null,
     created_at: user.createdAt.toISOString()
   };
 }

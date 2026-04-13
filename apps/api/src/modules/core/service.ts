@@ -289,7 +289,7 @@ export async function getTask(taskId: string, tenantId: string) {
 export async function upsertUser(input: CreateUserInput) {
   await ensureTenant(input.tenant_id);
 
-  return prisma.user.upsert({
+  const user = await prisma.user.upsert({
     where: { tenantId_email: { tenantId: input.tenant_id, email: input.email } },
     create: {
       tenantId: input.tenant_id,
@@ -304,6 +304,14 @@ export async function upsertUser(input: CreateUserInput) {
       ...(input.hourly_rate !== undefined && { hourlyRate: input.hourly_rate })
     }
   });
+
+  // Backfill coreUserId on PlatformAccount if not yet linked
+  await prisma.platformAccount.updateMany({
+    where: { email: input.email, tenantId: input.tenant_id, coreUserId: null },
+    data: { coreUserId: user.id }
+  });
+
+  return user;
 }
 
 export async function listTeams(tenantId: string, query: ListQueryInput) {
@@ -324,6 +332,7 @@ export async function listTeams(tenantId: string, query: ListQueryInput) {
 export async function listUsers(tenantId: string, limit: number, cursor?: string) {
   const rows = await prisma.user.findMany({
     where: { tenantId },
+    include: { platformAccount: { select: { id: true } } },
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     orderBy: { createdAt: 'asc' }

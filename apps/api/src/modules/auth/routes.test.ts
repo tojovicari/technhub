@@ -47,6 +47,7 @@ function makeAccount() {
     full_name: 'Glauber Test',
     role: 'org_admin' as PlatformRole,
     is_active: true as const,
+    core_user_id: null,
     created_at: new Date().toISOString()
   };
 }
