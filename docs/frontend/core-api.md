@@ -935,7 +935,50 @@ List all users in the tenant.
 | `limit` | integer | ❌ | 25 | Max 100 |
 | `cursor` | string (UUID) | ❌ | — | Pagination cursor |
 
-**Response — 200 OK:** Paginated list of user objects.
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "items": [
+      {
+        "id": "usr-abc123",
+        "tenant_id": "tenant-7a4b",
+        "email": "alice@acme.com",
+        "full_name": "Alice Smith",
+        "role": "lead",
+        "source": "jira",
+        "has_account": true,
+        "account_id": "acc-yyy",
+        "created_at": "2026-04-01T00:00:00Z",
+        "updated_at": "2026-04-01T00:00:00Z"
+      },
+      {
+        "id": "usr-def456",
+        "tenant_id": "tenant-7a4b",
+        "email": "bob@acme.com",
+        "full_name": "Bob Santos",
+        "role": "engineer",
+        "source": "github",
+        "has_account": false,
+        "account_id": null,
+        "created_at": "2026-04-05T00:00:00Z",
+        "updated_at": "2026-04-05T00:00:00Z"
+      }
+    ],
+    "next_cursor": null
+  },
+  "meta": { "request_id": "req_usr1", "version": "v1", "timestamp": "2026-04-13T12:00:00Z" },
+  "error": null
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `has_account` | boolean | `true` se existe uma `PlatformAccount` com este email no tenant |
+| `account_id` | string \| null | ID da `PlatformAccount` — use como `user_id` nos endpoints do IAM |
+
+> **Frontend flow:** use `has_account: false` para exibir botão "Convidar" (`POST /auth/invites`). Use `account_id` diretamente como `user_id` nos endpoints do IAM para gerenciar permissões.
 
 ---
 

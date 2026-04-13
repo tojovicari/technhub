@@ -87,12 +87,15 @@ Cria um novo tenant e o primeiro account, que recebe automaticamente o papel `or
     "full_name": "Glauber Vicari",
     "role": "org_admin",
     "is_active": true,
+    "core_user_id": null,
     "created_at": "2026-04-09T19:09:42.528Z"
   },
   "meta": { "request_id": "req-1", "version": "v1", "timestamp": "2026-04-09T19:09:42.530Z" },
   "error": null
 }
 ```
+
+> `core_user_id` é preenchido automaticamente se já existir um `User` (colaborador sincronizado) com o mesmo email no tenant — caso contrário, `null`.
 
 **Error Scenarios:**
 
@@ -266,6 +269,7 @@ Returns the full profile of the currently authenticated platform account.
     "full_name": "Glauber Vicari",
     "role": "org_admin",
     "is_active": true,
+    "core_user_id": "usr-abc123",
     "last_login_at": "2026-04-09T19:10:02Z",
     "created_at": "2026-04-09T19:09:42Z"
   },
@@ -273,6 +277,8 @@ Returns the full profile of the currently authenticated platform account.
   "error": null
 }
 ```
+
+> `core_user_id`: ID do `User` core vinculado (colaborador sincronizado via JIRA/GitHub com o mesmo email). `null` se nenhum vínculo foi encontrado.
 
 **Error Scenarios:**
 
@@ -371,12 +377,15 @@ Cria uma nova `PlatformAccount` consumindo um token de convite. O convite é inv
     "full_name": "Carlos Mendes",
     "role": "manager",
     "is_active": true,
+    "core_user_id": "usr-abc123",
     "created_at": "2026-04-12T19:05:00.000Z"
   },
   "meta": { "request_id": "req-7", "version": "v1", "timestamp": "2026-04-12T19:05:00Z" },
   "error": null
 }
 ```
+
+> `core_user_id`: preenchido automaticamente se o email do convite já tiver um `User` core no tenant.
 
 **Error Scenarios:**
 

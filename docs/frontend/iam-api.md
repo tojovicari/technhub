@@ -541,26 +541,25 @@ Revoke a permission profile from a user.
 
 ---
 
-## Planned Improvements
+## Identity Bridge — PlatformAccount ↔ core User
+
+> **Status: implementado** (migração `20260413000000` + `20260413000001`, Prisma client atualizado)
 
 ### PlatformAccount ↔ core User link
 
-**Current state:** `PlatformAccount` (login identity) and core `User` (engineering contributor synced from JIRA/GitHub) are completely separate entities. They share the same `email` within a tenant but have no FK or reference between them.
+`PlatformAccount` (login identity) e core `User` (colaborador sincronizado via JIRA/GitHub) são entidades distintas ligadas por um campo nullable `coreUserId` em `PlatformAccount`.
 
-**Problem:** A tech manager has tasks in JIRA and commits in GitHub (core `User`) and also logs into CTO.ai (`PlatformAccount`). Today the system doesn't know they're the same person. Cross-domain analytics (e.g. "show COGS for work produced by this logged-in manager") are impossible without manual email matching.
+**Preenchimento automático:**
+- `POST /auth/register` e `POST /auth/register/invite` — buscam core `User` pelo mesmo `email + tenantId` e populam `coreUserId` se encontrado
+- `POST /core/users` (upsert) — busca `PlatformAccount` pelo mesmo email e faz backfill de `coreUserId` se encontrado
 
-**Planned change:** Add a nullable `coreUserId` field to `PlatformAccount`, populated automatically by email match:
-
-- On `registerByInvite` / `register`: look up core `User` with same `email + tenantId` → populate `coreUserId` if found
-- On `upsertUser` (sync from JIRA/GitHub): look up `PlatformAccount` with same email → backfill `coreUserId` if found
-
-This is additive and non-breaking — existing accounts without a core `User` remain unaffected (`coreUserId: null`).
+Contas sem `User` core correspondente permanecem com `coreUserId: null` — sem breaking change.
 
 ---
 
-### `GET /core/users` — access status enrichment
+### `GET /core/users` — campos de status de conta
 
-Once the link is in place, the user listing will be enriched with account status, removing the need for the frontend to cross-reference by email:
+O listing de usuários core expõe o vínculo com a `PlatformAccount`:
 
 ```json
 {
@@ -575,23 +574,20 @@ Once the link is in place, the user listing will be enriched with account status
 
 | Field | Type | Notes |
 |---|---|---|
-| `has_account` | boolean | `true` if a `PlatformAccount` exists for this email |
-| `account_id` | string \| null | `PlatformAccount.id` — use this as `user_id` in IAM endpoints |
+| `has_account` | boolean | `true` se existe `PlatformAccount` para este email |
+| `account_id` | string \| null | Use como `user_id` nos endpoints IAM |
 
-**Frontend flow enabled by this:**
-
-1. `GET /core/users` → list all contributors
-2. `has_account: false` → show "Invite" button → `POST /auth/invites` with the user's email
-3. `has_account: true` → show "Manage access" button → use `account_id` directly in IAM endpoints
-4. No separate lookup, no email cross-referencing needed
+**Frontend flow habilitado:**
+1. `GET /core/users` → lista todos os colaboradores
+2. `has_account: false` → exibir botão "Convidar" → `POST /auth/invites` com o email
+3. `has_account: true` → exibir "Gerenciar acesso" → usar `account_id` diretamente como `user_id` nos endpoints IAM
+4. Sem lookup adicional, sem cross-referência por email no frontend
 
 ---
 
-### Invite from core User
+### Invite a partir do core User
 
-**Planned:** Allow sending invites directly from the `GET /core/users` list. The existing `POST /auth/invites` endpoint already accepts `email` — no API change needed. The enrichment above makes this ergonomic in the UI.
-
-When the invited user registers via `registerByInvite`, the `PlatformAccount.coreUserId` is automatically linked, completing the identity bridge.
+`POST /auth/invites` já aceita `email` — nenhuma mudança de API necessária. Ao aceitar o convite via `POST /auth/register/invite`, o `PlatformAccount.coreUserId` é auto-vinculado, completando a bridge de identidade.
 
 ---
 
