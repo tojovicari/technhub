@@ -148,6 +148,70 @@ export async function assignPermissionProfile(
   return mapAssignment(assignment);
 }
 
+export async function getPermissionProfile(profileId: string, tenantId: string) {
+  const profile = await prisma.permissionProfile.findFirst({
+    where: { id: profileId, tenantId }
+  });
+  return profile ? mapProfile(profile) : null;
+}
+
+export async function deletePermissionProfile(profileId: string, tenantId: string) {
+  const existing = await prisma.permissionProfile.findFirst({
+    where: { id: profileId, tenantId }
+  });
+  if (!existing) return null;
+  if (existing.isSystem) return { error: 'SYSTEM_PROFILE' as const };
+
+  await prisma.permissionProfile.delete({ where: { id: profileId } });
+  return true;
+}
+
+export async function listUserAssignments(userId: string, tenantId: string) {
+  const account = await prisma.platformAccount.findFirst({
+    where: { id: userId, tenantId }
+  });
+  if (!account) return null;
+
+  const assignments = await prisma.userPermissionProfile.findMany({
+    where: { accountId: userId, tenantId },
+    include: { permissionProfile: true },
+    orderBy: { grantedAt: 'desc' }
+  });
+
+  return assignments.map(a => ({
+    ...mapAssignment(a),
+    profile: mapProfile(a.permissionProfile)
+  }));
+}
+
+export async function listProfileUsers(profileId: string, tenantId: string) {
+  const profile = await prisma.permissionProfile.findFirst({
+    where: { id: profileId, tenantId }
+  });
+  if (!profile) return null;
+
+  const assignments = await prisma.userPermissionProfile.findMany({
+    where: { permissionProfileId: profileId, tenantId },
+    include: {
+      account: {
+        select: { id: true, email: true, fullName: true, role: true, isActive: true }
+      }
+    },
+    orderBy: { grantedAt: 'desc' }
+  });
+
+  return assignments.map(a => ({
+    ...mapAssignment(a),
+    account: {
+      id: a.account.id,
+      email: a.account.email,
+      full_name: a.account.fullName,
+      role: a.account.role,
+      is_active: a.account.isActive
+    }
+  }));
+}
+
 export async function revokePermissionProfile(
   userId: string,
   profileId: string,
