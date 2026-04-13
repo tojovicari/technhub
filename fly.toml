@@ -1,0 +1,42 @@
+app            = "moasy-tech-api"
+primary_region = "gru"
+
+[build]
+  dockerfile = "apps/api/Dockerfile"
+
+[env]
+  PORT                       = "3000"
+  HOST                       = "0.0.0.0"
+  NODE_ENV                   = "production"
+  AUTH_BYPASS                = "false"
+  WEBHOOK_WORKER_INTERVAL_MS = "5000"
+
+[deploy]
+  release_command = "node apps/api/dist/migrate.js"
+
+[http_service]
+  internal_port       = 3000
+  force_https         = true
+  auto_stop_machines  = true
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type       = "connections"
+    hard_limit = 500
+    soft_limit = 400
+
+[[vm]]
+  size   = "shared-cpu-1x"
+  memory = "512mb"
+
+[checks]
+  [checks.health]
+    grace_period  = "10s"
+    interval      = "15s"
+    method        = "GET"
+    path          = "/health"
+    port          = 3000
+    timeout       = "5s"
+    type          = "http"
+    restart_limit = 3
