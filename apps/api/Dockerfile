@@ -2,6 +2,8 @@
 FROM node:22-alpine AS builder
 WORKDIR /app/apps/api
 
+RUN apk add --no-cache openssl
+
 # Install all deps (dev included for build tools)
 COPY apps/api/package*.json ./
 RUN npm ci
@@ -14,6 +16,8 @@ RUN npx prisma generate && npm run build
 FROM node:22-alpine AS runtime
 WORKDIR /app/apps/api
 ENV NODE_ENV=production
+
+RUN apk add --no-cache openssl
 
 # Production deps only
 COPY apps/api/package*.json ./
