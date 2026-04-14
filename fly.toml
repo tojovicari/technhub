@@ -1,4 +1,4 @@
-app            = "moasy-tech-api"
+app            = "cto-ai-api"
 primary_region = "gru"
 
 [build]
