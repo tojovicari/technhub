@@ -165,6 +165,11 @@ async function syncProjects(
       create: { tenantId, key: p.key, name: p.name, status: 'active' },
       update: { name: p.name },
     });
+    await prisma.projectSource.upsert({
+      where: { projectId_provider_externalId: { projectId: project.id, provider: 'jira', externalId: p.key } },
+      create: { tenantId, projectId: project.id, provider: 'jira', externalId: p.key, displayName: p.name },
+      update: { displayName: p.name },
+    });
     results.push({ id: project.id, jiraKey: p.key });
   }
 

@@ -134,6 +134,11 @@ async function syncRepos(
         status: repo.archived ? 'done' : 'active',
       },
     });
+    await prisma.projectSource.upsert({
+      where: { projectId_provider_externalId: { projectId: project.id, provider: 'github', externalId: repo.full_name } },
+      create: { tenantId, projectId: project.id, provider: 'github', externalId: repo.full_name, displayName: repo.full_name },
+      update: { displayName: repo.full_name },
+    });
     results.push({ id: project.id, repoName: repo.name });
   }
 
