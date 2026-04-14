@@ -70,20 +70,36 @@ LT = percentil 50 (ou 95) de (merged_at - first_commit_at) por PR
 | Medium      | Entre 1 dia e 1 semana |
 | Low         | > 1 semana          |
 
+**Fonte de dados:** Integração de incident management — **OpsGenie** ou **incident.io**.
+
+> A fonte anterior (tasks JIRA do tipo `bug`) foi **descontinuada**. O JIRA introduzia imprecisão de 20–60% porque o ticket abria depois do incidente começar e fechava de forma independente da restauração do serviço. MTTR só é reportado quando uma integração de incident management está ativa e configurada.
+
 **Cálculo:**
-- Fonte: Tasks do tipo `bug` com prioridade `P0` ou `P1` (configurável)
-- Evento inicial: `created_at` da task de bug
-- Evento final: `completed_at` da task
-- Fórmula: `median(completed_at - created_at)` para bugs de prod nos últimos 30 dias
+- Fonte: `IncidentEvent` com `resolvedAt` preenchido e `priority` dentro de `include_priorities` (default: P1, P2)
+- Evento inicial: `openedAt` — timestamp que o provider capturou como início do incidente (configurável via field mapping: pode ser `created_at` ou `impactStartDate`)
+- Evento final: `resolvedAt` — quando o serviço foi restaurado
+- Fórmula: `median(resolvedAt - openedAt)` nos últimos 30 dias
 
 ```
-MTTR = percentil 50 de (completed_at - created_at) por bug crítico
+MTTR = percentil 50 de (resolvedAt - openedAt) por incidente P1/P2
 ```
 
-**Configuração:**
-- Tags/labels que identificam "incidente de produção" (ex: `production`, `incident`, `hotfix`)
-- Prioridades que entram no cálculo (default: P0, P1)
-- Integração futura com PagerDuty/Opsgenie para maior precisão (Fase 4)
+**Escopo de serviço:**
+- Se o incidente tiver `affectedServices` preenchido e esses serviços forem reconhecidos (matched) a `Project` do core, o MTTR pode ser filtrado por projeto.
+- Se não houver match de serviço, o incidente entra no cálculo de MTTR **genérico** (cross-projeto, tenant-wide). É preferível ter um MTTR genérico preciso a não ter MTTR.
+- O auto-match é feito por nome: `affectedServices[]` do `IncidentEvent` é comparado contra os nomes e keys dos `Project` ativos do tenant (case-insensitive).
+
+**Quando não configurado:**
+- `mttr: null`, `mttr_source: "not_configured"`
+- A API retorna uma mensagem de CTA orientando a configurar uma integração
+
+**Configuração (via field mapping da connection):**
+- `severity_to_priority`: mapa de nomes de severity do provider → P1-P5
+- `include_priorities`: quais prioridades entram no cálculo (default: `["P1", "P2"]`)
+- `opened_at_field`: qual timestamp usar como início (`created_at` ou `impactStartDate`)
+- `affected_service_field`: de onde extrair o serviço afetado
+
+Ver detalhes completos em [incident-integrations-plan.md](./incident-integrations-plan.md).
 
 ---
 
@@ -107,7 +123,8 @@ CFR = deploys seguidos de bug P0/P1 em 24h / total de deploys
 ```
 
 **Notas:**
-- A correlação é uma heurística; integração com CI/CD checks melhora a precisão
+- Com integração de incident management ativa, a correlação usa `IncidentEvent.openedAt` vs timestamp do deploy mais recente — mais precisa que a heurística de bug JIRA
+- Sem integração, a correlação continua como heurística (incidente detectado = P0/P1 bug JIRA aberto em < 24h após deploy) — única métrica DORA que ainda pode usar JIRA como fallback
 - Hotfixes/rollbacks também contam como falha no deploy que os gerou
 
 ---
@@ -130,6 +147,8 @@ Agrega as 4 métricas em uma visão consolidada por projeto/team:
 │ Score Geral: HIGH                                          │
 └────────────────────────────────────────────────────────────┘
 ```
+
+> **MTTR requer integração de incident management.** Quando não configurada, o scorecard exibe o campo como `—` com indicação de setup, e o score geral é calculado sobre as 3 métricas restantes.
 
 ---
 
@@ -198,6 +217,36 @@ Métricas complementares que dão visibilidade sobre a saúde operacional do tim
 
 ---
 
+### MTTA (Mean Time to Acknowledge) — requer incident management
+**"Quando um incidente começa, quanto tempo leva até o primeiro responder agir?"**
+
+- Fonte: `IncidentEvent.acknowledgedAt` e `IncidentEvent.openedAt`
+- Cálculo: `median(acknowledgedAt - openedAt)` por incidente P1/P2 nos últimos 30 dias
+- Disponível apenas quando integração de incident management ativa
+- Não é uma métrica DORA oficial — exibida como health metric complementar
+- Alerta: se MTTA P50 > 30 min (configurável)
+
+```
+MTTA = percentil 50 de (acknowledgedAt - openedAt) por incidente P1/P2
+```
+
+---
+
+### Incident Frequency — requer incident management
+**"Com que frequência incidentes de produção acontecem?"**
+
+- Fonte: `IncidentEvent` com `priority` em `include_priorities` (P1/P2)
+- Cálculo: `count(incidentes) / dias na janela` (default: 30 dias)
+- Não é uma métrica DORA oficial — complementa o CFR com volume absoluto
+- Exibida lado a lado com o CFR no health scorecard
+- Alerta: se frequency > baseline da semana anterior em > 50%
+
+```
+Incident Frequency = count(IncidentEvent P1/P2) / dias na janela
+```
+
+---
+
 ## Cálculo e Armazenamento
 
 Todas as métricas são calculadas de forma assíncrona pelo **Analytics Engine**:
@@ -220,15 +269,18 @@ Todas as métricas são calculadas de forma assíncrona pelo **Analytics Engine*
 
 ## Alertas de Health Metrics
 
-| Métrica                  | Condição de Alerta               | Destinatário       |
-|--------------------------|----------------------------------|--------------------|
-| DORA Level degradado     | Nível cai 1 nível (ex: Elite → High) | CTO, Tech Manager |
-| DF < baseline - 30%      | Frequência caiu muito            | Tech Manager       |
-| LT > 5 dias P50          | Lead time crítico                | Tech Manager       |
-| MTTR > 12h               | Tempo de restore alto            | CTO, On-call       |
-| CFR > 15%                | Muitos deploys com falha         | CTO, Tech Manager  |
-| Velocity queda > 20% WoW | Sprint velocity caindo           | Tech Manager       |
-| Tech debt > 30% backlog  | Dívida técnica acumulando        | Tech Manager, CTO  |
+| Métrica                  | Condição de Alerta                         | Destinatário       |
+|--------------------------|--------------------------------------------|--------------------|  
+| DORA Level degradado     | Nível cai 1 nível (ex: Elite → High)       | CTO, Tech Manager  |
+| DF < baseline - 30%      | Frequência caiu muito                      | Tech Manager       |
+| LT > 5 dias P50          | Lead time crítico                          | Tech Manager       |
+| MTTR > 12h               | Tempo de restore alto                      | CTO, On-call       |
+| MTTR not_configured      | Sem integração de incident management      | CTO, Tech Manager  |
+| MTTA > 30min             | Resposta ao incidente lenta                | CTO, On-call       |
+| CFR > 15%                | Muitos deploys com falha                   | CTO, Tech Manager  |
+| Incident Frequency spike | Frequência > 150% da baseline semanal      | CTO, On-call       |
+| Velocity queda > 20% WoW | Sprint velocity caindo                     | Tech Manager       |
+| Tech debt > 30% backlog  | Dívida técnica acumulando                  | Tech Manager, CTO  |
 
 ---
 
@@ -245,7 +297,11 @@ Exemplos de métricas futuras:
 - `security.critical_vuln_days`: dias até patch de vulnerabilidade crítica
 - `onboarding.time_to_first_pr`: tempo até primeiro PR de um novo dev
 - `review.thoroughness_score`: qualidade de code reviews
-- `incident.frequency_30d`: frequência de incidentes
+
+Métricas já implementadas via incident integrations (OpsGenie / incident.io):
+- `incident.mttr`: MTTR preciso por incidente real (substitui heurística JIRA)
+- `incident.mtta`: tempo até primeiro acknowledge
+- `incident.frequency_30d`: frequência de incidentes P1/P2 na janela
 
 ---
 

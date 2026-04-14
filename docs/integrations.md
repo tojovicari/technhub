@@ -14,7 +14,7 @@ O módulo de integrações é o único ponto de contato com sistemas externos. E
 O modulo de Integracoes publica dados para outros modulos por contratos versionados.
 
 - API de consulta (quando necessaria): endpoints versionados (`/api/v1/integrations/...`)
-- Eventos de sync: `integration.project.synced.v1`, `integration.task.synced.v1`, `integration.user.synced.v1`
+- Eventos de sync: `integration.project.synced.v1`, `integration.task.synced.v1`, `integration.user.synced.v1`, `integration.incident.synced.v1`
 - Payloads imutaveis por versao
 - Campos adicionados de forma backward compatible
 - Breaking changes apenas em `v2+` com janela de deprecacao
@@ -130,10 +130,16 @@ integrations/
 │   │   ├── JiraTransformer   ← JIRA DTO → domain entities
 │   │   └── JiraWebhookHandler
 │   │
-│   └── github/
-│       ├── GitHubConnector
-│       ├── GitHubTransformer
-│       └── GitHubWebhookHandler
+│   ├── github/
+│   │   ├── GitHubConnector
+│   │   ├── GitHubTransformer
+│   │   └── GitHubWebhookHandler
+│   │
+│   ├── opsgenie/
+│   │   └── OpsGenieConnector ← dual-API (Incident + Alert API) + field mapping
+│   │
+│   └── incident_io/
+│       └── IncidentIoConnector ← cursor pagination + field mapping
 │
 └── queue/
     ├── WebhookQueue          ← fila de eventos inbound
@@ -337,6 +343,184 @@ Eventos capturados (via `x-github-event` header):
 | `issues`            | Issue aberta, fechada, atribuída |
 | `check_run`         | CI/CD passou ou falhou           |
 | `workflow_run`      | GitHub Actions concluído         |
+
+---
+
+## Connectors de Incident Management
+
+**Providers suportados:** `opsgenie`, `incident_io`
+
+Esses connectors sincronizam dados de incidentes (abertura, escalada, reconhecimento, resolução) para o modelo `IncidentEvent`. O módulo DORA usa essa tabela para calcular **MTTR** e **MTTA** com precisão — sem depender de heurísticas baseadas em deploys de hotfix.
+
+### Field Mapping (scope.field_mapping)
+
+Cada conexão de incident provider requer um `scope.field_mapping` que traduz os campos do provider para o modelo interno:
+
+```json
+{
+  "field_mapping": {
+    "severity_to_priority": {
+      "critical": "P1",
+      "high": "P2",
+      "medium": "P3",
+      "low": "P4"
+    },
+    "include_priorities": ["P1", "P2"],
+    "production_indicator": {
+      "type": "field",
+      "field": "environment",
+      "value": "production"
+    },
+    "affected_service_field": {
+      "type": "custom_field",
+      "key": "services_affected"
+    },
+    "opened_at_field": "created_at"
+  }
+}
+```
+
+| Campo | Obrigatório | Descrição |
+|---|---|---|
+| `severity_to_priority` | ✅ | Mapeamento de severity do provider → P1–P5 interno |
+| `include_priorities` | ❌ | Quais prioridades sincronizar (default: `["P1","P2"]`) |
+| `production_indicator` | ❌ | Como identificar incidentes de produção (`field` \ `tag`) |
+| `affected_service_field` | ❌ | Campo do provider com lista de serviços afetados |
+| `opened_at_field` | ❌ | Campo para `openedAt` (default: `created_at`) |
+
+### Wizard: Auxiliares de Configuração
+
+Endpoints de apoio para o wizard de field mapping:
+
+| Endpoint | Descrição |
+|---|---|
+| `GET /integrations/connections/:connection_id/incident-io/severities` | Lista severities configuradas na conta incident.io |
+| `GET /integrations/connections/:connection_id/opsgenie/priorities` | Retorna a lista estática de prioridades P1–P5 do OpsGenie |
+
+---
+
+### Connector: OpsGenie
+
+**Status:** implementado (`src/modules/integrations/connectors/opsgenie.ts`)
+
+#### Autenticação
+
+```json
+{
+  "auth_type": "api_key",
+  "api_key": "<opsgenie-api-key>",
+  "region": "us"
+}
+```
+
+| Campo | Obrigatório | Valores |
+|---|---|---|
+| `auth_type` | ✅ | `"api_key"` |
+| `api_key` | ✅ | API key gerada no OpsGenie |
+| `region` | ❌ | `"us"` (default) ou `"eu"` (EU data residency) |
+
+#### Scope
+
+```json
+{
+  "use_incident_api": true,
+  "field_mapping": { ... }
+}
+```
+
+`use_incident_api: true` → usa a **Incident API** (planos Standard/Enterprise).  
+`use_incident_api: false` → fallback para a **Alert API** (plano Essentials).
+
+#### Entidades sincronizadas
+
+| Fonte OpsGenie | Entidade | Chave de upsert |
+|---|---|---|
+| Incident / Alert | `IncidentEvent` | `tenantId + provider + externalId` |
+
+#### Status mapping (Incident API)
+
+| Status OpsGenie | `IncidentStatus` |
+|---|---|
+| `open` | `open` |
+| `investigating` | `acknowledged` |
+| `resolved` | `resolved` |
+| `closed` | `closed` |
+
+#### Webhooks OpsGenie
+
+| Header | Valor |
+|---|---|
+| `x-og-delivery-id` | ID único do evento |
+| `x-og-event-type` | Tipo do evento (`Create`, `Acknowledge`, `Close`, …) |
+| Token env var | `OPSGENIE_WEBHOOK_TOKEN` |
+
+Ação `Reopen` limpa `resolvedAt` e `closedAt`, retornando o incidente para status `open`.
+
+---
+
+### Connector: incident.io
+
+**Status:** implementado (`src/modules/integrations/connectors/incident_io.ts`)
+
+#### Autenticação
+
+```json
+{
+  "auth_type": "bearer",
+  "api_key": "<incident-io-api-key>"
+}
+```
+
+#### Scope
+
+```json
+{
+  "field_mapping": { ... }
+}
+```
+
+#### Paginação
+
+Cursor-based via `pagination_meta.after`. Sync incremental filtra por `updated_at[gte]` (não `created_at`) para capturar mudanças de status em incidentes existentes.
+
+#### Status mapping
+
+| Status incident.io | `IncidentStatus` |
+|---|---|
+| `triage`, `investigating` | `open` |
+| `fixing`, `monitoring` | `acknowledged` |
+| `resolved` | `resolved` |
+| `declined` | `closed` |
+
+#### Webhooks incident.io
+
+| Header | Valor |
+|---|---|
+| `x-incident-signature` | ID único do evento |
+| `x-incident-io-event-type` | Tipo do evento |
+| Token env var | `INCIDENT_IO_WEBHOOK_TOKEN` |
+
+### Contrato de evento: integration.incident.synced.v1
+
+```json
+{
+  "event_name": "integration.incident.synced.v1",
+  "event_id": "uuid",
+  "occurred_at": "2026-04-14T12:00:00Z",
+  "source": "opsgenie",
+  "payload": {
+    "external_id": "INC-42",
+    "title": "API latency spike — checkout service",
+    "priority": "P1",
+    "status": "resolved",
+    "openedAt": "2026-04-14T10:30:00Z",
+    "acknowledgedAt": "2026-04-14T10:38:00Z",
+    "resolvedAt": "2026-04-14T12:05:00Z",
+    "affectedServices": ["checkout", "payments"]
+  },
+  "schema_version": 1
+}
+```
 
 ---
 

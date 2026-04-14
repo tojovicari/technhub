@@ -11,7 +11,7 @@ servers:
 
 tags:
   - name: DORA
-    description: Deployment Frequency, Lead Time for Changes, MTTR, Change Failure Rate
+    description: Deployment Frequency, Lead Time for Changes, MTTR, MTTA, Incident Frequency, Change Failure Rate
 
 security:
   - BearerAuth: []
@@ -96,11 +96,40 @@ components:
         mttr:
           nullable: true
           type: object
+          description: |
+            Median time to restore service from P1/P2 incidents. Sourced exclusively from
+            incident.io or OpsGenie. Null when `mttr_source` is `not_configured`.
           properties:
             value:       { type: number, description: Median MTTR in hours }
             unit:        { type: string, example: hours }
             level:       { $ref: '#/components/schemas/DoraLevel' }
-            sample_size: { type: integer }
+            sample_size: { type: integer, description: Number of resolved incidents used }
+        mttr_source:
+          type: string
+          enum: [incidents, not_configured]
+          description: |
+            `incidents` — MTTR calculated from IncidentEvent table (OpsGenie or incident.io).
+            `not_configured` — No active incident integration; MTTR is null. Configure one to enable.
+        mtta:
+          nullable: true
+          type: object
+          description: |
+            Mean Time to Acknowledge — health metric (not an official DORA metric).
+            Measures on-call response speed. Present only when incident integration is active.
+          properties:
+            p50:         { type: number, description: Median MTTA in hours }
+            unit:        { type: string, example: hours }
+            level:       { $ref: '#/components/schemas/DoraLevel' }
+            sample_size: { type: integer, description: Number of acknowledged incidents used }
+        incident_frequency:
+          nullable: true
+          type: object
+          description: |
+            P1/P2 incident rate per day — health metric complementary to CFR.
+            Present only when incident integration is active.
+          properties:
+            value: { type: number, description: Incidents per day }
+            unit:  { type: string, example: per_day }
         change_failure_rate:
           nullable: true
           type: object
@@ -225,12 +254,22 @@ paths:
         MTTR, Change Failure Rate) for a rolling time window and returns an
         overall engineering performance level.
 
+        **MTTR source:** Sourced exclusively from `IncidentEvent` records (OpsGenie or incident.io).
+        When no incident integration is active, `mttr` is `null` and `mttr_source` is `not_configured`.
+        The overall DORA level is computed from the available metrics only, so it is not penalised
+        for a missing MTTR.
+
+        **Additional health metrics** (non-DORA, when incident integration active):
+        - `mtta` — Mean Time to Acknowledge (on-call response speed)
+        - `incident_frequency` — P1/P2 incidents per day
+
         **Level thresholds:**
         | Metric | elite | high | medium | low |
         |---|---|---|---|---|
         | Deployment Frequency | ≥ 1/day | ≥ 1/7d | ≥ 1/30d | < 1/30d |
         | Lead Time | < 1h | < 7d | < 30d | ≥ 30d |
         | MTTR | < 1h | < 24h | < 7d | ≥ 7d |
+        | MTTA | < 15min | < 30min | < 2h | ≥ 2h |
         | Change Failure Rate | ≤ 5% | ≤ 10% | ≤ 15% | > 15% |
 
         This endpoint also persists a `HealthMetric` snapshot per metric.
@@ -316,6 +355,8 @@ paths:
         - `deployment_frequency`
         - `lead_time_p50`, `lead_time_p95`
         - `mttr`
+        - `mtta`
+        - `incident_frequency`
         - `change_failure_rate`
         - `dora_overall`
       tags: [DORA]

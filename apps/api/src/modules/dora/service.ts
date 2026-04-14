@@ -4,6 +4,8 @@ import {
   computeDeploymentFrequency,
   computeLeadTime,
   computeMttr,
+  computeMtta,
+  computeIncidentFrequency,
   computeChangeFailureRate,
   computeOverallDoraLevel,
   type DoraLevel
@@ -112,29 +114,82 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
   const lt = computeLeadTime(ltMetrics.map((m) => m.value));
 
   // ── Mean Time to Restore ───────────────────────────────────────────────────
-  // Bugs P0/P1 completed in window (cycle time as proxy for MTTR)
-  const criticalBugs = await prisma.task.findMany({
+  // Source: IncidentEvent exclusively. Bug tasks JIRA are no longer used.
+  // Returns null with mttr_source: "not_configured" when no incident integration is active.
+  const hasIncidentIntegration = await prisma.integrationConnection.findFirst({
     where: {
       tenantId,
-      taskType: 'bug',
-      priority: { in: ['P0', 'P1'] },
-      status: { in: ['done'] },
-      completedAt: { gte: windowStart, lte: windowEnd },
-      startedAt: { not: null },
-      ...(query.project_id && { projectId: query.project_id })
+      provider: { in: ['opsgenie', 'incident_io'] },
+      status: 'active'
     },
-    select: { startedAt: true, completedAt: true, createdAt: true }
+    select: { id: true }
   });
 
-  const restoreTimes = criticalBugs
-    .map((b) => {
-      const start = b.startedAt ?? b.createdAt;
-      const end = b.completedAt!;
-      return (end.getTime() - start.getTime()) / 3_600_000; // hours
-    })
-    .filter((h) => h >= 0 && h < 30 * 24); // exclude outliers > 30 days
+  type MttrSource = 'incidents' | 'not_configured';
+  const mttrSource: MttrSource = hasIncidentIntegration ? 'incidents' : 'not_configured';
 
-  const mttr = computeMttr(restoreTimes);
+  let mttr: ReturnType<typeof computeMttr> = null;
+  let mtta: ReturnType<typeof computeMtta> = null;
+  let incidentFrequency: ReturnType<typeof computeIncidentFrequency> | null = null;
+  let incidentSampleSize = 0;
+  let mttaSampleSize = 0;
+
+  if (hasIncidentIntegration) {
+    const incidents = await prisma.incidentEvent.findMany({
+      where: {
+        tenantId,
+        resolvedAt: { not: null },
+        openedAt: { gte: windowStart, lte: windowEnd },
+        priority: { in: ['P1', 'P2'] },
+        ...(query.project_id
+          ? { affectedServices: { isEmpty: false } }  // project-scoped handled post-query
+          : {})
+      },
+      select: { openedAt: true, acknowledgedAt: true, resolvedAt: true, affectedServices: true }
+    });
+
+    // If project_id is set, auto-match incidents whose affectedServices overlap
+    // with the project name/key (case-insensitive). See dora-metrics.md §MTTR.
+    let scoped = incidents;
+    if (query.project_id) {
+      const project = await prisma.project.findFirst({
+        where: { id: query.project_id, tenantId },
+        select: { name: true, key: true }
+      });
+      if (project) {
+        const lower = [project.name.toLowerCase(), (project.key ?? '').toLowerCase()].filter(Boolean);
+        scoped = incidents.filter((i) =>
+          i.affectedServices.some((s) => lower.includes(s.toLowerCase()))
+        );
+        // If no match, fall back to all tenant incidents (MTTR genérico)
+        if (scoped.length === 0) scoped = incidents;
+      }
+    }
+
+    incidentSampleSize = scoped.length;
+
+    const restoreTimes = scoped.map((i) =>
+      (i.resolvedAt!.getTime() - i.openedAt.getTime()) / 3_600_000
+    );
+    mttr = computeMttr(restoreTimes);
+
+    // MTTA: only incidents that were acknowledged
+    const ackTimes = scoped
+      .filter((i) => i.acknowledgedAt !== null)
+      .map((i) => (i.acknowledgedAt!.getTime() - i.openedAt.getTime()) / 3_600_000);
+    mttaSampleSize = ackTimes.length;
+    mtta = computeMtta(ackTimes);
+
+    // Incident frequency: count of all P1/P2 incidents in window (not just resolved)
+    const incidentCount = await prisma.incidentEvent.count({
+      where: {
+        tenantId,
+        openedAt: { gte: windowStart, lte: windowEnd },
+        priority: { in: ['P1', 'P2'] }
+      }
+    });
+    incidentFrequency = computeIncidentFrequency(incidentCount, windowDays);
+  }
 
   // ── Change Failure Rate ────────────────────────────────────────────────────
   const allDeploys = await prisma.deployEvent.findMany({
@@ -161,6 +216,9 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
   const cfr = computeChangeFailureRate(allDeploys.length, failedDeployCount);
 
   // ── Overall level ──────────────────────────────────────────────────────────
+  // MTTR is only included when fed by real incident data (not when not_configured).
+  // Score is computed from available metrics to avoid penalising tenants who
+  // haven't configured an incident integration yet.
   const levels: DoraLevel[] = [df.level];
   if (lt) levels.push(lt.level);
   if (mttr) levels.push(mttr.level);
@@ -178,6 +236,8 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
         ]
       : []),
     ...(mttr ? [{ metric_name: 'mttr', value: mttr.value, unit: 'hours', level: mttr.level }] : []),
+    ...(mtta ? [{ metric_name: 'mtta', value: mtta.p50, unit: 'hours', level: mtta.level }] : []),
+    ...(incidentFrequency ? [{ metric_name: 'incident_frequency', value: incidentFrequency.value, unit: 'per_day', level: 'medium' as DoraLevel }] : []),
     ...(cfr
       ? [{ metric_name: 'change_failure_rate', value: cfr.value, unit: 'percent', level: cfr.level }]
       : []),
@@ -194,7 +254,7 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
           windowDays,
           value: s.value,
           unit: s.unit,
-          level: s.level as any,
+          level: s.level as DoraLevel,
           windowStart,
           windowEnd
         }
@@ -218,7 +278,14 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
       ? { p50: lt.p50, p95: lt.p95, unit: lt.unit, level: lt.level, sample_size: ltMetrics.length }
       : null,
     mttr: mttr
-      ? { value: mttr.value, unit: mttr.unit, level: mttr.level, sample_size: restoreTimes.length }
+      ? { value: mttr.value, unit: mttr.unit, level: mttr.level, sample_size: incidentSampleSize }
+      : null,
+    mttr_source: mttrSource,
+    mtta: mtta
+      ? { p50: mtta.p50, unit: mtta.unit, level: mtta.level, sample_size: mttaSampleSize }
+      : null,
+    incident_frequency: incidentFrequency
+      ? { value: incidentFrequency.value, unit: incidentFrequency.unit }
       : null,
     change_failure_rate: cfr
       ? {

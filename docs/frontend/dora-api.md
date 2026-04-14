@@ -14,7 +14,7 @@ The DORA module implements the four key DevOps Research and Assessment metrics:
 |---|---|
 | **Deployment Frequency** | How often code reaches production |
 | **Lead Time for Changes** | PR first commit → merged |
-| **MTTR** | How fast incidents are resolved (hotfix + rollback deploys) |
+| **MTTR** | How fast P1/P2 incidents are resolved (via OpsGenie or incident.io integration) |
 | **Change Failure Rate** | Percentage of deploys that cause rollback/hotfix |
 
 The scorecard endpoint computes all four metrics and returns a performance level per metric and an overall level.
@@ -40,6 +40,7 @@ The scorecard endpoint computes all four metrics and returns a performance level
 | Deployment Frequency | ≥ 1/day | ≥ 1/week | ≥ 1/month | < 1/month |
 | Lead Time for Changes | < 1h | < 7d | < 30d | ≥ 30d |
 | MTTR | < 1h | < 24h | < 7d | ≥ 7d |
+| MTTA | < 15min | < 30min | < 2h | ≥ 2h |
 | Change Failure Rate | ≤ 5% | ≤ 10% | ≤ 15% | > 15% |
 
 ---
@@ -198,6 +199,17 @@ Compute all 4 DORA metrics over a rolling time window. Also persists a `HealthMe
       "level": "high",
       "sample_size": 5
     },
+    "mttr_source": "incidents",
+    "mtta": {
+      "p50": 0.18,
+      "unit": "hours",
+      "level": "elite",
+      "sample_size": 10
+    },
+    "incident_frequency": {
+      "value": 0.3,
+      "unit": "per_day"
+    },
     "change_failure_rate": {
       "value": 4.76,
       "unit": "percent",
@@ -211,7 +223,9 @@ Compute all 4 DORA metrics over a rolling time window. Also persists a `HealthMe
 }
 ```
 
-> **Nullable metrics:** `lead_time`, `mttr`, and `change_failure_rate` are `null` if no qualifying data exists in the window. Always check for null before accessing sub-fields.
+> **Nullable metrics:** `lead_time`, `mttr`, `mtta`, `incident_frequency`, and `change_failure_rate` are `null` if no qualifying data exists in the window. Always check for null before accessing sub-fields.
+
+> **Incident integration not configured:** When no active OpsGenie or incident.io connection exists for the tenant, `mttr_source` is `"not_configured"` and `mttr`, `mtta`, and `incident_frequency` are all `null`. The overall scorecard level is computed from the remaining available metrics only — the tenant is not penalised. To enable incident metrics, add an OpsGenie or incident.io connection via the Integrations module.
 
 **Error Scenarios:**
 
@@ -289,7 +303,7 @@ Retrieve historical health metric snapshots for trend charts.
 
 | Param | Type | Notes |
 |---|---|---|
-| `metric_name` | string | One of: `deployment_frequency`, `lead_time_p50`, `lead_time_p95`, `mttr`, `change_failure_rate` |
+| `metric_name` | string | One of: `deployment_frequency`, `lead_time_p50`, `lead_time_p95`, `mttr`, `mtta`, `incident_frequency`, `change_failure_rate` |
 
 **Query Params:**
 
@@ -329,6 +343,70 @@ Retrieve historical health metric snapshots for trend charts.
 
 ---
 
+### GET /integrations/connections/:connection_id/incident-io/severities
+
+Fetch the severity list configured in the tenant's incident.io account. Use in the field mapping wizard to populate the `severity_to_priority` mapping UI.
+
+**Permission:** `integrations.connection.read`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `connection_id` | string (UUID) | `IntegrationConnection` ID for an active `incident_io` connection |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "connection_id": "conn-uuid-001",
+    "severities": [
+      { "id": "sev-1", "name": "Critical", "rank": 1, "description": "Service outage" },
+      { "id": "sev-2", "name": "Major",    "rank": 2, "description": "Significant impact" },
+      { "id": "sev-3", "name": "Minor",    "rank": 3, "description": "Partial degradation" }
+    ]
+  },
+  "meta": { "request_id": "req_010", "version": "v1", "timestamp": "2026-04-14T10:00:00Z" },
+  "error": null
+}
+```
+
+---
+
+### GET /integrations/connections/:connection_id/opsgenie/priorities
+
+Return the standard OpsGenie priority list (static — no API call). Use in the field mapping wizard.
+
+**Permission:** `integrations.connection.read`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `connection_id` | string (UUID) | `IntegrationConnection` ID for an active `opsgenie` connection |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "connection_id": "conn-uuid-002",
+    "priorities": [
+      { "name": "P1", "label": "P1 — Critical" },
+      { "name": "P2", "label": "P2 — High" },
+      { "name": "P3", "label": "P3 — Moderate" },
+      { "name": "P4", "label": "P4 — Low" },
+      { "name": "P5", "label": "P5 — Informational" }
+    ]
+  },
+  "meta": { "request_id": "req_011", "version": "v1", "timestamp": "2026-04-14T10:00:00Z" },
+  "error": null
+}
+```
+
+---
+
 ## Common Types
 
 ### DoraLevel
@@ -356,4 +434,6 @@ Retrieve historical health metric snapshots for trend charts.
 | `lead_time_p50` | Median lead time (hours) |
 | `lead_time_p95` | P95 lead time (hours) |
 | `mttr` | Mean time to restore (hours) |
+| `mtta` | Mean time to acknowledge P1/P2 incidents (hours, P50) |
+| `incident_frequency` | P1/P2 incidents per day |
 | `change_failure_rate` | Failed deploy percentage |

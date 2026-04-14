@@ -6,6 +6,9 @@ import {
   computeLeadTime,
   classifyMttr,
   computeMttr,
+  classifyMtta,
+  computeMtta,
+  computeIncidentFrequency,
   classifyChangeFailureRate,
   computeChangeFailureRate,
   computeOverallDoraLevel
@@ -209,5 +212,79 @@ describe('computeOverallDoraLevel', () => {
 
   it('single level preserved', () => {
     expect(computeOverallDoraLevel(['high'])).toBe('high');
+  });
+});
+
+// ── classifyMtta ─────────────────────────────────────────────────────────────
+
+describe('classifyMtta', () => {
+  it('elite: < 15 min (0.25 h)', () => {
+    expect(classifyMtta(0)).toBe('elite');
+    expect(classifyMtta(0.24)).toBe('elite');
+  });
+
+  it('high: < 30 min (0.5 h)', () => {
+    expect(classifyMtta(0.25)).toBe('high');
+    expect(classifyMtta(0.49)).toBe('high');
+  });
+
+  it('medium: < 2 h', () => {
+    expect(classifyMtta(0.5)).toBe('medium');
+    expect(classifyMtta(1.99)).toBe('medium');
+  });
+
+  it('low: >= 2 h', () => {
+    expect(classifyMtta(2)).toBe('low');
+    expect(classifyMtta(24)).toBe('low');
+  });
+});
+
+// ── computeMtta ───────────────────────────────────────────────────────────────
+
+describe('computeMtta', () => {
+  it('returns null for empty input', () => {
+    expect(computeMtta([])).toBeNull();
+  });
+
+  it('computes p50 and level correctly', () => {
+    // 0.1 h ack times → elite
+    const result = computeMtta([0.1, 0.1, 0.1]);
+    expect(result).not.toBeNull();
+    expect(result!.p50).toBeCloseTo(0.1);
+    expect(result!.unit).toBe('hours');
+    expect(result!.level).toBe('elite');
+  });
+
+  it('handles odd-length sorted array correctly', () => {
+    // p50 of [0.1, 0.6, 3.0] = 0.6h → medium (0.5..2h)
+    const result = computeMtta([0.1, 0.6, 3.0]);
+    expect(result!.p50).toBeCloseTo(0.6);
+    expect(result!.level).toBe('medium');
+  });
+
+  it('single sample', () => {
+    const result = computeMtta([1.5]);
+    expect(result!.p50).toBe(1.5);
+    expect(result!.level).toBe('medium');
+  });
+});
+
+// ── computeIncidentFrequency ──────────────────────────────────────────────────
+
+describe('computeIncidentFrequency', () => {
+  it('returns 0 when no incidents', () => {
+    const result = computeIncidentFrequency(0, 30);
+    expect(result.value).toBe(0);
+    expect(result.unit).toBe('per_day');
+  });
+
+  it('divides count by window days', () => {
+    const result = computeIncidentFrequency(15, 30);
+    expect(result.value).toBeCloseTo(0.5);
+  });
+
+  it('daily frequency for high-incident window', () => {
+    const result = computeIncidentFrequency(30, 30);
+    expect(result.value).toBe(1);
   });
 });

@@ -210,7 +210,7 @@ Detect statistical anomalies in DORA / health metric time-series using z-score a
 
 | Param | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `metric_name` | string | ❌ | — | Filter to one metric (e.g. `deployment_frequency`) |
+| `metric_name` | string | ❌ | — | Filter to one metric. Valid values: `deployment_frequency`, `lead_time`, `mttr`, `change_failure_rate`, `mtta`, `incident_frequency`, `review_velocity`, `sprint_velocity` |
 | `project_id` | UUID | ❌ | — | Scope to a project |
 | `window_days` | integer | ❌ | 90 | Historical window: 7–365 days |
 | `z_threshold` | number | ❌ | 2.0 | Z-score threshold: 1.0–5.0. Lower = more sensitive |
@@ -245,7 +245,7 @@ Detect statistical anomalies in DORA / health metric time-series using z-score a
 | `direction` | `spike` \| `drop` | `spike` = z > 0, `drop` = z < 0 |
 | `zScore` | number | Standard deviations from mean. Negative = drop |
 
-> Only groups with at least one anomaly are returned. Series with fewer than 3 points or stddev = 0 are skipped.
+> Only groups with at least one anomaly are returned. Series with fewer than 3 points or stddev = 0 are skipped. `mttr`, `mtta`, and `incident_frequency` are only available when an incident management integration (OpsGenie or incident.io) is active.
 
 **Error Scenarios:**
 
@@ -302,6 +302,10 @@ Get prioritised, rule-based action recommendations derived from cross-module sig
 | `investigate_velocity_decline` | Velocity trend is `down` over last 12 weeks |
 | `epic_at_risk` | Active epic past `targetEndDate`. Priority `high` if > 2 weeks overdue |
 | `team_overloaded` | Any user with utilization > 110% in current period |
+| `configure_incident_integration` | No active OpsGenie or incident.io connection. MTTR cannot be computed. Priority `high` |
+| `investigate_high_mttr` | MTTR P50 > 24h (level `low`). Requires incident integration active |
+| `investigate_mtta` | MTTA P50 > 30min. Indicates slow on-call response. Requires incident integration active |
+| `incident_frequency_spike` | Incident frequency > 150% of prior-week baseline. Priority `high` |
 
 > Results are sorted: `high` → `medium` → `low`.
 

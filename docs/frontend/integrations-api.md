@@ -8,7 +8,7 @@
 
 ## Overview
 
-The Integrations module manages connections to external providers (Jira, GitHub), triggers data sync jobs, and receives provider webhooks.
+The Integrations module manages connections to external providers (Jira, GitHub, OpsGenie, incident.io), triggers data sync jobs, and receives provider webhooks.
 
 **Important security note:** Credentials (API tokens, OAuth secrets) are **write-only** — they are never returned in any API response. The API returns `secret_strategy` to indicate how secrets are stored, but never exposes the actual values.
 
@@ -24,6 +24,8 @@ The Integrations module manages connections to external providers (Jira, GitHub)
 | `/integrations/original-types` | GET | `integrations.connection.read` |
 | `/integrations/connections/:id/type-mapping` | GET | `integrations.connection.read` |
 | `/integrations/connections/:id/type-mapping` | PATCH | `integrations.connection.manage` |
+| `/integrations/connections/:id/incident-io/severities` | GET | `integrations.connection.read` |
+| `/integrations/connections/:id/opsgenie/priorities` | GET | `integrations.connection.read` |
 | `/integrations/sync-jobs` | POST | `integrations.sync` |
 | `/integrations/sync-jobs/:job_id` | GET | `integrations.read` |
 | `/integrations/webhooks/:provider/:tenant_id` | POST | Public (token-gated — see below) |
@@ -75,7 +77,7 @@ Register a new integration connection for the tenant.
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `tenant_id` | string | ✅ | Must match JWT `tenant_id` |
-| `provider` | enum | ✅ | `jira` \| `github` |
+| `provider` | enum | ✅ | `jira` \| `github` \| `opsgenie` \| `incident_io` |
 | `scope` | object | ❌ | Provider-specific scope configuration (e.g. `{ "org": "acme-corp" }`) |
 | `credentials` | object | ❌ | See Credential types below |
 
@@ -560,14 +562,286 @@ Check the processing status of a received webhook event.
 
 ---
 
+## Incident Management Providers
+
+OpsGenie and incident.io connections feed the **DORA MTTR and MTTA** metrics. Unlike task/deploy providers, these connectors sync `IncidentEvent` records — not tasks or projects.
+
+> **`mttr_source` in DORA Scorecard:** If the tenant has no active `opsgenie` or `incident_io` connection, the scorecard returns `mttr_source: "not_configured"` and `mttr`, `mtta`, `incident_frequency` are all `null`. The overall DORA level is still computed from the other three metrics — the tenant is not penalised.
+
+---
+
+### Connecting OpsGenie
+
+**Credential shape:**
+
+```json
+{
+  "auth_type": "api_key",
+  "api_key": "<opsgenie-api-key>"
+}
+```
+
+**Scope shape:**
+
+```json
+{
+  "use_incident_api": true,
+  "field_mapping": {
+    "severity_to_priority": {
+      "P1": "P1",
+      "P2": "P2",
+      "P3": "P3",
+      "P4": "P4",
+      "P5": "P5"
+    },
+    "include_priorities": ["P1", "P2"]
+  }
+}
+```
+
+| Scope field | Required | Notes |
+|---|---|---|
+| `use_incident_api` | ✅ | `true` = Incident API (Standard/Enterprise plans); `false` = Alert API (Essentials) |
+| `field_mapping.severity_to_priority` | ✅ | Maps OpsGenie priority labels to canonical P1–P5 |
+| `field_mapping.include_priorities` | ❌ | Which priorities to sync (default: `["P1","P2"]`) |
+| `field_mapping.production_indicator` | ❌ | How to detect production incidents (`{ type: "tag", value: "production" }`) |
+| `field_mapping.affected_service_field` | ❌ | Where to read `affectedServices` from the payload |
+
+**Full POST example:**
+
+```json
+{
+  "tenant_id": "tenant-7a4b",
+  "provider": "opsgenie",
+  "credentials": {
+    "auth_type": "api_key",
+    "api_key": "og_api_xxxxxxxx"
+  },
+  "scope": {
+    "use_incident_api": true,
+    "field_mapping": {
+      "severity_to_priority": {
+        "P1": "P1",
+        "P2": "P2",
+        "P3": "P3",
+        "P4": "P4",
+        "P5": "P5"
+      },
+      "include_priorities": ["P1", "P2"],
+      "production_indicator": { "type": "tag", "value": "production" }
+    }
+  }
+}
+```
+
+**OpsGenie webhook setup:**
+Set `x-webhook-token` header to the value of the `OPSGENIE_WEBHOOK_TOKEN` env var and point the OpsGenie outbound integration to `POST /api/v1/integrations/webhooks/opsgenie/:tenant_id`.
+
+---
+
+### Connecting incident.io
+
+**Credential shape:**
+
+```json
+{
+  "auth_type": "bearer",
+  "api_key": "<incident-io-api-key>"
+}
+```
+
+**Scope shape:**
+
+```json
+{
+  "field_mapping": {
+    "severity_to_priority": {
+      "Critical": "P1",
+      "Major": "P2",
+      "Minor": "P3"
+    },
+    "include_priorities": ["P1", "P2"]
+  }
+}
+```
+
+| Scope field | Required | Notes |
+|---|---|---|
+| `field_mapping.severity_to_priority` | ✅ | Maps incident.io severity names to canonical P1–P5. Use the `/severities` wizard endpoint to get available names. |
+| `field_mapping.include_priorities` | ❌ | Which priorities to sync after mapping (default: `["P1","P2"]`) |
+| `field_mapping.production_indicator` | ❌ | Filter for production incidents |
+| `field_mapping.affected_service_field` | ❌ | Custom field key for affected services |
+| `field_mapping.opened_at_field` | ❌ | Field to use as `openedAt` (default `created_at`) |
+
+**Full POST example:**
+
+```json
+{
+  "tenant_id": "tenant-7a4b",
+  "provider": "incident_io",
+  "credentials": {
+    "auth_type": "bearer",
+    "api_key": "inc_io_xxxxxxxx"
+  },
+  "scope": {
+    "field_mapping": {
+      "severity_to_priority": {
+        "Critical": "P1",
+        "Major": "P2",
+        "Minor": "P3"
+      },
+      "include_priorities": ["P1", "P2"],
+      "production_indicator": { "type": "field", "field": "environment", "value": "production" }
+    }
+  }
+}
+```
+
+**incident.io webhook setup:**
+Set `x-webhook-token` header to `INCIDENT_IO_WEBHOOK_TOKEN` and configure the incident.io outbound webhook to `POST /api/v1/integrations/webhooks/incident_io/:tenant_id`.
+
+---
+
+### Field Mapping Wizard Endpoints
+
+Use these before or after saving the connection to populate the `severity_to_priority` mapping UI.
+
+#### GET /integrations/connections/:connection_id/incident-io/severities
+
+Fetch the live severity list from the tenant's incident.io account.
+
+**Permission:** `integrations.connection.read`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `connection_id` | string (UUID) | Active `incident_io` connection ID |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "connection_id": "conn-uuid-001",
+    "severities": [
+      { "id": "sev-1", "name": "Critical", "rank": 1, "description": "Total service outage" },
+      { "id": "sev-2", "name": "Major",    "rank": 2, "description": "Significant impact" },
+      { "id": "sev-3", "name": "Minor",    "rank": 3, "description": "Partial degradation" }
+    ]
+  },
+  "meta": { "request_id": "req_w01", "version": "v1", "timestamp": "2026-04-14T10:00:00Z" },
+  "error": null
+}
+```
+
+Use `name` as the left-hand key in `severity_to_priority`. Render rows sorted by ascending `rank`.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Connection is not `incident_io` or has no credentials |
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Connection not found |
+| 502 | `BAD_GATEWAY` | incident.io API returned an error |
+
+---
+
+#### GET /integrations/connections/:connection_id/opsgenie/priorities
+
+Return the static OpsGenie priority list (no API call required — priorities are system-defined).
+
+**Permission:** `integrations.connection.read`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `connection_id` | string (UUID) | Active `opsgenie` connection ID |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "connection_id": "conn-uuid-002",
+    "priorities": [
+      { "name": "P1", "label": "P1 — Critical" },
+      { "name": "P2", "label": "P2 — High" },
+      { "name": "P3", "label": "P3 — Moderate" },
+      { "name": "P4", "label": "P4 — Low" },
+      { "name": "P5", "label": "P5 — Informational" }
+    ]
+  },
+  "meta": { "request_id": "req_w02", "version": "v1", "timestamp": "2026-04-14T10:00:00Z" },
+  "error": null
+}
+```
+
+Use `name` as the left-hand key in `severity_to_priority`. Since OpsGenie priorities are static, there is no live API call — the response is always the same five values.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Connection is not `opsgenie` |
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Connection not found |
+
+---
+
+### Field Mapping Wizard UI Flow
+
+```
+1. User selects provider: "OpsGenie" or "incident.io"
+
+2. User enters credentials and saves connection:
+   POST /integrations/connections  →  201 { data: { id: "conn-uuid", ... } }
+
+3. Show "Configure Field Mapping" step (non-blocking — MTTR unavailable until done):
+
+   For incident.io:
+     GET /integrations/connections/:conn_id/incident-io/severities
+     → [{ name: "Critical", rank: 1 }, { name: "Major", rank: 2 }, ...]
+     Render dropdown mapping:
+       Critical → [P1 ▼]
+       Major    → [P2 ▼]
+       Minor    → [P3 ▼]
+
+   For OpsGenie:
+     GET /integrations/connections/:conn_id/opsgenie/priorities
+     → [{ name: "P1" }, { name: "P2" }, ...]
+     Render dropdown mapping:
+       P1 → [P1 ▼]  (pre-filled: OpsGenie P1–P5 maps 1:1 by default)
+       P2 → [P2 ▼]
+       ...
+
+4. User saves mapping:
+   PATCH /integrations/connections/:conn_id  body: { scope: { field_mapping: {...} } }
+   →  200
+
+5. Trigger first sync:
+   POST /integrations/sync-jobs  body: { connection_id, mode: "full" }
+   →  202
+```
+
+> MTTR/MTTA will appear in the DORA scorecard after the first successful sync with a configured `field_mapping`.
+
+---
+
 ## Common Types
 
 ### Provider
 
 | Value | Notes |
 |---|---|
-| `jira` | Atlassian Jira Cloud or Server |
-| `github` | GitHub Cloud |
+| `jira` | Atlassian Jira Cloud or Server — syncs tasks, epics, projects, users |
+| `github` | GitHub Cloud — syncs PRs, issues, releases, users |
+| `opsgenie` | Atlassian OpsGenie — syncs incidents/alerts as `IncidentEvent` (MTTR/MTTA) |
+| `incident_io` | incident.io — syncs incidents as `IncidentEvent` (MTTR/MTTA) |
 
 ### Auth Type
 

@@ -159,6 +159,8 @@ enum TaskStatus {
 enum IntegrationProvider {
   jira
   github
+  opsgenie
+  incident_io
 }
 
 enum ConnectionStatus {
@@ -250,6 +252,53 @@ model HealthMetric {
   @@index([computedAt])
 }
 
+// ── Incident management ───────────────────────────────────────────────────────
+
+enum IncidentStatus {
+  open
+  acknowledged
+  resolved
+  closed
+}
+
+// Normalized incident record sourced from OpsGenie or incident.io.
+// Owned by the Integrations module. The DORA engine reads this for MTTR/MTTA.
+model IncidentEvent {
+  id               String              @id @default(uuid())
+  tenantId         String
+  connectionId     String              // FK → IntegrationConnection
+  provider         IntegrationProvider
+  externalId       String              // ID in the provider system
+
+  // Lifecycle timestamps — critical for MTTR / MTTA
+  openedAt         DateTime            // when the incident was detected/created
+  acknowledgedAt   DateTime?           // when first responder acted (MTTA)
+  resolvedAt       DateTime?           // when service was restored (MTTR)
+  closedAt         DateTime?           // formal close, may differ from resolvedAt
+
+  // Classification (normalized cross-provider)
+  priority         String?             // "P1" | "P2" | "P3" | "P4" | "P5"
+  severity         String?             // raw severity name from provider
+  status           IncidentStatus      @default(open)
+  title            String
+
+  // Context
+  affectedServices String[]            // service names/IDs from provider, used for project auto-match
+  responderIds     String[]            // responder IDs in the provider
+  tags             String[]
+
+  // Audit
+  rawPayload       Json?
+  syncedAt         DateTime            @default(now())
+
+  connection       IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider, externalId])
+  @@index([tenantId, openedAt])
+  @@index([tenantId, priority, resolvedAt])
+  @@index([connectionId])
+}
+
 model IntegrationConnection {
   id                  String              @id @default(uuid())
   tenantId            String
@@ -267,6 +316,7 @@ model IntegrationConnection {
   syncJobs            IntegrationSyncJob[]
   webhookEvents       IntegrationWebhookEvent[]
   tasks               Task[]
+  incidentEvents      IncidentEvent[]
 
   @@index([tenantId])
   @@index([provider])

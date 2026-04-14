@@ -1,7 +1,9 @@
 import type { IntegrationProvider } from '@prisma/client';
 import type { IntegrationConnector } from './base.js';
 import { GithubConnector } from './github.js';
+import { IncidentIoConnector } from './incident_io.js';
 import { JiraConnector } from './jira.js';
+import { OpsGenieConnector } from './opsgenie.js';
 
 /**
  * Central registry of all available integration connectors.
@@ -12,7 +14,9 @@ import { JiraConnector } from './jira.js';
  */
 const connectorFactories = new Map<IntegrationProvider, () => IntegrationConnector>([
   ['github', () => new GithubConnector()],
+  ['incident_io', () => new IncidentIoConnector()],
   ['jira', () => new JiraConnector()],
+  ['opsgenie', () => new OpsGenieConnector()],
 ]);
 
 export function getConnector(provider: IntegrationProvider): IntegrationConnector {

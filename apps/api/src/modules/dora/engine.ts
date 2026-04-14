@@ -112,6 +112,38 @@ export function computeOverallDoraLevel(levels: DoraLevel[]): DoraLevel {
   return 'low';
 }
 
+// ── Mean Time to Acknowledge (MTTA) ──────────────────────────────────────────
+// Health metric (not an official DORA metric). Measures on-call response speed.
+
+// hours
+export function classifyMtta(hours: number): DoraLevel {
+  if (hours < 0.25) return 'elite';   // < 15 min
+  if (hours < 0.5) return 'high';    // < 30 min
+  if (hours < 2) return 'medium';    // < 2 h
+  return 'low';
+}
+
+export function computeMtta(
+  ackTimesHours: number[]
+): { p50: number; unit: 'hours'; level: DoraLevel } | null {
+  if (ackTimesHours.length === 0) return null;
+
+  const sorted = [...ackTimesHours].sort((a, b) => a - b);
+  const p50 = percentile(sorted, 50);
+
+  return { p50, unit: 'hours', level: classifyMtta(p50) };
+}
+
+// ── Incident Frequency ────────────────────────────────────────────────────────
+// P1/P2 incidents per day. Health metric, complements CFR.
+
+export function computeIncidentFrequency(
+  incidentCount: number,
+  windowDays: number
+): { value: number; unit: 'per_day' } {
+  return { value: incidentCount / windowDays, unit: 'per_day' };
+}
+
 // ── Utility ───────────────────────────────────────────────────────────────────
 
 function percentile(sorted: number[], p: number): number {

@@ -92,7 +92,7 @@ List notifications for the authenticated tenant.
         "template_key": "sla-breach",
         "status": "failed",
         "attempts": 3,
-        "last_error": "MAILTRAP_API_TOKEN environment variable is not set",
+        "last_error": "SMTP_HOST environment variable is required",
         "next_retry_at": null,
         "sent_at": null,
         "created_at": "2026-04-13T10:00:00Z"
@@ -190,4 +190,4 @@ Re-enqueue a **failed** notification for delivery.
 
 | Version | Date | Change |
 |---|---|---|
-| v1 | 2026-04-13 | Initial release — email via Mailtrap, invite / sla-breach / dora-digest templates, admin list + retry routes |
+| v1 | 2026-04-13 | Initial release — email via SMTP (Nodemailer), invite / sla-breach / dora-digest templates, admin list + retry routes |

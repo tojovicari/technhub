@@ -71,7 +71,7 @@ Fase 4                                                        │  Inteligência
 | 2.1 | Analytics Engine: estrutura base + consumo de eventos | P0         |
 | 2.2 | DORA: Deployment Frequency                             | P0         |
 | 2.3 | DORA: Lead Time for Changes                            | P0         |
-| 2.4 | DORA: Mean Time to Restore                             | P0         |
+| 2.4 | DORA: Mean Time to Restore (via integrações OpsGenie / incident.io — antecipado em fase 2.5) | P0         |
 | 2.5 | DORA: Change Failure Rate                              | P0         |
 | 2.6 | DORA Scorecard no dashboard (nível Elite/High/Medium/Low) | P0      |
 | 2.7 | SLA Templates: CRUD + configuração por projeto         | P0         |
@@ -136,7 +136,7 @@ Fase 4                                                        │  Inteligência
 | 4.8 | Dashboard de capacity (FTE disponível vs comprometido)       | P1         | ✅ Implementado (`GET /intel/capacity`) |
 | 4.9 | Custom dashboard builder (drag-drop widgets)                 | P2         | ❌ Pós-fase (frontend only) |
 | 4.10 | Export de dados: CSV, API aberta para BI tools              | P2         | ✅ Implementado (`GET /intel/export`) |
-| 4.11 | Integração PagerDuty/Opsgenie (MTTR aprimorado)             | P3         | ❌ Backlog futuro |
+| 4.11 | OpsGenie + incident.io (MTTR/MTTA via IncidentEvent)             | P0         | ✅ Implementado (fase 2.5, 2026-04-14) |
 | 4.12 | Skill matrix do time                                         | P3         | ❌ Backlog futuro |
 
 **Critérios de Aceitação da Fase 4:**

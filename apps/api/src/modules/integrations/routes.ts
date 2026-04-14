@@ -2,12 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
 import { createConnectionSchema, createSyncJobSchema, rotateSecretSchema, typeMappingSchema, updateConnectionSchema } from './schema.js';
-import { createConnection, createSyncJob, deleteConnection, getAllOriginalTypes, getConnection, getOriginalTypes, getSyncJob, getTypeMapping, listConnections, rotateSecret, updateConnection, updateTypeMapping } from './service.js';
+import { createConnection, createSyncJob, deleteConnection, getAllOriginalTypes, getConnection, getConnectionCredentials, getOriginalTypes, getSyncJob, getTypeMapping, listConnections, rotateSecret, updateConnection, updateTypeMapping } from './service.js';
 
 function mapConnection(connection: {
   id: string;
   tenantId: string;
-  provider: 'jira' | 'github';
+  provider: 'jira' | 'github' | 'opsgenie' | 'incident_io';
   status: 'active' | 'disabled' | 'error';
   secretStrategy: 'vault_ref' | 'db_encrypted';
   secretLastRotatedAt: Date | null;
@@ -278,6 +278,84 @@ export async function integrationsRoutes(app: FastifyInstance) {
     return reply.status(200).send(ok(request, {
       connection_id: connectionId,
       mapping
+    }));
+  });
+
+  // ── Field mapping wizard — provider metadata ──────────────────────────────
+  // Fetch the available severity/priority values from the provider so the
+  // frontend can render a dropdown mapping to canonical P1–P5.
+
+  app.get('/integrations/connections/:connection_id/incident-io/severities', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.read')]
+  }, async (request, reply) => {
+    const { connection_id: connectionId } = request.params as { connection_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+
+    const conn = await getConnectionCredentials(connectionId, tenantId);
+    if (!conn) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+    if (conn.provider !== 'incident_io') {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Connection is not an incident.io connection'));
+    }
+
+    const apiKey = (conn.credentials as { api_key?: string }).api_key;
+    if (!apiKey) {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Connection has no credentials'));
+    }
+
+    const res = await fetch('https://api.incident.io/v1/severities', {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+    });
+
+    if (!res.ok) {
+      return reply.status(502).send(fail(request, 'BAD_GATEWAY', `incident.io API error: ${res.status}`));
+    }
+
+    type IncidentIoSeveritiesResponse = {
+      severities: Array<{ id: string; name: string; rank: number; description?: string }>;
+    };
+    const data = await res.json() as IncidentIoSeveritiesResponse;
+
+    return reply.status(200).send(ok(request, {
+      connection_id: connectionId,
+      severities: data.severities.map((s) => ({
+        id: s.id,
+        name: s.name,
+        rank: s.rank,
+        description: s.description ?? null,
+      })),
+    }));
+  });
+
+  app.get('/integrations/connections/:connection_id/opsgenie/priorities', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.connection.read')]
+  }, async (request, reply) => {
+    const { connection_id: connectionId } = request.params as { connection_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+
+    const conn = await getConnectionCredentials(connectionId, tenantId);
+    if (!conn) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+    if (conn.provider !== 'opsgenie') {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Connection is not an OpsGenie connection'));
+    }
+
+    // OpsGenie priorities are system-defined — no API call needed.
+    // The mapping wizard uses these to populate the left-hand side of the
+    // severity_to_priority dropdowns.
+    const priorities = [
+      { name: 'P1', label: 'P1 — Critical' },
+      { name: 'P2', label: 'P2 — High' },
+      { name: 'P3', label: 'P3 — Moderate' },
+      { name: 'P4', label: 'P4 — Low' },
+      { name: 'P5', label: 'P5 — Informational' },
+    ];
+
+    return reply.status(200).send(ok(request, {
+      connection_id: connectionId,
+      priorities,
     }));
   });
 }

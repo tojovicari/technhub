@@ -120,6 +120,27 @@ function decodeSecret(encryptedBlob: string): Record<string, unknown> {
   }
 }
 
+/** Resolve credentials for a connection. Returns null if connection not found. */
+export async function getConnectionCredentials(
+  connectionId: string,
+  tenantId: string,
+): Promise<{ credentials: Record<string, unknown>; provider: string } | null> {
+  const connection = await prisma.integrationConnection.findFirst({
+    where: { id: connectionId, tenantId },
+  });
+  if (!connection) return null;
+
+  const secret = await prisma.integrationSecret.findFirst({
+    where: { connectionId, tenantId },
+    orderBy: { version: 'desc' },
+  });
+
+  return {
+    credentials: secret ? decodeSecret(secret.encryptedBlob) : {},
+    provider: connection.provider,
+  };
+}
+
 async function resolveLastSyncDate(connectionId: string, tenantId: string): Promise<Date | undefined> {
   const lastSuccess = await prisma.integrationSyncJob.findFirst({
     where: { connectionId, tenantId, status: 'success' },

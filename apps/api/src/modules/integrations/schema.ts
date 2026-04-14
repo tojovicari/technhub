@@ -18,7 +18,7 @@ const credentialSchema = z.union([vaultReferenceCredential, inlineSecretCredenti
 
 export const createConnectionSchema = z.object({
   tenant_id: z.string().min(1),
-  provider: z.enum(['jira', 'github']),
+  provider: z.enum(['jira', 'github', 'opsgenie', 'incident_io']),
   scope: z.record(z.unknown()).optional(),
   credentials: credentialSchema.optional()
 });

@@ -1,7 +1,13 @@
 import { randomUUID } from 'crypto';
-import type { IntegrationProvider } from '@prisma/client';
+import type { IntegrationConnection, IntegrationProvider, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { getConnector } from './connectors/registry.js';
+import {
+  resolveFieldMapping,
+  mapSeverityToPriority,
+  isProductionIncident,
+  extractAffectedServices,
+} from './connectors/field-mapping.js';
 import { createSyncJob } from './service.js';
 
 type EnqueueInput = {
@@ -73,6 +79,131 @@ export function verifyWebhookToken(
   return token === expected;
 }
 
+// ── Incident provider inline webhook processors ───────────────────────────────
+//
+// Rather than triggering a full incremental sync for every incident lifecycle
+// event, we upsert the IncidentEvent directly from the webhook payload.
+// This gives near-real-time MTTR/MTTA accuracy without polling delay.
+// Both functions are best-effort: if field_mapping is missing we skip inline
+// processing and let the next scheduled incremental sync pick up the change.
+
+type IncidentIoStatusCategory = 'triage' | 'investigating' | 'fixing' | 'monitoring' | 'resolved' | 'declined';
+
+function resolveIncidentIoStatus(cat: string): 'open' | 'acknowledged' | 'resolved' | 'closed' {
+  switch (cat as IncidentIoStatusCategory) {
+    case 'triage': case 'investigating': return 'open';
+    case 'fixing': case 'monitoring': return 'acknowledged';
+    case 'resolved': return 'resolved';
+    case 'declined': return 'closed';
+    default: return 'open';
+  }
+}
+
+async function processIncidentIoWebhook(
+  payload: Record<string, unknown>,
+  connection: IntegrationConnection,
+): Promise<void> {
+  const incident = payload['incident'] as Record<string, unknown> | undefined;
+  if (!incident || typeof incident['id'] !== 'string') return;
+
+  const scope = (connection.scope as Record<string, unknown> | null) ?? {};
+  let mapping: ReturnType<typeof resolveFieldMapping>;
+  try {
+    mapping = resolveFieldMapping(scope);
+  } catch {
+    return; // field_mapping not configured — fall back to scheduled sync
+  }
+
+  const rawSeverity = (incident['severity'] as Record<string, unknown> | undefined)?.['name'] as string | undefined;
+  const priority = rawSeverity ? (mapSeverityToPriority(rawSeverity, mapping) ?? null) : null;
+  const tags: string[] = Array.isArray(incident['tags']) ? incident['tags'].map(String) : [];
+  if (!isProductionIncident(tags, mapping)) return;
+
+  const statusCat = ((incident['status'] as Record<string, unknown> | undefined)?.['category'] as string | undefined) ?? 'triage';
+  const status = resolveIncidentIoStatus(statusCat);
+  const openedAt = new Date((incident[mapping.opened_at_field] as string | undefined) ?? incident['created_at'] as string);
+  const acknowledgedAt = typeof incident['acknowledged_at'] === 'string' ? new Date(incident['acknowledged_at']) : null;
+  const resolvedAt = typeof incident['resolved_at'] === 'string' ? new Date(incident['resolved_at']) : null;
+  const responderIds = ((incident['incident_role_assignments'] as Array<Record<string, unknown>> | undefined) ?? [])
+    .flatMap((a) => { const u = a['user'] as Record<string, unknown> | undefined; return typeof u?.['id'] === 'string' ? [u['id']] : []; });
+  const affectedServices = extractAffectedServices(incident, mapping);
+  const title = typeof incident['name'] === 'string' ? incident['name'] : 'Untitled incident';
+
+  await prisma.incidentEvent.upsert({
+    where: { tenantId_provider_externalId: { tenantId: connection.tenantId, provider: 'incident_io', externalId: incident['id'] } },
+    create: {
+      tenantId: connection.tenantId, connectionId: connection.id, provider: 'incident_io',
+      externalId: incident['id'], openedAt, acknowledgedAt, resolvedAt,
+      closedAt: status === 'closed' ? (resolvedAt ?? new Date()) : null,
+      priority, severity: rawSeverity ?? null, status, title, affectedServices, responderIds, tags,
+      rawPayload: incident as unknown as Prisma.InputJsonValue, syncedAt: new Date(),
+    },
+    update: {
+      acknowledgedAt, resolvedAt,
+      closedAt: status === 'closed' ? (resolvedAt ?? new Date()) : null,
+      priority, severity: rawSeverity ?? null, status, title, affectedServices, responderIds, tags,
+      rawPayload: incident as unknown as Prisma.InputJsonValue, syncedAt: new Date(),
+    },
+  });
+}
+
+async function processOpsGenieWebhook(
+  payload: Record<string, unknown>,
+  connection: IntegrationConnection,
+): Promise<void> {
+  const action = typeof payload['action'] === 'string' ? payload['action'] : '';
+  const raw = (payload['incident'] ?? payload['alert']) as Record<string, unknown> | undefined;
+  if (!raw) return;
+
+  const externalId = (raw['id'] ?? raw['alertId']) as string | undefined;
+  if (!externalId) return;
+
+  const lifecycleActions = ['Create', 'Acknowledge', 'Close', 'Resolve', 'StateChange', 'Reopen'];
+  if (!lifecycleActions.some((a) => action.toLowerCase().includes(a.toLowerCase()))) return;
+
+  const scope = (connection.scope as Record<string, unknown> | null) ?? {};
+  let mapping: ReturnType<typeof resolveFieldMapping>;
+  try {
+    mapping = resolveFieldMapping(scope);
+  } catch {
+    return;
+  }
+
+  const rawPriority = typeof raw['priority'] === 'string' ? raw['priority'] : null;
+  const priority = rawPriority ? (mapSeverityToPriority(rawPriority, mapping) ?? rawPriority) : null;
+  const tags: string[] = Array.isArray(raw['tags']) ? raw['tags'].map(String) : [];
+  if (!isProductionIncident(tags, mapping)) return;
+
+  const now = new Date();
+  const reopened = action === 'Reopen';
+  const openedAt = new Date((raw['impactStartDate'] ?? raw['createdAt'] ?? now) as string);
+  const acknowledgedAt = action === 'Acknowledge' ? now : (typeof raw['acknowledgedAt'] === 'string' ? new Date(raw['acknowledgedAt']) : null);
+  const resolvedAt = (action === 'Close' || action === 'Resolve' || action === 'StateChange')
+    ? (typeof raw['impactEndDate'] === 'string' ? new Date(raw['impactEndDate']) : now)
+    : (typeof raw['resolvedAt'] === 'string' ? new Date(raw['resolvedAt']) : null);
+  const rawStatus = typeof raw['status'] === 'string' ? raw['status'] : 'open';
+  const status = (['open', 'acknowledged', 'resolved', 'closed'] as const).includes(rawStatus as 'open')
+    ? rawStatus as 'open' | 'acknowledged' | 'resolved' | 'closed' : 'open';
+  const title = String(raw['message'] ?? raw['name'] ?? 'Untitled OpsGenie incident');
+  const responderIds = ((raw['responders'] as Array<Record<string, unknown>> | undefined) ?? [])
+    .flatMap((r) => typeof r['id'] === 'string' ? [r['id']] : []);
+  const affectedServices = extractAffectedServices(raw, mapping);
+
+  await prisma.incidentEvent.upsert({
+    where: { tenantId_provider_externalId: { tenantId: connection.tenantId, provider: 'opsgenie', externalId } },
+    create: {
+      tenantId: connection.tenantId, connectionId: connection.id, provider: 'opsgenie',
+      externalId, openedAt, acknowledgedAt, resolvedAt,
+      closedAt: status === 'closed' ? (resolvedAt ?? now) : null,
+      priority, severity: rawPriority, status, title, affectedServices, responderIds, tags,
+      rawPayload: raw as unknown as Prisma.InputJsonValue, syncedAt: now,
+    },
+    update: reopened
+      ? { resolvedAt: null, closedAt: null, status: 'open', priority, severity: rawPriority, title, affectedServices, responderIds, tags, rawPayload: raw as unknown as Prisma.InputJsonValue, syncedAt: now }
+      : { acknowledgedAt, resolvedAt, closedAt: status === 'closed' ? (resolvedAt ?? now) : null, status, priority, severity: rawPriority, title, affectedServices, responderIds, tags, rawPayload: raw as unknown as Prisma.InputJsonValue, syncedAt: now },
+  });
+}
+
 async function processOneEvent(eventId: string) {
   const lock = await prisma.integrationWebhookEvent.updateMany({
     where: {
@@ -115,11 +246,20 @@ async function processOneEvent(eventId: string) {
       throw new Error('No active integration connection for tenant/provider');
     }
 
-    await createSyncJob({
-      tenant_id: event.tenantId,
-      connection_id: connection.id,
-      mode: 'incremental'
-    });
+    // Incident providers: process the webhook payload inline for near-real-time
+    // MTTR/MTTA accuracy. Non-incident providers fall through to incremental sync.
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    if (event.provider === 'incident_io') {
+      await processIncidentIoWebhook(payload, connection);
+    } else if (event.provider === 'opsgenie') {
+      await processOpsGenieWebhook(payload, connection);
+    } else {
+      await createSyncJob({
+        tenant_id: event.tenantId,
+        connection_id: connection.id,
+        mode: 'incremental'
+      });
+    }
 
     await prisma.integrationWebhookEvent.update({
       where: { id: event.id },
