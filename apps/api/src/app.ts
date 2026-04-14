@@ -19,8 +19,12 @@ import { registerAuth } from './plugins/auth.js';
 export function buildApp() {
   const app = Fastify({ logger: true });
 
+  const allowedOrigins = process.env.NODE_ENV === 'production'
+    ? ['https://app.moasy.tech']
+    : true;
+
   app.register(cors, {
-    origin: true,
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   });
   app.register(helmet);
