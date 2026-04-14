@@ -12,7 +12,7 @@ primary_region = "gru"
   WEBHOOK_WORKER_INTERVAL_MS = "5000"
 
 [deploy]
-  release_command = "node apps/api/dist/migrate.js"
+  release_command = "node dist/migrate.js"
 
 [http_service]
   internal_port       = 3000

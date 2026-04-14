@@ -1,39 +1,33 @@
 # ── builder ──────────────────────────────────────────────────────────
 FROM node:22-alpine AS builder
-WORKDIR /app
+WORKDIR /app/apps/api
 
-# Copy manifests first for layer caching
-COPY package*.json ./
-COPY apps/api/package*.json ./apps/api/
+# Install all deps (dev included for build tools)
+COPY apps/api/package*.json ./
+RUN npm ci
 
-RUN npm ci --workspace=apps/api --include-workspace-root
-
-# Copy source
-COPY apps/api ./apps/api
-
-# Generate Prisma client and compile TypeScript
-RUN npm run api:prisma:generate
-RUN npm run api:build
+# Copy source and generate + compile
+COPY apps/api .
+RUN npx prisma generate && npm run build
 
 # ── runtime ──────────────────────────────────────────────────────────
 FROM node:22-alpine AS runtime
-WORKDIR /app
+WORKDIR /app/apps/api
 ENV NODE_ENV=production
 
-COPY package*.json ./
-COPY apps/api/package*.json ./apps/api/
-
-RUN npm ci --workspace=apps/api --include-workspace-root --omit=dev
+# Production deps only
+COPY apps/api/package*.json ./
+RUN npm ci --omit=dev
 
 # Compiled JS
-COPY --from=builder /app/apps/api/dist ./apps/api/dist
+COPY --from=builder /app/apps/api/dist ./dist
 
 # Prisma schema (needed by migrate deploy at runtime)
-COPY --from=builder /app/apps/api/prisma ./apps/api/prisma
+COPY --from=builder /app/apps/api/prisma ./prisma
 
 # Generated Prisma client
-COPY --from=builder /app/apps/api/node_modules/.prisma ./apps/api/node_modules/.prisma
+COPY --from=builder /app/apps/api/node_modules/.prisma ./node_modules/.prisma
 
 EXPOSE 3000
 
-CMD ["node", "apps/api/dist/server.js"]
+CMD ["node", "dist/server.js"]
