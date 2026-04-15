@@ -304,7 +304,8 @@ export async function integrationsRoutes(app: FastifyInstance) {
       return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Connection has no credentials'));
     }
 
-    const res = await fetch('https://api.incident.io/v1/severities', {
+    const incidentIoBaseUrl = process.env['INCIDENTIO_API_URL'] ?? 'https://api.incident.io';
+    const res = await fetch(`${incidentIoBaseUrl}/v1/severities`, {
       headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
     });
 
