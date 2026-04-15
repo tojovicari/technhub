@@ -41,7 +41,7 @@ export async function createConnection(input: CreateConnectionInput) {
   await ensureTenant(input.tenant_id);
 
   const connector = getConnector(input.provider);
-  await connector.validateConfiguration();
+  await connector.validateConfiguration({ credentials: input.credentials as Record<string, unknown> | undefined });
 
   const secretStrategy = inferSecretStrategy(input.credentials);
 

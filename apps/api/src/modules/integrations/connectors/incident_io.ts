@@ -22,10 +22,11 @@ type IncidentIoScope = {
 // ── HTTP client ────────────────────────────────────────────────────────────────
 
 class IncidentIoClient {
-  private readonly baseUrl = 'https://api.incident.io';
+  private readonly baseUrl: string;
   private readonly authHeader: string;
 
   constructor(creds: IncidentIoCredentials) {
+    this.baseUrl = process.env['INCIDENTIO_API_URL'] ?? 'https://api.incident.io';
     this.authHeader = `Bearer ${creds.api_key}`;
   }
 

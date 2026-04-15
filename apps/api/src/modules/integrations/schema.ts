@@ -1,12 +1,12 @@
 import { z } from 'zod';
 
 const vaultReferenceCredential = z.object({
-  auth_type: z.enum(['oauth2', 'token', 'app']),
+  auth_type: z.enum(['oauth2', 'token', 'app', 'bearer', 'api_key']),
   secret_ref: z.string().min(1)
 });
 
 const inlineSecretCredential = z.object({
-  auth_type: z.enum(['oauth2', 'token', 'app']),
+  auth_type: z.enum(['oauth2', 'token', 'app', 'bearer', 'api_key']),
   client_id: z.string().optional(),
   client_secret: z.string().optional(),
   access_token: z.string().optional(),

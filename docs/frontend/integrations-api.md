@@ -18,16 +18,17 @@ The Integrations module manages connections to external providers (Jira, GitHub,
 
 | Route | Method | Required Permission |
 |---|---|---|
-| `/integrations/connections` | POST | `integrations.manage` |
-| `/integrations/connections/:id/secrets` | PUT | `integrations.manage` |
+| `/integrations/connections` | POST | `integrations.connection.manage` |
+| `/integrations/connections/:id` | PATCH | `integrations.connection.manage` |
+| `/integrations/connections/:id/secrets` | PUT | `integrations.secret.rotate` |
 | `/integrations/connections/:id/original-types` | GET | `integrations.connection.read` |
 | `/integrations/original-types` | GET | `integrations.connection.read` |
 | `/integrations/connections/:id/type-mapping` | GET | `integrations.connection.read` |
 | `/integrations/connections/:id/type-mapping` | PATCH | `integrations.connection.manage` |
 | `/integrations/connections/:id/incident-io/severities` | GET | `integrations.connection.read` |
 | `/integrations/connections/:id/opsgenie/priorities` | GET | `integrations.connection.read` |
-| `/integrations/sync-jobs` | POST | `integrations.sync` |
-| `/integrations/sync-jobs/:job_id` | GET | `integrations.read` |
+| `/integrations/sync-jobs` | POST | `integrations.sync.trigger` |
+| `/integrations/sync-jobs/:id` | GET | `integrations.sync.read` |
 | `/integrations/webhooks/:provider/:tenant_id` | POST | Public (token-gated — see below) |
 | `/integrations/webhooks/events/:event_id` | GET | `integrations.read` |
 
@@ -70,7 +71,7 @@ Use the type mapping endpoints below to discover which types a connection has in
 
 Register a new integration connection for the tenant.
 
-**Permission:** `integrations.manage`
+**Permission:** `integrations.connection.manage`
 
 **Request Body:**
 
@@ -103,7 +104,20 @@ You can provide credentials either as a vault reference (preferred) or inline (e
 
 > Inline secrets are encrypted at rest by the server. Use vault references when your infrastructure supports it.
 
-**Full Request Example:**
+---
+
+**Scope and credentials by provider:**
+
+#### GitHub
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `scope.org` | string | ✅ | GitHub organization or user login |
+| `scope.repos` | string[] | ❌ | Allowlist of repo names. Omit to sync all repos in the org |
+| `credentials.auth_type` | `"app"` | ✅ | GitHub App authentication |
+| `credentials.app_id` | number | ✅ | GitHub App ID |
+| `credentials.private_key_pem` | string | ✅ | PEM-encoded private key |
+| `credentials.installation_id` | number | ✅ | GitHub App installation ID |
 
 ```json
 {
@@ -111,8 +125,135 @@ You can provide credentials either as a vault reference (preferred) or inline (e
   "provider": "github",
   "scope": { "org": "acme-corp", "repos": ["platform", "api-service"] },
   "credentials": {
+    "auth_type": "app",
+    "app_id": 123456,
+    "private_key_pem": "-----BEGIN RSA PRIVATE KEY-----\n...",
+    "installation_id": 78901234
+  }
+}
+```
+
+#### Jira
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `scope.project_keys` | string[] | ❌ | Allowlist of Jira project keys (e.g. `["AUTH", "PLAT"]`). Omit to sync all |
+| `credentials.auth_type` | `"token"` | ✅ | Jira API token |
+| `credentials.base_url` | string | ✅ | Jira instance URL (e.g. `https://myorg.atlassian.net`) |
+| `credentials.email` | string | ✅ | Jira account email |
+| `credentials.access_token` | string | ✅ | Jira API token |
+
+```json
+{
+  "tenant_id": "tenant-7a4b",
+  "provider": "jira",
+  "scope": { "project_keys": ["AUTH", "PLAT"] },
+  "credentials": {
     "auth_type": "token",
-    "access_token": "ghp_xxxxxxxxx"
+    "base_url": "https://myorg.atlassian.net",
+    "email": "ci-bot@myorg.com",
+    "access_token": "ATATT3xFfGF0..."
+  }
+}
+```
+
+#### incident.io
+
+> **`scope.field_mapping` is required.** incident.io uses custom severity names — you must map them to the canonical P1–P5 scale so MTTR/MTTA calculations work correctly. Fetch the tenant's severities from `GET /incident-io/v1/severities` (on the incident.io API) to populate the mapping UI.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `scope.field_mapping.severity_to_priority` | object | ✅ | Maps provider severity names → `P1`–`P5` |
+| `scope.field_mapping.include_priorities` | string[] | ❌ | Which priorities count for MTTR/MTTA. Default: `["P1","P2"]` |
+| `scope.field_mapping.production_indicator` | object | ❌ | How to detect production incidents. Default: `{ "type": "none" }` (all incidents included) |
+| `scope.field_mapping.affected_service_field` | object | ❌ | Where to read affected services. Default: `{ "type": "none" }` |
+| `credentials.auth_type` | `"bearer"` | ✅ | |
+| `credentials.api_key` | string | ✅ | incident.io API key |
+
+```json
+{
+  "tenant_id": "tenant-7a4b",
+  "provider": "incident_io",
+  "scope": {
+    "field_mapping": {
+      "severity_to_priority": {
+        "critical": "P1",
+        "major": "P2",
+        "minor": "P3",
+        "informational": "P4"
+      },
+      "include_priorities": ["P1", "P2"],
+      "production_indicator": { "type": "none" }
+    }
+  },
+  "credentials": {
+    "auth_type": "bearer",
+    "api_key": "your-incident-io-api-key"
+  }
+}
+```
+
+**`production_indicator` options:**
+```json
+{ "type": "none" }                                          // all incidents
+{ "type": "tag", "values": ["production", "prod"] }        // tag-based
+{ "type": "custom_field", "field_id": "01CF...", "values": ["production"] }  // custom field
+```
+
+#### OpsGenie
+
+> **`scope.field_mapping` is required.** OpsGenie already uses P1–P5 natively, so the mapping is 1:1. You must still provide it explicitly.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `scope.use_incident_api` | boolean | ✅ | `true` = Incident API (Standard/Enterprise plans); `false` = Alert API (all plans) |
+| `scope.field_mapping.severity_to_priority` | object | ✅ | Maps OpsGenie priority names → `P1`–`P5` |
+| `scope.field_mapping.include_priorities` | string[] | ❌ | Default: `["P1","P2"]` |
+| `scope.field_mapping.production_indicator` | object | ❌ | Default: `{ "type": "none" }` |
+| `credentials.auth_type` | `"api_key"` | ✅ | |
+| `credentials.api_key` | string | ✅ | OpsGenie API key |
+| `credentials.region` | `"us"` \| `"eu"` | ❌ | Default: `"us"` |
+
+```json
+{
+  "tenant_id": "tenant-7a4b",
+  "provider": "opsgenie",
+  "scope": {
+    "use_incident_api": false,
+    "field_mapping": {
+      "severity_to_priority": {
+        "P1": "P1",
+        "P2": "P2",
+        "P3": "P3",
+        "P4": "P4",
+        "P5": "P5"
+      },
+      "include_priorities": ["P1", "P2"],
+      "production_indicator": { "type": "none" }
+    }
+  },
+  "credentials": {
+    "auth_type": "api_key",
+    "api_key": "your-opsgenie-api-key",
+    "region": "us"
+  }
+}
+```
+
+---
+
+**Full Request Example (POST /integrations/connections — GitHub):**
+
+```json
+{
+  "tenant_id": "tenant-7a4b",
+  "provider": "github",
+  "scope": { "org": "acme-corp", "repos": ["platform", "api-service"] },
+  "credentials": {
+    "auth_type": "app",
+    "app_id": 123456,
+    "private_key_pem": "-----BEGIN RSA PRIVATE KEY-----\n...",
+    "installation_id": 78901234
   }
 }
 ```
@@ -152,7 +293,7 @@ You can provide credentials either as a vault reference (preferred) or inline (e
 
 Rotate or set provider credentials for an existing connection. Write-only — no response body.
 
-**Permission:** `integrations.manage`
+**Permission:** `integrations.secret.rotate`
 
 **Path Params:**
 
@@ -183,74 +324,122 @@ Rotate or set provider credentials for an existing connection. Write-only — no
 
 ---
 
-### POST /integrations/sync-jobs
+### PATCH /integrations/connections/:connection_id
 
-Trigger a data sync for a connection. The job runs asynchronously.
+Update the scope configuration of an existing connection — for example, to save the `field_mapping` after the setup wizard.
 
-**Permission:** `integrations.sync`
+**Permission:** `integrations.connection.manage`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `connection_id` | string | Connection ID to update |
 
 **Request Body:**
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `connection_id` | string | ✅ | Connection to sync |
-| `entity_types` | string[] | ❌ | `["issues", "pull_requests", "releases"]` — omit to sync all |
-| `full_sync` | boolean | ❌ | `false` = incremental (default); `true` = full re-sync |
-| `since` | ISO datetime | ❌ | Only sync entities updated after this date (incremental) |
+| `tenant_id` | string | ✅ | Must match JWT `tenant_id` |
+| `scope` | object | ✅ | Partial or full scope override (merged server-side with existing scope) |
 
-**Request Example:**
+**Request Example (saving field_mapping after wizard):**
 
 ```json
 {
-  "connection_id": "conn-001",
-  "entity_types": ["pull_requests", "releases"],
-  "full_sync": false,
-  "since": "2026-04-01T00:00:00Z"
+  "tenant_id": "ten_1",
+  "scope": {
+    "field_mapping": {
+      "severity_to_priority": {
+        "critical": "P1",
+        "major": "P2",
+        "minor": "P3",
+        "informational": "P4"
+      },
+      "include_priorities": ["P1", "P2"]
+    }
+  }
 }
 ```
-
-**Response — 202 Accepted:**
-
-```json
-{
-  "data": {
-    "job_id": "sync-job-xyz",
-    "connection_id": "conn-001",
-    "status": "queued",
-    "entity_types": ["pull_requests", "releases"],
-    "full_sync": false,
-    "created_at": "2026-04-10T14:00:00Z"
-  },
-  "meta": { "request_id": "req_002", "version": "v1", "timestamp": "2026-04-10T14:00:00Z" },
-  "error": null
-}
-```
-
-> `202 Accepted` means the job was queued, not completed. Poll `GET /integrations/sync-jobs/:job_id` to track progress.
-
----
-
-### GET /integrations/sync-jobs/:job_id
-
-Check the status of a sync job.
-
-**Permission:** `integrations.read`
 
 **Response — 200 OK:**
 
 ```json
 {
   "data": {
-    "job_id": "sync-job-xyz",
+    "id": "07fafe6a-55be-4c7e-a0ae-3d0a5350357d",
+    "tenant_id": "ten_1",
+    "provider": "incident_io",
+    "status": "active",
+    "secret_strategy": "inline_encrypted",
+    "secret_last_rotated_at": "2026-04-10T12:00:00Z",
+    "last_sync": null
+  },
+  "meta": { "request_id": "req_006", "version": "v1", "timestamp": "2026-04-15T10:00:00Z" },
+  "error": null
+}
+```
+
+> `scope` is **not** returned in the response. Store the scope locally after PATCH if you need to display it. The response confirms identity and active status.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Missing `tenant_id` or invalid scope shape |
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Connection not found |
+
+---
+
+### POST /integrations/sync-jobs
+
+Trigger a data sync for a connection. The job runs synchronously — the response includes the final status.
+
+**Permission:** `integrations.sync.trigger`
+
+**Request Body:**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `tenant_id` | string | ✅ | Must match JWT `tenant_id` |
+| `connection_id` | string | ✅ | Connection to sync |
+| `mode` | `"full"` \| `"incremental"` | ❌ | Default: `"incremental"`. Use `"full"` to re-sync all data |
+
+**Request Example:**
+
+```json
+{
+  "tenant_id": "ten_1",
+  "connection_id": "conn-001",
+  "mode": "full"
+}
+```
+
+**Response — 202 Accepted:**
+
+---
+
+### GET /integrations/sync-jobs/:id
+
+Retrieve a past sync job by ID.
+
+**Permission:** `integrations.sync.read`
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "id": "sync-job-xyz",
+    "tenant_id": "ten_1",
     "connection_id": "conn-001",
-    "status": "completed",
-    "entity_types": ["pull_requests", "releases"],
-    "full_sync": false,
-    "started_at": "2026-04-10T14:00:05Z",
-    "completed_at": "2026-04-10T14:02:30Z",
-    "records_synced": 87,
-    "errors": [],
-    "created_at": "2026-04-10T14:00:00Z"
+    "status": "success",
+    "created_at": "2026-04-10T14:00:00Z",
+    "started_at": "2026-04-10T14:00:00Z",
+    "finished_at": "2026-04-10T14:00:01Z",
+    "error_summary": null
   },
   "meta": { "request_id": "req_003", "version": "v1", "timestamp": "2026-04-10T14:05:00Z" },
   "error": null
@@ -261,11 +450,8 @@ Check the status of a sync job.
 
 | Value | Meaning |
 |---|---|
-| `queued` | Waiting in queue |
-| `running` | Currently syncing |
-| `completed` | Finished successfully |
-| `failed` | Finished with errors |
-| `partial` | Completed with some errors |
+| `success` | Finished successfully |
+| `failed` | Finished with errors — see `error_summary` |
 
 **Error Scenarios:**
 
@@ -492,6 +678,25 @@ Receive a provider webhook and enqueue it for async processing.
 **Request Body:** Free-form JSON — the raw provider webhook payload.
 
 **Response — 202 Accepted:**
+
+```json
+{
+  "data": {
+    "id": "sync-job-xyz",
+    "tenant_id": "ten_1",
+    "connection_id": "conn-001",
+    "status": "success",
+    "created_at": "2026-04-10T14:00:00Z",
+    "started_at": "2026-04-10T14:00:00Z",
+    "finished_at": "2026-04-10T14:00:01Z",
+    "error_summary": null
+  },
+  "meta": { "request_id": "req_002", "version": "v1", "timestamp": "2026-04-10T14:00:01Z" },
+  "error": null
+}
+```
+
+> The sync completes synchronously — the job `status` is `"success"` or `"failed"` in the response (not `"queued"`). When failed, `error_summary` contains the reason. Use `GET /integrations/sync-jobs/:id` to retrieve a past job by its `id`.
 
 ```json
 {
@@ -820,7 +1025,8 @@ Use `name` as the left-hand key in `severity_to_priority`. Since OpsGenie priori
        ...
 
 4. User saves mapping:
-   PATCH /integrations/connections/:conn_id  body: { scope: { field_mapping: {...} } }
+   PATCH /integrations/connections/:conn_id
+   body: { "tenant_id": "ten_1", "scope": { "field_mapping": { ... } } }
    →  200
 
 5. Trigger first sync:

@@ -34,7 +34,8 @@ class OpsGenieClient {
 
   constructor(creds: OpsGenieCredentials) {
     const region = creds.region ?? 'us';
-    this.baseUrl = region === 'eu' ? 'https://api.eu.opsgenie.com' : 'https://api.opsgenie.com';
+    this.baseUrl = process.env['OPSGENIE_API_URL']
+      ?? (region === 'eu' ? 'https://api.eu.opsgenie.com' : 'https://api.opsgenie.com');
     this.authHeader = `GenieKey ${creds.api_key}`;
   }
 
@@ -166,7 +167,7 @@ async function syncViaIncidentApi(
     const closedAt = status === 'closed' ? new Date() : null; // OpsGenie doesn't expose closedAt
     const resolvedAt = status === 'resolved' || status === 'closed' ? new Date() : null; // same
 
-    const responderIds = (incident.responders ?? []).map((r) => r.id);
+    const responderIds = (incident.responders ?? []).map((r) => r.id).filter((id): id is string => id !== undefined && id !== null);
     const affectedServices = extractAffectedServices(incident as unknown as Record<string, unknown>, mapping);
 
     await prisma.incidentEvent.upsert({
@@ -245,7 +246,7 @@ async function syncViaAlertApi(
     const resolvedAt = alert.resolvedAt ? new Date(alert.resolvedAt) : null;
     const status = resolveAlertStatus(alert.status);
 
-    const responderIds = (alert.responders ?? []).map((r) => r.id);
+    const responderIds = (alert.responders ?? []).map((r) => r.id).filter((id): id is string => id !== undefined && id !== null);
     const affectedServices = extractAffectedServices(alert as unknown as Record<string, unknown>, mapping);
 
     await prisma.incidentEvent.upsert({
