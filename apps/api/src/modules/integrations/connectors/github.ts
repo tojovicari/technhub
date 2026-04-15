@@ -354,6 +354,57 @@ async function syncPullRequests(
   return filtered.length;
 }
 
+async function syncReleases(
+  octokit: Octokit,
+  tenantId: string,
+  org: string,
+  repoName: string,
+  projectId: string,
+  since?: string,
+): Promise<number> {
+  const releases = await octokit.paginate(octokit.repos.listReleases, {
+    owner: org,
+    repo: repoName,
+    per_page: 100,
+  });
+
+  const filtered = since
+    ? releases.filter(r => r.published_at != null && new Date(r.published_at) >= new Date(since))
+    : releases.filter(r => r.published_at != null);
+
+  for (const release of filtered) {
+    await prisma.deployEvent.upsert({
+      where: {
+        tenantId_source_externalId: {
+          tenantId,
+          source: 'github_release',
+          externalId: release.node_id,
+        },
+      },
+      create: {
+        tenantId,
+        projectId,
+        source: 'github_release',
+        externalId: release.node_id,
+        ref: release.tag_name,
+        commitSha: null,
+        environment: 'production',
+        deployedAt: new Date(release.published_at!),
+        isHotfix: false,
+        isRollback: false,
+        prIds: [],
+        rawPayload: release as unknown as import('@prisma/client').Prisma.InputJsonValue,
+      },
+      update: {
+        ref: release.tag_name,
+        deployedAt: new Date(release.published_at!),
+      },
+    });
+  }
+
+  return filtered.length;
+}
+
 // ── Connector ──────────────────────────────────────────────────────────────────
 
 export class GithubConnector implements IntegrationConnector {
@@ -404,6 +455,7 @@ export class GithubConnector implements IntegrationConnector {
       synced += await syncMilestones(octokit, input.tenantId, org, repoName, projectId);
       synced += await syncIssues(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
       synced += await syncPullRequests(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
+      synced += await syncReleases(octokit, input.tenantId, org, repoName, projectId, since);
     }
 
     return {

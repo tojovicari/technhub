@@ -137,9 +137,9 @@ List deployment events for the tenant, most recent first.
 | Param | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `project_id` | string (UUID) | ❌ | — | Filter to a project |
-| `environment` | string | ❌ | `production` | Filter by environment |
+| `environment` | string | ❌ | — | Filter by environment. Omit to return all environments |
 | `limit` | integer | ❌ | 20 | Max 100 |
-| `cursor` | string | ❌ | — | Pagination cursor |
+| `cursor` | string | ❌ | — | Pagination cursor (UUID of last item) |
 
 **Response — 200 OK:**
 
@@ -274,14 +274,14 @@ Record the lead time for a merged pull request. Used to compute the Lead Time fo
   "data": {
     "skipped": false,
     "lead_time_hours": 52.0,
-    "pr_id": "PR-1042"
+    "metric_id": "metric-uuid-001"
   },
   "meta": { "request_id": "req_004", "version": "v1", "timestamp": "2026-04-10T14:05:00Z" },
   "error": null
 }
 ```
 
-> **Outlier filtering:** Events with `lead_time > 90 days` are silently dropped. `skipped: true` is returned in that case.
+> **Outlier filtering:** Events with `lead_time > 90 days` are silently dropped. When skipped, the response is `{ skipped: true, reason: "outlier_gt_90d", lead_time_hours: <value> }`.
 
 **Error Scenarios:**
 
@@ -310,7 +310,8 @@ Retrieve historical health metric snapshots for trend charts.
 | Param | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `project_id` | string (UUID) | ❌ | — | Scope to a project |
-| `limit` | integer | ❌ | 30 | Max 365 |
+| `window_days` | integer | ❌ | 30 | Filter snapshots by window size (1–365) |
+| `limit` | integer | ❌ | 20 | Max 100 |
 | `cursor` | string | ❌ | — | Pagination cursor |
 
 **Response — 200 OK:**
@@ -318,7 +319,7 @@ Retrieve historical health metric snapshots for trend charts.
 ```json
 {
   "data": {
-    "items": [
+    "data": [
       {
         "id": "metric-uuid-001",
         "tenantId": "tenant-7a4b",
