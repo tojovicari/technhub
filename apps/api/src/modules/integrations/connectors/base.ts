@@ -32,6 +32,6 @@ export type WebhookConfig = {
 export interface IntegrationConnector {
   provider: IntegrationProvider;
   webhookConfig: WebhookConfig;
-  validateConfiguration(): Promise<void>;
+  validateConfiguration(input?: { credentials?: Record<string, unknown> }): Promise<void>;
   runSync(input: SyncInput): Promise<SyncResult>;
 }
