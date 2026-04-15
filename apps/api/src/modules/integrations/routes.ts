@@ -9,6 +9,7 @@ function mapConnection(connection: {
   tenantId: string;
   provider: 'jira' | 'github' | 'opsgenie' | 'incident_io';
   status: 'active' | 'disabled' | 'error';
+  scope: unknown;
   secretStrategy: 'vault_ref' | 'db_encrypted';
   secretLastRotatedAt: Date | null;
   syncJobs?: Array<{
@@ -25,6 +26,7 @@ function mapConnection(connection: {
     tenant_id: connection.tenantId,
     provider: connection.provider,
     status: connection.status,
+    scope: connection.scope ?? null,
     secret_strategy: connection.secretStrategy,
     secret_last_rotated_at: connection.secretLastRotatedAt?.toISOString() ?? null,
     last_sync: lastSync

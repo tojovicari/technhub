@@ -18,8 +18,11 @@ The Integrations module manages connections to external providers (Jira, GitHub,
 
 | Route | Method | Required Permission |
 |---|---|---|
+| `/integrations/connections` | GET | `integrations.connection.read` |
 | `/integrations/connections` | POST | `integrations.connection.manage` |
+| `/integrations/connections/:id` | GET | `integrations.connection.read` |
 | `/integrations/connections/:id` | PATCH | `integrations.connection.manage` |
+| `/integrations/connections/:id` | DELETE | `integrations.connection.manage` |
 | `/integrations/connections/:id/secrets` | PUT | `integrations.secret.rotate` |
 | `/integrations/connections/:id/original-types` | GET | `integrations.connection.read` |
 | `/integrations/original-types` | GET | `integrations.connection.read` |
@@ -30,7 +33,7 @@ The Integrations module manages connections to external providers (Jira, GitHub,
 | `/integrations/sync-jobs` | POST | `integrations.sync.trigger` |
 | `/integrations/sync-jobs/:id` | GET | `integrations.sync.read` |
 | `/integrations/webhooks/:provider/:tenant_id` | POST | Public (token-gated — see below) |
-| `/integrations/webhooks/events/:event_id` | GET | `integrations.read` |
+| `/integrations/webhooks/events/:event_id` | GET | `integrations.webhook.read` |
 
 ---
 
@@ -64,6 +67,105 @@ Use the type mapping endpoints below to discover which types a connection has in
 ---
 
 ## Endpoints
+
+---
+
+### GET /integrations/connections
+
+List all connections for the tenant.
+
+**Permission:** `integrations.connection.read`
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": [
+    {
+      "id": "conn-001",
+      "tenant_id": "tenant-7a4b",
+      "provider": "opsgenie",
+      "status": "active",
+      "scope": {
+        "use_incident_api": false,
+        "field_mapping": {
+          "severity_to_priority": { "P1": "P1", "P2": "P2", "P3": "P3", "P4": "P4", "P5": "P5" },
+          "include_priorities": ["P1", "P2"]
+        }
+      },
+      "secret_strategy": "db_encrypted",
+      "secret_last_rotated_at": "2026-04-10T12:00:00Z",
+      "last_sync": {
+        "id": "sync-job-xyz",
+        "status": "success",
+        "started_at": "2026-04-10T14:00:00Z",
+        "finished_at": "2026-04-10T14:00:01Z",
+        "error_summary": null
+      }
+    }
+  ],
+  "meta": { "request_id": "req_000", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "error": null
+}
+```
+
+> `scope` is `null` if no scope was configured. `last_sync` is the most recent sync job for the connection, or `null` if no sync has run. Credentials are **never** returned.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+
+---
+
+### GET /integrations/connections/:connection_id
+
+Retrieve a single connection by ID.
+
+**Permission:** `integrations.connection.read`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `connection_id` | string | Connection ID |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "id": "conn-001",
+    "tenant_id": "tenant-7a4b",
+    "provider": "opsgenie",
+    "status": "active",
+    "scope": {
+      "use_incident_api": false,
+      "field_mapping": {
+        "severity_to_priority": { "P1": "P1", "P2": "P2", "P3": "P3", "P4": "P4", "P5": "P5" },
+        "include_priorities": ["P1", "P2"]
+      }
+    },
+    "secret_strategy": "db_encrypted",
+    "secret_last_rotated_at": "2026-04-10T12:00:00Z",
+    "last_sync": null
+  },
+  "meta": { "request_id": "req_00a", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "error": null
+}
+```
+
+> `scope` is `null` if no scope was configured. `last_sync` is always `null` on the single-connection endpoint (only populated on the list). Credentials are **never** returned.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Connection not found |
 
 ---
 
@@ -267,17 +369,17 @@ You can provide credentials either as a vault reference (preferred) or inline (e
     "tenant_id": "tenant-7a4b",
     "provider": "github",
     "status": "active",
-    "secret_strategy": "inline_encrypted",
     "scope": { "org": "acme-corp", "repos": ["platform", "api-service"] },
-    "created_at": "2026-04-10T12:00:00Z",
-    "last_synced_at": null
+    "secret_strategy": "db_encrypted",
+    "secret_last_rotated_at": "2026-04-10T12:00:00Z",
+    "last_sync": null
   },
   "meta": { "request_id": "req_001", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
   "error": null
 }
 ```
 
-> **`secret_strategy`**: `inline_encrypted` | `vault_ref` — indicates how credentials are stored. The actual secret is **never returned**.
+> **`secret_strategy`**: `db_encrypted` | `vault_ref` — indicates how credentials are stored. Credentials are **never returned**. `scope` is returned as-is and is `null` if not configured.
 
 **Error Scenarios:**
 
@@ -301,18 +403,50 @@ Rotate or set provider credentials for an existing connection. Write-only — no
 |---|---|---|
 | `connection_id` | string | Connection ID to update |
 
-**Request Body:** Credential object (same as in POST above — vault reference or inline secret).
+**Request Body:**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `tenant_id` | string | ✅ | Must match JWT `tenant_id` |
+| `credentials` | object | ✅ | Vault reference or inline secret (same shapes as POST) |
 
 **Request Example:**
 
 ```json
 {
-  "auth_type": "token",
-  "access_token": "ghp_new_token_yyy"
+  "tenant_id": "tenant-7a4b",
+  "credentials": {
+    "auth_type": "token",
+    "access_token": "ghp_new_token_yyy"
+  }
 }
 ```
 
 **Response — 204 No Content** (empty body — credentials are write-only)
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Connection not found |
+
+---
+
+### DELETE /integrations/connections/:connection_id
+
+Delete a connection and all associated secrets and sync jobs.
+
+**Permission:** `integrations.connection.manage`
+
+**Path Params:**
+
+| Param | Type | Notes |
+|---|---|---|
+| `connection_id` | string | Connection ID to delete |
+
+**Response — 204 No Content** (empty body)
 
 **Error Scenarios:**
 
@@ -341,7 +475,8 @@ Update the scope configuration of an existing connection — for example, to sav
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `tenant_id` | string | ✅ | Must match JWT `tenant_id` |
-| `scope` | object | ✅ | Partial or full scope override (merged server-side with existing scope) |
+| `status` | `"active"` \| `"disabled"` | ❌ | At least one of `status` or `scope` must be present |
+| `scope` | object | ❌ | Full scope override. At least one of `status` or `scope` must be present |
 
 **Request Example (saving field_mapping after wizard):**
 
@@ -371,7 +506,13 @@ Update the scope configuration of an existing connection — for example, to sav
     "tenant_id": "ten_1",
     "provider": "incident_io",
     "status": "active",
-    "secret_strategy": "inline_encrypted",
+    "scope": {
+      "field_mapping": {
+        "severity_to_priority": { "critical": "P1", "major": "P2", "minor": "P3", "informational": "P4" },
+        "include_priorities": ["P1", "P2"]
+      }
+    },
+    "secret_strategy": "db_encrypted",
     "secret_last_rotated_at": "2026-04-10T12:00:00Z",
     "last_sync": null
   },
@@ -380,13 +521,13 @@ Update the scope configuration of an existing connection — for example, to sav
 }
 ```
 
-> `scope` is **not** returned in the response. Store the scope locally after PATCH if you need to display it. The response confirms identity and active status.
+> `scope` reflects the full saved scope after the PATCH. Credentials are **never** returned.
 
 **Error Scenarios:**
 
 | Status | Code | When |
 |---|---|---|
-| 400 | `BAD_REQUEST` | Missing `tenant_id` or invalid scope shape |
+| 400 | `BAD_REQUEST` | Missing `tenant_id`, neither `status` nor `scope` provided, or invalid values |
 | 401 | `UNAUTHORIZED` | — |
 | 403 | `FORBIDDEN` | Permission denied |
 | 404 | `NOT_FOUND` | Connection not found |
@@ -419,6 +560,34 @@ Trigger a data sync for a connection. The job runs synchronously — the respons
 
 **Response — 202 Accepted:**
 
+```json
+{
+  "data": {
+    "id": "sync-job-xyz",
+    "tenant_id": "ten_1",
+    "connection_id": "conn-001",
+    "status": "success",
+    "created_at": "2026-04-10T14:00:00Z",
+    "started_at": "2026-04-10T14:00:00Z",
+    "finished_at": "2026-04-10T14:00:01Z",
+    "error_summary": null
+  },
+  "meta": { "request_id": "req_s01", "version": "v1", "timestamp": "2026-04-10T14:00:01Z" },
+  "error": null
+}
+```
+
+> The sync runs synchronously and completes before the response is returned. `status` is `"success"` or `"failed"`. When failed, `error_summary` contains the reason.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Invalid `connection_id` or missing fields |
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Connection not found |
+
 ---
 
 ### GET /integrations/sync-jobs/:id
@@ -450,6 +619,8 @@ Retrieve a past sync job by ID.
 
 | Value | Meaning |
 |---|---|
+| `queued` | Enqueued, not yet started |
+| `running` | Currently executing |
 | `success` | Finished successfully |
 | `failed` | Finished with errors — see `error_summary` |
 
@@ -665,7 +836,7 @@ Receive a provider webhook and enqueue it for async processing.
 
 | Param | Type | Notes |
 |---|---|---|
-| `provider` | enum | `jira` \| `github` |
+| `provider` | enum | `jira` \| `github` \| `opsgenie` \| `incident_io` |
 | `tenant_id` | string | The target tenant |
 
 **Headers:**
@@ -682,34 +853,17 @@ Receive a provider webhook and enqueue it for async processing.
 ```json
 {
   "data": {
-    "id": "sync-job-xyz",
-    "tenant_id": "ten_1",
-    "connection_id": "conn-001",
-    "status": "success",
-    "created_at": "2026-04-10T14:00:00Z",
-    "started_at": "2026-04-10T14:00:00Z",
-    "finished_at": "2026-04-10T14:00:01Z",
-    "error_summary": null
-  },
-  "meta": { "request_id": "req_002", "version": "v1", "timestamp": "2026-04-10T14:00:01Z" },
-  "error": null
-}
-```
-
-> The sync completes synchronously — the job `status` is `"success"` or `"failed"` in the response (not `"queued"`). When failed, `error_summary` contains the reason. Use `GET /integrations/sync-jobs/:id` to retrieve a past job by its `id`.
-
-```json
-{
-  "data": {
     "event_id": "wh-event-123",
     "provider": "github",
-    "tenant_id": "tenant-7a4b",
-    "status": "queued"
+    "status": "queued",
+    "received_at": "2026-04-10T14:10:00Z"
   },
   "meta": { "request_id": "req_004", "version": "v1", "timestamp": "2026-04-10T14:10:00Z" },
   "error": null
 }
 ```
+
+> The webhook is **enqueued** and processed asynchronously. `event_id` can be used with `GET /integrations/webhooks/events/:event_id` to check processing status.
 
 **Error Scenarios:**
 
@@ -718,7 +872,7 @@ Receive a provider webhook and enqueue it for async processing.
 | 400 | Unsupported provider or malformed payload |
 | 401 | Invalid or missing `x-webhook-token` |
 
-> **Note:** This endpoint is called by the external provider (GitHub/Jira), not by your frontend. Document it for backend/DevOps setup reference.
+> **Note:** This endpoint is called by the external provider, not by your frontend. Document it for backend/DevOps setup reference. All four providers (`jira`, `github`, `opsgenie`, `incident_io`) use this same route.
 
 ---
 
@@ -726,21 +880,23 @@ Receive a provider webhook and enqueue it for async processing.
 
 Check the processing status of a received webhook event.
 
-**Permission:** `integrations.read`
+**Permission:** `integrations.webhook.read`
 
 **Response — 200 OK:**
 
 ```json
 {
   "data": {
-    "event_id": "wh-event-123",
-    "provider": "github",
+    "id": "wh-event-123",
     "tenant_id": "tenant-7a4b",
-    "status": "processed",
+    "provider": "github",
+    "external_id": "abc-uuid",
     "event_type": "pull_request.closed",
+    "status": "processed",
+    "attempts": 1,
+    "last_error": null,
     "received_at": "2026-04-10T14:10:00Z",
-    "processed_at": "2026-04-10T14:10:04Z",
-    "error_message": null
+    "processed_at": "2026-04-10T14:10:04Z"
   },
   "meta": { "request_id": "req_005", "version": "v1", "timestamp": "2026-04-10T14:15:00Z" },
   "error": null
@@ -1056,12 +1212,14 @@ Use `name` as the left-hand key in `severity_to_priority`. Since OpsGenie priori
 | `oauth2` | OAuth2 flow (client_id + client_secret or tokens) |
 | `token` | Personal access token or API key |
 | `app` | GitHub App (private key PEM) |
+| `bearer` | Bearer token (e.g. incident.io API key) |
+| `api_key` | API key (e.g. OpsGenie) |
 
 ### Secret Strategy
 
 | Value | Meaning |
 |---|---|
-| `inline_encrypted` | Secret was submitted inline and is encrypted at rest |
+| `db_encrypted` | Secret was submitted inline and is encrypted at rest in the database |
 | `vault_ref` | Secret is referenced from an external vault |
 
 ### Canonical Task Types
@@ -1131,5 +1289,5 @@ Use the tenant-scoped endpoint here because SLA templates apply across all conne
 | Value | Meaning |
 |---|---|
 | `active` | Connection is valid and operational |
+| `disabled` | Manually disabled by the tenant |
 | `error` | Last sync or auth check failed |
-| `revoked` | Credentials were invalidated |
