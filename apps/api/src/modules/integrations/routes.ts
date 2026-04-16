@@ -50,7 +50,9 @@ function mapSyncJob(job: {
   startedAt: Date | null;
   finishedAt: Date | null;
   errorSummary: string | null;
+  result: unknown;
 }) {
+  const result = job.result as { synced_entities?: number; summary?: Record<string, number> } | null;
   return {
     id: job.id,
     tenant_id: job.tenantId,
@@ -59,7 +61,10 @@ function mapSyncJob(job: {
     created_at: job.createdAt.toISOString(),
     started_at: job.startedAt?.toISOString() ?? null,
     finished_at: job.finishedAt?.toISOString() ?? null,
-    error_summary: job.errorSummary
+    error_summary: job.errorSummary,
+    result: result
+      ? { synced_entities: result.synced_entities ?? 0, summary: result.summary ?? {} }
+      : null,
   };
 }
 

@@ -378,7 +378,7 @@ export class JiraConnector implements IntegrationConnector {
 
     const scope = input.scope as JiraScope | undefined;
     const client = new JiraClient(creds);
-    let synced = 0;
+    const counts = { users: 0, projects: 0, epics: 0, issues: 0 };
 
     // Load tenant-configured type mapping for this connection
     const connectionRecord = await prisma.integrationConnection.findUnique({
@@ -387,21 +387,22 @@ export class JiraConnector implements IntegrationConnector {
     });
     const typeMapping = (connectionRecord?.typeMapping as Record<string, string> | null) ?? undefined;
 
-    synced += await syncUsers(client, input.tenantId);
+    counts.users += await syncUsers(client, input.tenantId);
 
     const projects = await syncProjects(client, input.tenantId, scope?.project_keys);
-    synced += projects.length;
+    counts.projects += projects.length;
 
     for (const { id: projectId, jiraKey } of projects) {
       const epicMap = await syncEpics(client, input.tenantId, jiraKey, projectId);
-      synced += epicMap.size;
-      synced += await syncIssues(client, input.tenantId, jiraKey, projectId, epicMap, input.connectionId, typeMapping, input.sinceDate);
+      counts.epics += epicMap.size;
+      counts.issues += await syncIssues(client, input.tenantId, jiraKey, projectId, epicMap, input.connectionId, typeMapping, input.sinceDate);
     }
 
     return {
       provider: this.provider,
       mode: input.mode,
-      synced_entities: synced,
+      synced_entities: Object.values(counts).reduce((a, b) => a + b, 0),
+      summary: counts,
     };
   }
 }

@@ -437,7 +437,7 @@ export class GithubConnector implements IntegrationConnector {
     const { org } = scope;
     const since = input.sinceDate?.toISOString();
 
-    let synced = 0;
+    const counts = { members: 0, repos: 0, milestones: 0, issues: 0, pull_requests: 0, releases: 0 };
 
     // Load tenant-configured type mapping for this connection
     const connectionRecord = await prisma.integrationConnection.findUnique({
@@ -446,22 +446,23 @@ export class GithubConnector implements IntegrationConnector {
     });
     const typeMapping = (connectionRecord?.typeMapping as Record<string, string> | null) ?? undefined;
 
-    synced += await syncMembers(octokit, input.tenantId, org);
+    counts.members += await syncMembers(octokit, input.tenantId, org);
 
     const projects = await syncRepos(octokit, input.tenantId, org, scope.repos);
-    synced += projects.length;
+    counts.repos += projects.length;
 
     for (const { id: projectId, repoName } of projects) {
-      synced += await syncMilestones(octokit, input.tenantId, org, repoName, projectId);
-      synced += await syncIssues(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
-      synced += await syncPullRequests(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
-      synced += await syncReleases(octokit, input.tenantId, org, repoName, projectId, since);
+      counts.milestones += await syncMilestones(octokit, input.tenantId, org, repoName, projectId);
+      counts.issues += await syncIssues(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
+      counts.pull_requests += await syncPullRequests(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
+      counts.releases += await syncReleases(octokit, input.tenantId, org, repoName, projectId, since);
     }
 
     return {
       provider: this.provider,
       mode: input.mode,
-      synced_entities: synced,
+      synced_entities: Object.values(counts).reduce((a, b) => a + b, 0),
+      summary: counts,
     };
   }
 }

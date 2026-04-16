@@ -259,6 +259,7 @@ export class IncidentIoConnector implements IntegrationConnector {
       provider: 'incident_io',
       mode: input.mode,
       synced_entities: synced,
+      summary: { incidents: synced },
     };
   }
 }

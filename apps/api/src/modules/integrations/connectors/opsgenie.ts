@@ -341,6 +341,7 @@ export class OpsGenieConnector implements IntegrationConnector {
       provider: 'opsgenie',
       mode: input.mode,
       synced_entities: synced,
+      summary: { incidents: synced },
     };
   }
 }

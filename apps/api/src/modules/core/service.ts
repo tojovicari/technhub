@@ -442,7 +442,8 @@ export async function listProjects(tenantId: string, query: ListQueryInput) {
     where,
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: 'desc' },
+    include: { team: true }
   });
 
   const hasMore = rows.length > limit;

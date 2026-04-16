@@ -16,6 +16,8 @@ export type SyncResult = {
   provider: IntegrationProvider;
   mode: SyncMode;
   synced_entities: number;
+  /** Per-entity-type counts, e.g. { members: 3, repos: 5, issues: 40 } */
+  summary: Record<string, number>;
 };
 
 export type WebhookConfig = {
