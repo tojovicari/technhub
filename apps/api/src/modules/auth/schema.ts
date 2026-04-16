@@ -41,12 +41,33 @@ export const updatePreferencesSchema = z.object({
   message: 'At least one preference field must be provided'
 });
 
+export const verifyEmailSchema = z.object({
+  token: z.string().min(1)
+});
+
+export const resendVerificationSchema = z.object({
+  email: z.string().email()
+});
+
+export const requestPasswordResetSchema = z.object({
+  email: z.string().email()
+});
+
+export const confirmPasswordResetSchema = z.object({
+  token: z.string().min(1),
+  password: passwordSchema
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
 export type CreateInviteInput = z.infer<typeof createInviteSchema>;
 export type RegisterByInviteInput = z.infer<typeof registerByInviteSchema>;
 export type UpdatePreferencesInput = z.infer<typeof updatePreferencesSchema>;
+export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>;
+export type ResendVerificationInput = z.infer<typeof resendVerificationSchema>;
+export type RequestPasswordResetInput = z.infer<typeof requestPasswordResetSchema>;
+export type ConfirmPasswordResetInput = z.infer<typeof confirmPasswordResetSchema>;
 
 export type AccountPreferences = {
   locale: 'pt-BR' | 'en-US' | 'es-ES';

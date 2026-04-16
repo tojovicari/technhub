@@ -17,9 +17,10 @@ const DEV_USER: JwtUser = {
 };
 
 export async function registerAuth(app: FastifyInstance) {
-  app.register(jwt, {
-    secret: process.env.JWT_SECRET || 'dev-local-secret-change-me'
-  });
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error('JWT_SECRET env var is required');
+
+  app.register(jwt, { secret });
 
   app.decorate('authenticate', async (request: FastifyRequest, reply: FastifyReply) => {
     if (process.env.AUTH_BYPASS === 'true') {

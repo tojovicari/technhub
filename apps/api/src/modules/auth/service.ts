@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'crypto';
 import { prisma } from '../../lib/prisma.js';
 import { hashPassword, verifyPassword } from '../../lib/password.js';
-import type { AccountPreferences, CreateInviteInput, LoginInput, RefreshInput, RegisterByInviteInput, RegisterInput, UpdatePreferencesInput } from './schema.js';
+import type { AccountPreferences, CreateInviteInput, LoginInput, RefreshInput, RegisterByInviteInput, RegisterInput, UpdatePreferencesInput, VerifyEmailInput, ResendVerificationInput, RequestPasswordResetInput, ConfirmPasswordResetInput } from './schema.js';
 
 function parsePreferences(raw: unknown): AccountPreferences | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -16,6 +16,8 @@ import { enqueueNotification } from '../comms/service.js';
 const ACCESS_TOKEN_TTL = '1h';
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const INVITE_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
+const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
   org_admin: ['*'],
@@ -93,7 +95,31 @@ export async function register(input: RegisterInput) {
       passwordHash,
       fullName: input.full_name,
       role: 'org_admin',
+      isActive: false,
       coreUserId: coreUser?.id ?? null
+    }
+  });
+
+  const rawToken = randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + VERIFICATION_TTL_MS);
+
+  await prisma.emailVerificationToken.create({
+    data: {
+      accountId: account.id,
+      tokenHash: tokenHash(rawToken),
+      expiresAt
+    }
+  });
+
+  await enqueueNotification({
+    tenantId: input.tenant_id,
+    channel: 'email',
+    recipient: input.email,
+    templateKey: 'email-verification',
+    payload: {
+      email: input.email,
+      verification_token: rawToken,
+      expires_at: expiresAt.toISOString()
     }
   });
 
@@ -204,8 +230,12 @@ export async function login(
     where: { email: input.email }
   });
 
-  if (!account || !account.isActive) {
+  if (!account) {
     throw Object.assign(new Error('Invalid credentials'), { code: 'INVALID_CREDENTIALS' });
+  }
+
+  if (!account.isActive) {
+    throw Object.assign(new Error('Account not verified'), { code: 'ACCOUNT_NOT_VERIFIED' });
   }
 
   const valid = await verifyPassword(input.password, account.passwordHash);
@@ -360,4 +390,117 @@ export async function updatePreferences(accountId: string, input: UpdatePreferen
   });
 
   return { preferences: merged };
+}
+
+export async function verifyEmail(input: VerifyEmailInput) {
+  const hash = tokenHash(input.token);
+  const record = await prisma.emailVerificationToken.findUnique({ where: { tokenHash: hash } });
+
+  if (!record || record.usedAt || record.expiresAt < new Date()) {
+    throw Object.assign(new Error('Invalid or expired verification token'), { code: 'INVALID_VERIFICATION_TOKEN' });
+  }
+
+  const [account] = await prisma.$transaction([
+    prisma.platformAccount.update({
+      where: { id: record.accountId },
+      data:  { isActive: true }
+    }),
+    prisma.emailVerificationToken.update({
+      where: { id: record.id },
+      data:  { usedAt: new Date() }
+    })
+  ]);
+
+  return {
+    id: account.id,
+    email: account.email,
+    is_active: account.isActive
+  };
+}
+
+export async function resendVerification(input: ResendVerificationInput) {
+  const account = await prisma.platformAccount.findUnique({ where: { email: input.email } });
+
+  // Always return success to avoid email enumeration
+  if (!account || account.isActive) return;
+
+  const rawToken = randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + VERIFICATION_TTL_MS);
+
+  await prisma.emailVerificationToken.create({
+    data: {
+      accountId: account.id,
+      tokenHash: tokenHash(rawToken),
+      expiresAt
+    }
+  });
+
+  await enqueueNotification({
+    tenantId:    account.tenantId,
+    channel:     'email',
+    recipient:   account.email,
+    templateKey: 'email-verification',
+    payload: {
+      email:              account.email,
+      verification_token: rawToken,
+      expires_at:         expiresAt.toISOString()
+    }
+  });
+}
+
+export async function requestPasswordReset(input: RequestPasswordResetInput) {
+  const account = await prisma.platformAccount.findUnique({ where: { email: input.email } });
+
+  // Always return success to avoid email enumeration
+  if (!account) return;
+
+  const rawToken = randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
+
+  await prisma.passwordResetToken.create({
+    data: {
+      accountId: account.id,
+      tokenHash: tokenHash(rawToken),
+      expiresAt
+    }
+  });
+
+  await enqueueNotification({
+    tenantId:    account.tenantId,
+    channel:     'email',
+    recipient:   account.email,
+    templateKey: 'password-reset',
+    payload: {
+      email:       account.email,
+      reset_token: rawToken,
+      expires_at:  expiresAt.toISOString()
+    }
+  });
+}
+
+export async function confirmPasswordReset(input: ConfirmPasswordResetInput) {
+  const hash = tokenHash(input.token);
+  const record = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hash } });
+
+  if (!record || record.usedAt || record.expiresAt < new Date()) {
+    throw Object.assign(new Error('Invalid or expired reset token'), { code: 'INVALID_RESET_TOKEN' });
+  }
+
+  const passwordHash = await hashPassword(input.password);
+
+  await prisma.$transaction([
+    prisma.platformAccount.update({
+      where: { id: record.accountId },
+      data:  { passwordHash }
+    }),
+    prisma.passwordResetToken.update({
+      where: { id: record.id },
+      data:  { usedAt: new Date() }
+    }),
+    // Revoke all active refresh tokens so existing sessions are invalidated
+    prisma.platformRefreshToken.updateMany({
+      where: { accountId: record.accountId, revokedAt: null },
+      data:  { revokedAt: new Date() }
+    })
+  ]);
 }

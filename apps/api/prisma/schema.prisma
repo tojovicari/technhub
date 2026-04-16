@@ -50,8 +50,36 @@ model PlatformAccount {
   coreUser      User?                  @relation(fields: [coreUserId], references: [id], onDelete: SetNull)
   refreshTokens PlatformRefreshToken[]
   iamAssignments UserPermissionProfile[]
+  emailVerificationTokens EmailVerificationToken[]
+  passwordResetTokens PasswordResetToken[]
 
   @@index([tenantId])
+}
+
+model EmailVerificationToken {
+  id        String          @id @default(uuid())
+  accountId String
+  tokenHash String          @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime        @default(now())
+
+  account   PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+}
+
+model PasswordResetToken {
+  id        String          @id @default(uuid())
+  accountId String
+  tokenHash String          @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime        @default(now())
+
+  account   PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
 }
 
 model PlatformRefreshToken {

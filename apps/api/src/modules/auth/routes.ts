@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
-import { loginSchema, refreshSchema, registerSchema, createInviteSchema, registerByInviteSchema, updatePreferencesSchema } from './schema.js';
-import { getMe, login, logout, refresh, register, createInvite, registerByInvite, updatePreferences } from './service.js';
+import { loginSchema, refreshSchema, registerSchema, createInviteSchema, registerByInviteSchema, updatePreferencesSchema, verifyEmailSchema, resendVerificationSchema, requestPasswordResetSchema, confirmPasswordResetSchema } from './schema.js';
+import { getMe, login, logout, refresh, register, createInvite, registerByInvite, updatePreferences, verifyEmail, resendVerification, requestPasswordReset, confirmPasswordReset } from './service.js';
 
 export async function authRoutes(app: FastifyInstance) {
   // POST /auth/register
@@ -17,7 +17,10 @@ export async function authRoutes(app: FastifyInstance) {
 
     try {
       const account = await register(parsed.data);
-      return reply.status(201).send(ok(request, account));
+      return reply.status(201).send(ok(request, {
+        ...account,
+        message: 'Account created. Please check your email to activate your account.'
+      }));
     } catch (err: unknown) {
       const e = err as { code?: string; message?: string };
       if (e.code === 'TENANT_ALREADY_EXISTS') {
@@ -92,6 +95,9 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.status(200).send(ok(request, result));
     } catch (err: unknown) {
       const e = err as { code?: string };
+      if (e.code === 'ACCOUNT_NOT_VERIFIED') {
+        return reply.status(403).send(fail(request, 'ACCOUNT_NOT_VERIFIED', 'Please verify your email before logging in'));
+      }
       if (e.code === 'INVALID_CREDENTIALS') {
         return reply.status(401).send(fail(request, 'INVALID_CREDENTIALS', 'Invalid email or password'));
       }
@@ -191,4 +197,74 @@ export async function authRoutes(app: FastifyInstance) {
       }
     }
   );
+
+  // POST /auth/verify-email  (public)
+  app.post('/auth/verify-email', async (request, reply) => {
+    const parsed = verifyEmailSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(
+        fail(request, 'VALIDATION_ERROR', 'Invalid request body', { issues: parsed.error.issues })
+      );
+    }
+
+    try {
+      const result = await verifyEmail(parsed.data);
+      return reply.status(200).send(ok(request, result));
+    } catch (err: unknown) {
+      const e = err as { code?: string };
+      if (e.code === 'INVALID_VERIFICATION_TOKEN') {
+        return reply.status(400).send(fail(request, 'INVALID_VERIFICATION_TOKEN', 'Invalid or expired verification token'));
+      }
+      throw err;
+    }
+  });
+
+  // POST /auth/verify-email/resend  (public)
+  app.post('/auth/verify-email/resend', async (request, reply) => {
+    const parsed = resendVerificationSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(
+        fail(request, 'VALIDATION_ERROR', 'Invalid request body', { issues: parsed.error.issues })
+      );
+    }
+
+    await resendVerification(parsed.data);
+    // Always 200 to avoid email enumeration
+    return reply.status(200).send(ok(request, { message: 'If the email exists and is not yet verified, a new confirmation email has been sent.' }));
+  });
+
+  // POST /auth/password-reset/request  (public)
+  app.post('/auth/password-reset/request', async (request, reply) => {
+    const parsed = requestPasswordResetSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(
+        fail(request, 'VALIDATION_ERROR', 'Invalid request body', { issues: parsed.error.issues })
+      );
+    }
+
+    await requestPasswordReset(parsed.data);
+    // Always 200 to avoid email enumeration
+    return reply.status(200).send(ok(request, { message: 'If the email is registered, a password reset link has been sent.' }));
+  });
+
+  // POST /auth/password-reset/confirm  (public)
+  app.post('/auth/password-reset/confirm', async (request, reply) => {
+    const parsed = confirmPasswordResetSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send(
+        fail(request, 'VALIDATION_ERROR', 'Invalid request body', { issues: parsed.error.issues })
+      );
+    }
+
+    try {
+      await confirmPasswordReset(parsed.data);
+      return reply.status(200).send(ok(request, { message: 'Password updated successfully. Please log in with your new password.' }));
+    } catch (err: unknown) {
+      const e = err as { code?: string };
+      if (e.code === 'INVALID_RESET_TOKEN') {
+        return reply.status(400).send(fail(request, 'INVALID_RESET_TOKEN', 'Invalid or expired reset token'));
+      }
+      throw err;
+    }
+  });
 }

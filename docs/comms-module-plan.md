@@ -1,214 +1,404 @@
-# Communication Module — Planning
+# Communication Module
 
-> Status: **Implemented** — migration applied, worker registrado, invite email ativo.  
+> Status: **Implemented** — provider: Resend SMTP; worker ativo; invite email e verificação de email em produção.  
 > Frontend API reference: [`docs/frontend/comms-api.md`](frontend/comms-api.md)
 
 ---
 
 ## Context
 
-Today the platform has **zero notification infrastructure**. The invite flow already creates `Invite` records and returns a `invite_token`, but no email is dispatched — the caller (frontend/admin) is expected to forward the link manually.
-
-This module creates the foundation for all outbound communication, starting with email and extensible to Slack, WhatsApp, and any future channel without touching the core business modules.
+O módulo centraliza toda comunicação de saída da plataforma. Business modules nunca chamam providers diretamente — eles enfileiram uma notificação via `enqueueNotification()` e o worker despacha de forma assíncrona.
 
 ---
 
 ## Goals
 
-- Deliver transactional messages (invite, SLA breach, DORA digest, etc.) across multiple channels.
-- Decouple business modules from notification delivery — they call `comms` via a clear internal contract, never a specific provider.
-- Stay aligned with the existing **no external broker** architecture (DB-backed async queue, same pattern as `integrations/worker.ts`).
+- Entregar mensagens transacionais (invite, SLA breach, DORA digest, etc.) por múltiplos canais.
+- Desacoplar business modules da entrega — chamam `comms` via contrato interno, nunca um provider específico.
+- Arquitetura sem broker externo: fila DB-backed + worker `setInterval` (mesmo padrão de `integrations/worker.ts`).
 
 ---
 
-## Architecture Overview
+## Estrutura de arquivos (implementado)
 
 ```
 modules/
   comms/
     providers/
       email/
-        provider.ts        ← EmailProvider implements ChannelProvider
-        nodemailer.ts      ← (or resend.ts / sendgrid.ts)
+        smtp.ts            ← smtpEmailProvider via Resend SMTP (nodemailer)
       slack/
-        provider.ts        ← SlackProvider (stub for now)
+        provider.ts        ← SlackProvider — stub (no-op)
       whatsapp/
-        provider.ts        ← WhatsAppProvider (stub for now)
+        provider.ts        ← WhatsAppProvider — stub (no-op)
     templates/
-      invite.ts
-      sla-breach.ts
-      dora-digest.ts
-    channel-provider.ts    ← ChannelProvider interface
-    service.ts             ← enqueueNotification(), processQueue()
-    worker.ts              ← setInterval polling (same pattern as integrations)
-    routes.ts              ← admin routes (optional: list/retry failed)
-    schema.ts
+      index.ts             ← renderTemplate(key, payload) → { subject, body }
+      invite.ts            ← ✅ ativo
+      email-verification.ts← ✅ ativo
+      sla-breach.ts        ← ⏸ pronto, não disparado ainda
+      dora-digest.ts       ← ⏸ pronto, não disparado ainda
+    channel-provider.ts    ← interface ChannelProvider + tipos
+    service.ts             ← enqueueNotification(), processQueue(), listNotifications(), retryNotification()
+    worker.ts              ← setInterval polling (batch 20, a cada 5s)
+    routes.ts              ← admin routes: list + retry
+    schema.ts              ← Zod schemas para as admin routes
 ```
 
-### Channel Provider Contract
+---
+
+## Channel Provider Contract
 
 ```ts
 // channel-provider.ts
-export interface Message {
-  to: string;            // email address, Slack user ID, phone number, etc.
-  subject?: string;      // email only
-  body: string;          // rendered text/HTML
-  channel: Channel;
-  metadata?: Record<string, unknown>;
-}
-
 export type Channel = 'email' | 'slack' | 'whatsapp';
 
-export interface ChannelProvider {
+export interface OutboundMessage {
+  to: string;
   channel: Channel;
-  send(message: Message): Promise<void>;
+  subject?: string;
+  body: string;
 }
-```
 
-### Template Contract
-
-```ts
-// Template: pure function — input data → rendered string
-export interface Template<T extends Record<string, unknown>> {
-  subject?: (data: T) => string;   // email only
-  body: (data: T) => string;       // plain text or HTML
+export interface ChannelProvider {
+  readonly channel: Channel;
+  send(message: OutboundMessage): Promise<void>;
 }
 ```
 
 ---
 
-## Notification Queue (DB-backed, async)
+## Internal API — enqueueNotification()
 
-### Prisma model
+Única forma de outros módulos acionarem o comms. Sem boundary HTTP — import direto.
+
+```ts
+// comms/service.ts
+export async function enqueueNotification(input: {
+  tenantId:    string;
+  channel:     Channel;
+  recipient:   string;
+  templateKey: string;
+  payload:     Record<string, unknown>;
+}): Promise<void>
+```
+
+---
+
+## Notification Queue (DB-backed)
 
 ```prisma
 model Notification {
   id          String             @id @default(uuid())
   tenantId    String
-  channel     String             // 'email' | 'slack' | 'whatsapp'
-  recipient   String             // email / userID / phone
+  channel     String
+  recipient   String
   templateKey String
-  payload     Json               // template variables (typed in service layer)
+  payload     Json
   status      NotificationStatus @default(queued)
   attempts    Int                @default(0)
   lastError   String?
+  nextRetryAt DateTime?
   sentAt      DateTime?
   createdAt   DateTime           @default(now())
   updatedAt   DateTime           @updatedAt
-
-  @@index([tenantId, status])
-  @@index([status, createdAt])   // for worker batch queries
 }
 
-enum NotificationStatus {
-  queued
-  processing
-  sent
-  failed
-}
+enum NotificationStatus { queued | processing | sent | failed }
 ```
 
-### Worker (same pattern as `integrations/worker.ts`)
+### Worker
 
 ```ts
-// worker.ts
-export function startCommsWorker(app: FastifyInstance) {
-  const timer = setInterval(() => processQueue(20), 5_000);
-  app.addHook('onClose', async () => clearInterval(timer));
-}
+// worker.ts — registrado em server.ts
+startCommsWorker(app)  // setInterval(processQueue(20), 5000ms)
 ```
 
-`processQueue(batchSize)` uses the same optimistic-locking pattern as webhook events:
-1. `updateMany` status `queued → processing` with `take: batchSize`
-2. For each record: render template → call provider → mark `sent` or increment `attempts` / mark `failed`
+`processQueue` usa optimistic-lock (`updateMany queued → processing`) para segurança em concorrência futura.
+
+### Retry
+
+| Tentativa | Backoff |
+|-----------|---------|
+| 1ª falha | 2 min |
+| 2ª falha | 4 min |
+| 3ª falha (final) | status → `failed` |
 
 ---
 
-## Internal API (used by other modules)
+## Casos de uso implementados
+
+### 1. Invite de novo usuário ✅
+
+**Trigger:** `POST /auth/invites` → `createInvite()` em `auth/service.ts`  
+**Template:** `invite`  
+**Canal:** email  
+**Payload:**
 
 ```ts
-// comms/service.ts — exported for internal use only (no HTTP route needed)
-export async function enqueueNotification(input: {
-  tenantId: string;
-  channel: Channel;
-  recipient: string;
-  templateKey: string;
-  payload: Record<string, unknown>;
-}): Promise<void>
+{
+  email:        string;   // destinatário
+  invite_token: string;   // token raw (hash armazenado no DB)
+  expires_at:   string;   // ISO — 48h a partir da criação
+}
 ```
 
-Calling example (auth module — invite):
-```ts
-// auth/service.ts
-import { enqueueNotification } from '../comms/service.js';
+**Email gerado:**
+- Subject: `You have been invited to moasy.tech`
+- Link: `APP_BASE_URL/register?token=<token>`
 
-await enqueueNotification({
-  tenantId,
-  channel: 'email',
-  recipient: invite.email,
-  templateKey: 'invite',
-  payload: { invite_token: rawToken, expires_at: expiresAt }
-});
-```
+> **Nota sobre verificação de email no convite:**  
+> O fluxo de invite já funciona como verificação implícita — apenas quem recebeu o email consegue o token para completar o cadastro. Adicionar um passo extra de verificação seria redundante e criaria fricção desnecessária. **Decisão: não implementar verificação de email** para usuários cadastrados via invite.
 
 ---
 
-## Phase 1 Scope
+### 2. Verificação de email no cadastro (1º usuário da tenant) ✅
 
-| Item | Description |
-|------|-------------|
-| `ChannelProvider` interface | Definida uma vez; todos os providers implementam |
-| `EmailProvider` (Nodemailer/SMTP) | Implementação real via SMTP (Mailtrap sandbox → qualquer SMTP em prod) |
-| `SlackProvider` | Stub — loga aviso, no-op |
-| `WhatsAppProvider` | Stub — loga aviso, no-op |
-| Template: `invite` | Subject + HTML body com link de convite |
-| Template: `sla-breach` | Alerta de violação de SLA |
-| Template: `dora-digest` | Digest semanal de métricas DORA |
-| `Notification` model + migration | Tabela de fila no Prisma |
-| `enqueueNotification()` | Função interna, sem boundary HTTP |
-| Worker | `setInterval` polling, batch 20, a cada 5s |
-| Retry logic | Máx 3 tentativas, backoff em `nextRetryAt` |
-| Admin routes | `GET /comms/notifications` + `POST /comms/notifications/:id/retry` |
+**Contexto:** `POST /auth/register` cria o primeiro usuário + tenant. Não há verificação implícita (ao contrário do invite), portanto o email precisa ser confirmado explicitamente para garantir titularidade.
+
+**Fluxo implementado:**
+
+```
+POST /auth/register
+  ├── cria tenant + PlatformAccount (isActive: false)
+  ├── gera EmailVerificationToken (hash SHA256, TTL: 24h)
+  ├── enqueueNotification(templateKey: 'email-verification')
+  └── retorna 201 com { ..., is_active: false, message: "Check your email..." }
+
+Worker envia email → link APP_BASE_URL/verify-email?token=<raw_token>
+
+POST /auth/verify-email  (público, sem auth)
+  ├── valida token (hash + expiresAt + usedAt)
+  ├── PlatformAccount.isActive: true + EmailVerificationToken.usedAt: agora
+  └── retorna 200 com { id, email, is_active: true }
+
+POST /auth/verify-email/resend  (público, sem auth)
+  ├── busca conta pelo email
+  ├── se não existe ou já está ativa → retorna 200 silenciosamente (anti-enumeration)
+  └── cria novo token + enfileira novo email
+
+POST /auth/login
+  └── conta não verificada → 403 ACCOUNT_NOT_VERIFIED
+```
+
+**Migration:** `20260416113612_add_email_verification_token`
+
+```prisma
+model EmailVerificationToken {
+  id        String          @id @default(uuid())
+  accountId String
+  tokenHash String          @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime        @default(now())
+
+  account   PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+}
+```
+
+**Template:** `email-verification`  
+**Canal:** email  
+**Payload:**
+
+```ts
+{
+  email:              string;
+  verification_token: string;   // token raw
+  expires_at:         string;   // ISO — 24h
+}
+```
+
+**Email gerado:**
+- Subject: `Confirm your moasy.tech account`
+- Link: `APP_BASE_URL/verify-email?token=<token>`
+
+**Novas routes auth:**
+
+| Método | Path | Auth | Descrição |
+|--------|------|------|-----------|
+| `POST` | `/auth/verify-email` | pública | Ativa conta consumindo token |
+| `POST` | `/auth/verify-email/resend` | pública | Reenvia email para contas `isActive: false` |
+
+**Mudanças em código existente (aplicadas):**
+- `auth/service.ts: register()` — `isActive: false` + gerar token + enqueue
+- `auth/service.ts: login()` — rejeitar com `ACCOUNT_NOT_VERIFIED` se `!isActive`
+- `auth/service.ts: verifyEmail()` + `resendVerification()` — novas funções
+- `auth/routes.ts` — duas novas routes públicas adicionadas
+- `comms/templates/index.ts` — `'email-verification'` registrado
+- `comms/service.ts: listNotifications()` — campos corrigidos para snake_case
+
+**Riscos:**
+- Usuário não recebe email e fica bloqueado → rota de reenvio mitiga
+- Token expirado → reenvio gera novo token; tokens anteriores **não** são invalidados via `usedAt` — continuam válidos até `expiresAt`. O primeiro token usado ativa a conta; os demais expiram naturalmente.
 
 ---
 
-## Configuration
+### 3. Reset de senha ✅
 
-Environment variables (`.env` / Fly secrets):
+**Trigger:** `POST /auth/password-reset/request` → `requestPasswordReset()` em `auth/service.ts`  
+**Template:** `password-reset`  
+**Canal:** email  
+**Payload:**
+
+```ts
+{
+  email:       string;
+  reset_token: string;   // token raw (hash SHA256 armazenado no DB)
+  expires_at:  string;   // ISO — 1h a partir da criação
+}
+```
+
+**Email gerado:**
+- Subject: `Reset your moasy.tech password`
+- Link: `APP_BASE_URL/reset-password?token=<token>`
+
+**Fluxo implementado:**
 
 ```
-SMTP_HOST=sandbox.smtp.mailtrap.io   # qualquer SMTP em prod (ex: smtp.sendgrid.net)
-SMTP_PORT=2525                       # 587 ou 465 em prod
-SMTP_USER=your-smtp-user
-SMTP_PASS=your-smtp-password
+POST /auth/password-reset/request  (público, anti-enumeration)
+  ├── busca conta pelo email
+  ├── se não existe → retorna 200 silenciosamente
+  └── gera PasswordResetToken (hash SHA256, TTL: 1h) + enqueue 'password-reset'
+
+POST /auth/password-reset/confirm  (público)
+  ├── valida token (hash + expiresAt + usedAt)
+  ├── atualiza passwordHash na conta
+  ├── marca token usedAt: agora
+  └── revoga todos os refresh tokens ativos (força re-login em todas as sessões)
+```
+
+**Migration:** `20260416120513_add_password_reset_token`
+
+```prisma
+model PasswordResetToken {
+  id        String          @id @default(uuid())
+  accountId String
+  tokenHash String          @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime        @default(now())
+
+  account   PlatformAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+}
+```
+
+**Novas routes auth:**
+
+| Método | Path | Auth | Descrição |
+|--------|------|------|-----------|
+| `POST` | `/auth/password-reset/request` | pública | Envia email de reset (anti-enumeration) |
+| `POST` | `/auth/password-reset/confirm` | pública | Aplica nova senha, revoga sessões |
+
+**Riscos:**
+- Múltiplos tokens gerados por requests seguidos: todos válidos por 1h. Apenas o primeiro `confirm` bem-sucedido consome o token.
+- Revogar refresh tokens pode surpreender usuários conectados em múltiplos dispositivos — comportamento intencional por segurança.
+
+---
+
+### 4. SLA Breach alert ⏸ (template pronto, trigger não implementado)
+
+**Template:** `sla-breach`  
+**Canal:** email (previsto)  
+**Payload:**
+
+```ts
+{
+  task_id:     string;
+  task_title:  string;
+  sla_name:    string;
+  breached_at: string;
+  tenant_name?: string;
+}
+```
+
+**Próximo passo:** wiring no SLA worker ao detectar breach.
+
+---
+
+### 4. DORA Digest semanal ⏸ (template pronto, trigger não implementado)
+
+**Template:** `dora-digest`  
+**Canal:** email (previsto)  
+**Payload:**
+
+```ts
+{
+  period:                  string;   // ex: "2026-W15"
+  team_name:               string;
+  deployment_frequency?:   string;
+  lead_time_for_changes?:  string;
+  change_failure_rate?:    string;
+  mean_time_to_restore?:   string;
+}
+```
+
+**Próximo passo:** job agendado (semanal) ou trigger manual via admin route.
+
+---
+
+## Admin HTTP Routes
+
+| Método | Path | Permissão | Descrição |
+|--------|------|-----------|-----------|
+| `GET` | `/comms/notifications` | `comms.notifications.read` | Lista notificações do tenant (paginado, filtrável por status/channel) |
+| `POST` | `/comms/notifications/:id/retry` | `comms.notifications.retry` | Recoloca notificação `failed` em `queued` |
+
+### Filtros disponíveis (GET)
+
+| Param | Tipo | Default |
+|-------|------|---------|
+| `status` | `queued\|processing\|sent\|failed` | — |
+| `channel` | `email\|slack\|whatsapp` | — |
+| `page` | number | 1 |
+| `per_page` | number (max 100) | 20 |
+
+---
+
+## Configuração
+
+```env
+# Provider: Resend SMTP
+SMTP_HOST=smtp.resend.com
+SMTP_PORT=465
+SMTP_USER=resend
+SMTP_PASS=re_<api_key>
+
+# Remetente
 COMMS_FROM_EMAIL=no-reply@moasy.tech
 COMMS_FROM_NAME=moasy.tech
+
+# Worker
 APP_BASE_URL=https://app.moasy.tech
 COMMS_WORKER_INTERVAL_MS=5000
 ```
 
----
-
-## Decisions
-
-| Question | Decision |
-|----------|----------|
-| Email provider | **Nodemailer/SMTP** — Mailtrap sandbox local; troca de host/user/pass em prod |
-| Dispatch mode | **Async** — fila no DB + worker (mesmo padrão de `integrations`) |
-| Templates | **HTML com template literals** (sem engine externa) |
-| Phase 1 use cases | Invite email, SLA breach alert, DORA digest semanal |
-| Tenant config | **Plataforma única** — uma config global |
-| Admin routes | **Sim** — `GET /comms/notifications` + `POST /comms/notifications/:id/retry` |
-| Slack/WhatsApp | **Stubs** criados desde o início para garantir extensibilidade |
+> Porta 465 usa `secure: true` via SSL. Para 587, TLS é negociado automaticamente.
 
 ---
 
-## Risks
+## Decisões
 
-| Risk | Mitigation |
-|------|------------|
-| Provider outage | Retry queue com max attempts + status `failed` para visibilidade |
-| Erros de rendering de template | Capturar + marcar failed antes de enviar; nunca silenciar |
-| PII em logs | Mascarar `recipient` nos logs; armazenar só no registro `Notification` |
+| Questão | Decisão |
+|---------|---------|
+| Provider de email | **Resend SMTP** via nodemailer — free tier 3k/mês, boa deliverability |
+| Modo de despacho | **Async** — fila no DB + worker (sem broker externo) |
+| Templates | **HTML com template literals** — sem engine externa |
+| Verificação de email (invite) | **Não necessária** — invite token já valida posse do email |
+| Verificação de email (register) | **Necessária** — `POST /auth/register` não tem verificação implícita; conta criada com `isActive: false` até confirmação |
+| Slack/WhatsApp | **Stubs** existem para garantir extensibilidade sem retrabalho |
+| Config de tenant | **Global por plataforma** — sem config por-tenant por ora |
+
+---
+
+## Riscos
+
+| Risco | Mitigação |
+|-------|-----------|
+| Provider indisponível | Retry queue + status `failed` visível nas admin routes |
+| Erro de rendering | Exceção capturada → `failed` com `lastError`; nunca silenciado |
+| PII em logs | `recipient` não logado; armazenado só no registro `Notification` |
 | Isolamento por tenant | Todas as queries escopadas por `tenantId` |
 

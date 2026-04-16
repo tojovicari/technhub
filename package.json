@@ -11,8 +11,5 @@
     "api:prisma:generate": "npm --prefix apps/api run prisma:generate",
     "api:prisma:migrate:dev": "npm --prefix apps/api run prisma:migrate:dev",
     "api:prisma:migrate:deploy": "npm --prefix apps/api run prisma:migrate:deploy"
-  },
-  "dependencies": {
-    "mailtrap": "^4.5.1"
   }
 }

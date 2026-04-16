@@ -14,11 +14,12 @@ function getTransporter() {
   return nodemailer.createTransport({
     host,
     port,
+    secure: port === 465,
     auth: { user, pass },
   });
 }
 
-export const mailtrapEmailProvider: ChannelProvider = {
+export const smtpEmailProvider: ChannelProvider = {
   channel: 'email',
 
   async send(message: OutboundMessage): Promise<void> {

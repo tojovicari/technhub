@@ -1,7 +1,7 @@
 import { prisma } from '../../lib/prisma.js';
 import type { Prisma } from '@prisma/client';
 import type { Channel, ChannelProvider } from './channel-provider.js';
-import { mailtrapEmailProvider } from './providers/email/mailtrap.js';
+import { smtpEmailProvider } from './providers/email/smtp.js';
 import { slackProvider } from './providers/slack/provider.js';
 import { whatsappProvider } from './providers/whatsapp/provider.js';
 import { renderTemplate } from './templates/index.js';
@@ -10,7 +10,7 @@ import type { ListNotificationsQuery } from './schema.js';
 // ── Provider registry ─────────────────────────────────────────────────────────
 
 const providers = new Map<Channel, ChannelProvider>([
-  ['email',    mailtrapEmailProvider],
+  ['email',    smtpEmailProvider],
   ['slack',    slackProvider],
   ['whatsapp', whatsappProvider],
 ]);
@@ -108,7 +108,7 @@ export async function listNotifications(tenantId: string, query: ListNotificatio
   const { status, channel, page, per_page } = query;
   const skip = (page - 1) * per_page;
 
-  const [items, total] = await prisma.$transaction([
+  const [rawItems, total] = await prisma.$transaction([
     prisma.notification.findMany({
       where: {
         tenantId,
@@ -139,6 +139,19 @@ export async function listNotifications(tenantId: string, query: ListNotificatio
       },
     }),
   ]);
+
+  const items = rawItems.map(n => ({
+    id:            n.id,
+    channel:       n.channel,
+    recipient:     n.recipient,
+    template_key:  n.templateKey,
+    status:        n.status,
+    attempts:      n.attempts,
+    last_error:    n.lastError,
+    next_retry_at: n.nextRetryAt?.toISOString() ?? null,
+    sent_at:       n.sentAt?.toISOString() ?? null,
+    created_at:    n.createdAt.toISOString(),
+  }));
 
   return { items, total, page, per_page };
 }

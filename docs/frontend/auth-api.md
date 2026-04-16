@@ -32,7 +32,11 @@ The Auth module handles **platform user authentication** — the people who log 
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| `POST` | `/auth/register` | public | Create a new tenant + first account (`org_admin`) |
+| `POST` | `/auth/register` | public | Create a new tenant + first account (`org_admin`) — sends verification email |
+| `POST` | `/auth/verify-email` | public | Activate account consuming verification token |
+| `POST` | `/auth/verify-email/resend` | public | Resend verification email |
+| `POST` | `/auth/password-reset/request` | public | Request a password reset link via email |
+| `POST` | `/auth/password-reset/confirm` | public | Set a new password using a reset token |
 | `POST` | `/auth/login` | public | Authenticate, receive tokens |
 | `POST` | `/auth/refresh` | public | Rotate refresh token |
 | `POST` | `/auth/logout` | 🔒 | Revoke refresh token |
@@ -52,6 +56,8 @@ The Auth module handles **platform user authentication** — the people who log 
 Cria um novo tenant e o primeiro account, que recebe automaticamente o papel `org_admin`.
 
 > **Fluxo de onboarding:** use este endpoint apenas para criar um tenant novo. Para adicionar membros a um tenant existente, use `POST /auth/invites` + `POST /auth/register/invite`.
+
+> **Verificação de email:** a conta é criada com `is_active: false`. Um email de confirmação é enviado automaticamente. O usuário não consegue fazer login antes de verificar o email via `POST /auth/verify-email`.
 
 **Auth:** Public (no token required)
 
@@ -87,16 +93,17 @@ Cria um novo tenant e o primeiro account, que recebe automaticamente o papel `or
     "email": "glauber@example.com",
     "full_name": "Glauber Vicari",
     "role": "org_admin",
-    "is_active": true,
+    "is_active": false,
     "core_user_id": null,
-    "created_at": "2026-04-09T19:09:42.528Z"
+    "created_at": "2026-04-09T19:09:42.528Z",
+    "message": "Account created. Please check your email to activate your account."
   },
   "meta": { "request_id": "req-1", "version": "v1", "timestamp": "2026-04-09T19:09:42.530Z" },
   "error": null
 }
 ```
 
-> `core_user_id` é preenchido automaticamente se já existir um `User` (colaborador sincronizado) com o mesmo email no tenant — caso contrário, `null`.
+> `is_active: false` — a conta fica inativa até o email ser confirmado via `POST /auth/verify-email`. `core_user_id` é preenchido automaticamente se já existir um `User` (colaborador sincronizado) com o mesmo email no tenant — caso contrário, `null`.
 
 **Error Scenarios:**
 
@@ -105,6 +112,161 @@ Cria um novo tenant e o primeiro account, que recebe automaticamente o papel `or
 | `400` | `VALIDATION_ERROR` | Invalid email, weak password, missing fields |
 | `409` | `TENANT_ALREADY_EXISTS` | Tenant ID já em uso — use convite para adicionar membros |
 | `409` | `EMAIL_TAKEN` | Email already registered |
+
+---
+
+### POST /auth/verify-email
+
+Ativa a conta consumindo o token de verificação enviado por email após o `POST /auth/register`.
+
+**Auth:** Public (no token required)
+
+**Request Body:**
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `token` | string | ✅ | Token recebido no email de verificação |
+
+**Request Example:**
+
+```json
+{
+  "token": "a3f8e2c1d4b5..."
+}
+```
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "id": "29f95970-c13d-4ece-a8f3-55db7b2f410f",
+    "email": "glauber@example.com",
+    "is_active": true
+  },
+  "meta": { "request_id": "req-v1", "version": "v1", "timestamp": "2026-04-16T10:00:00Z" },
+  "error": null
+}
+```
+
+> Após a verificação, o usuário pode fazer login normalmente via `POST /auth/login`.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Token ausente |
+| `400` | `INVALID_VERIFICATION_TOKEN` | Token inválido, expirado (24h) ou já utilizado |
+
+---
+
+### POST /auth/verify-email/resend
+
+Reenvia o email de verificação para uma conta ainda não ativada.
+
+**Auth:** Public (no token required)
+
+> **Anti-enumeration:** a resposta é sempre 200, independentemente de o email existir ou já estar verificado.
+
+**Request Body:**
+
+| Field | Type | Required |
+|---|---|---|
+| `email` | string | ✅ |
+
+**Request Example:**
+
+```json
+{
+  "email": "glauber@example.com"
+}
+```
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "message": "If the email exists and is not yet verified, a new confirmation email has been sent."
+  },
+  "meta": { "request_id": "req-v2", "version": "v1", "timestamp": "2026-04-16T10:05:00Z" },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Email inválido |
+
+---
+
+### POST /auth/password-reset/request
+
+Request a password reset link. Always returns 200 to prevent email enumeration — even if the email is not registered, the response is identical.
+
+**Auth:** Public
+
+**Request Body:**
+
+```json
+{ "email": "alice@acme.io" }
+```
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": { "message": "If the email is registered, a password reset link has been sent." },
+  "meta": { "request_id": "req_abc123", "version": "v1", "timestamp": "2026-04-16T12:00:00.000Z" },
+  "error": null
+}
+```
+
+> The reset link is valid for **1 hour**. Multiple requests each generate a new token; previous tokens remain valid until they expire or are consumed.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Email inválido |
+
+---
+
+### POST /auth/password-reset/confirm
+
+Set a new password using the token received by email. Consuming the token also **revokes all active refresh tokens** for the account, forcing all sessions to log in again.
+
+**Auth:** Public
+
+**Request Body:**
+
+```json
+{
+  "token": "<raw_token_from_email>",
+  "password": "NewP@ssw0rd"
+}
+```
+
+Password rules: min 8 chars, max 128, at least one uppercase letter and one digit.
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": { "message": "Password updated successfully. Please log in with your new password." },
+  "meta": { "request_id": "req_abc124", "version": "v1", "timestamp": "2026-04-16T12:05:00.000Z" },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `VALIDATION_ERROR` | Missing or invalid fields |
+| `400` | `INVALID_RESET_TOKEN` | Token not found, already used, or expired |
 
 ---
 
@@ -165,6 +327,7 @@ const { access_token, refresh_token } = data;
 |---|---|---|
 | `400` | `VALIDATION_ERROR` | Missing fields |
 | `401` | `INVALID_CREDENTIALS` | Wrong email or password (intentionally generic) |
+| `403` | `ACCOUNT_NOT_VERIFIED` | Account exists but email not yet confirmed — redirect to verification flow |
 
 ---
 
@@ -272,14 +435,18 @@ Returns the full profile of the currently authenticated platform account.
     "is_active": true,
     "core_user_id": "usr-abc123",
     "last_login_at": "2026-04-09T19:10:02Z",
-    "created_at": "2026-04-09T19:09:42Z"
+    "created_at": "2026-04-09T19:09:42Z",
+    "preferences": {
+      "locale": "pt-BR",
+      "theme": "system"
+    }
   },
   "meta": { "request_id": "req-5", "version": "v1", "timestamp": "2026-04-09T19:15:00Z" },
   "error": null
 }
 ```
 
-> `core_user_id`: ID do `User` core vinculado (colaborador sincronizado via JIRA/GitHub com o mesmo email). `null` se nenhum vínculo foi encontrado.
+> `preferences` is `null` for accounts that have never set preferences (defaults applied client-side: `locale: pt-BR`, `theme: system`). `core_user_id`: ID do `User` core vinculado (colaborador sincronizado via JIRA/GitHub com o mesmo email). `null` se nenhum vínculo foi encontrado.
 
 **Error Scenarios:**
 
@@ -287,6 +454,52 @@ Returns the full profile of the currently authenticated platform account.
 |---|---|---|
 | `401` | `UNAUTHORIZED` | Missing or invalid access token |
 | `404` | `NOT_FOUND` | Account deleted or disabled after token was issued |
+
+---
+
+### PATCH /auth/me/preferences 🔒
+
+Update locale and/or theme preferences for the authenticated account. At least one field must be provided. Values are merged with existing preferences — fields not provided are preserved.
+
+**Auth:** `Authorization: Bearer <access_token>`
+
+**Request Body:**
+
+| Field | Type | Required | Values |
+|---|---|---|---|
+| `locale` | string | ❌ | `"pt-BR"` \| `"en-US"` \| `"es-ES"` |
+| `theme` | string | ❌ | `"light"` \| `"dark"` \| `"system"` |
+
+> At least one field must be present. An empty body returns `400 BAD_REQUEST`.
+
+**Request Example:**
+
+```json
+{ "theme": "dark" }
+```
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "preferences": {
+      "locale": "pt-BR",
+      "theme": "dark"
+    }
+  },
+  "meta": { "request_id": "req-p1", "version": "v1", "timestamp": "2026-04-16T12:00:00Z" },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| `400` | `BAD_REQUEST` | Empty body, unknown field, or invalid enum value |
+| `401` | `UNAUTHORIZED` | Missing or invalid access token |
+| `404` | `NOT_FOUND` | Account not found or inactive |
 
 ---
 
