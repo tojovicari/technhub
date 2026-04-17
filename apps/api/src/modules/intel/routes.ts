@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { ok, fail } from '../../lib/http.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
+import { requireModule } from '../billing/entitlement.js';
 import {
   velocityForecastQuerySchema,
   epicForecastParamsSchema,
@@ -25,10 +26,12 @@ import {
 } from './service.js';
 
 export async function intelRoutes(app: FastifyInstance) {
+  const intelGuard = requireModule('intel');
+  
   // ── GET /intel/velocity/forecast ─────────────────────────────────────────────
   app.get(
     '/intel/velocity/forecast',
-    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
     async (req, reply) => {
       const parsed = velocityForecastQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -47,7 +50,7 @@ export async function intelRoutes(app: FastifyInstance) {
   // ── GET /intel/epics/:epic_id/forecast ───────────────────────────────────────
   app.get(
     '/intel/epics/:epic_id/forecast',
-    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
     async (req, reply) => {
       const parsed = epicForecastParamsSchema.safeParse(req.params);
       if (!parsed.success) {
@@ -69,7 +72,7 @@ export async function intelRoutes(app: FastifyInstance) {
   // ── GET /intel/sla/risk ──────────────────────────────────────────────────────
   app.get(
     '/intel/sla/risk',
-    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
     async (req, reply) => {
       const parsed = slaRiskQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -88,7 +91,7 @@ export async function intelRoutes(app: FastifyInstance) {
   // ── GET /intel/anomalies ─────────────────────────────────────────────────────
   app.get(
     '/intel/anomalies',
-    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
     async (req, reply) => {
       const parsed = anomaliesQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -107,7 +110,7 @@ export async function intelRoutes(app: FastifyInstance) {
   // ── GET /intel/recommendations ───────────────────────────────────────────────
   app.get(
     '/intel/recommendations',
-    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
     async (req, reply) => {
       const parsed = recommendationsQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -126,7 +129,7 @@ export async function intelRoutes(app: FastifyInstance) {
   // ── GET /intel/capacity ──────────────────────────────────────────────────────
   app.get(
     '/intel/capacity',
-    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
     async (req, reply) => {
       const parsed = capacityQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -145,7 +148,7 @@ export async function intelRoutes(app: FastifyInstance) {
   // ── GET /intel/roadmap ───────────────────────────────────────────────────────
   app.get(
     '/intel/roadmap',
-    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
     async (req, reply) => {
       const parsed = roadmapQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -164,7 +167,7 @@ export async function intelRoutes(app: FastifyInstance) {
   // ── GET /intel/dependencies ──────────────────────────────────────────────────
   app.get(
     '/intel/dependencies',
-    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
     async (req, reply) => {
       const parsed = dependencyQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -183,7 +186,7 @@ export async function intelRoutes(app: FastifyInstance) {
   // ── GET /intel/export ────────────────────────────────────────────────────────
   app.get(
     '/intel/export',
-    { preHandler: [app.authenticate, app.requirePermission('intel.read')] },
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
     async (req, reply) => {
       const parsed = exportQuerySchema.safeParse(req.query);
       if (!parsed.success) {

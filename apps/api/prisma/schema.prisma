@@ -32,6 +32,11 @@ enum PlatformRole {
   viewer
 }
 
+enum PlatformSuperRole {
+  super_admin
+  platform_admin
+}
+
 model PlatformAccount {
   id            String                 @id @default(uuid())
   tenantId      String
@@ -39,6 +44,7 @@ model PlatformAccount {
   passwordHash  String
   fullName      String
   role          PlatformRole           @default(viewer)
+  platformRole  PlatformSuperRole?     // null = usuário de tenant, super_admin = acesso global
   isActive      Boolean                @default(true)
   coreUserId    String?                @unique
   preferences   Json?
@@ -752,4 +758,125 @@ model UserPermissionProfile {
   @@unique([accountId, permissionProfileId])
   @@index([tenantId])
   @@index([accountId])
+}
+
+// ── Billing Module ────────────────────────────────────────────────────────────
+
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  downgraded
+  cancelled
+  expired
+}
+
+model Plan {
+  id               String    @id @default(uuid())
+  name             String    @unique
+  displayName      String
+  description      String?
+  priceCents       Int
+  currency         String    @default("USD")
+  billingPeriod    String    // "monthly" | "annual"
+  stripePriceId    String?   // price_xxx — obrigatório em planos pagos
+  modules          String[]
+  maxSeats         Int?
+  maxIntegrations  Int?
+  historyDays      Int?
+  trialDays        Int       @default(0)
+  features         Json      @default("{}")
+  isSystem         Boolean   @default(false)
+  isPublic         Boolean   @default(true)
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  subscriptions       Subscription[]
+  scheduledDowngrades Subscription[] @relation("ScheduledDowngrade")
+  assignments         PlanTenantAssignment[] @relation("PlanAssignments")
+  subscriptionHistory SubscriptionHistory[]
+}
+
+model Subscription {
+  id                        String             @id @default(uuid())
+  tenantId                  String             @unique
+  planId                    String
+  scheduledDowngradePlanId  String?
+  pendingPlanChanges        Json?
+  status                    SubscriptionStatus @default(active)
+  trialEndsAt               DateTime?
+  currentPeriodStart        DateTime
+  currentPeriodEnd          DateTime
+  pastDueSince              DateTime?
+  downgradedAt              DateTime?
+  dataDeletionScheduledAt   DateTime?
+  cancelledAt               DateTime?
+  provider                  String?
+  providerSubscriptionId    String?
+  providerCustomerId        String?
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+
+  plan                      Plan               @relation(fields: [planId], references: [id])
+  scheduledDowngradePlan    Plan?              @relation("ScheduledDowngrade", fields: [scheduledDowngradePlanId], references: [id])
+
+  @@index([status])
+  @@index([pastDueSince])
+  @@index([dataDeletionScheduledAt])
+}
+
+model SubscriptionHistory {
+  id             String   @id @default(uuid())
+  subscriptionId String
+  planId         String
+  status         String
+  effectiveFrom  DateTime
+  reason         String?
+  createdAt      DateTime @default(now())
+
+  plan           Plan     @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId, effectiveFrom])
+}
+
+model PlanTenantAssignment {
+  id       String   @id @default(uuid())
+  planId   String
+  tenantId String
+  createdAt DateTime @default(now())
+
+  plan      Plan     @relation("PlanAssignments", fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, tenantId])
+  @@index([tenantId])
+}
+
+model BillingEvent {
+  id                String   @id @default(uuid())
+  tenantId          String
+  eventType         String
+  provider          String?
+  providerEventId   String?  @unique
+  rawPayload        Json?
+  occurredAt        DateTime
+  createdAt         DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([occurredAt])
+  @@index([providerEventId])
+}
+
+model PurgeFailureQueue {
+  id             String    @id @default(uuid())
+  tenantId       String
+  subscriptionId String
+  error          String
+  retryCount     Int       @default(0)
+  nextRetryAt    DateTime?
+  createdAt      DateTime  @default(now())
+  resolvedAt     DateTime?
+
+  @@index([tenantId])
+  @@index([nextRetryAt])
 }

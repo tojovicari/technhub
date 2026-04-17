@@ -1,0 +1,856 @@
+openapi: 3.0.3
+info:
+  title: moasy.tech Billing API
+  version: 1.0.0
+  description: |
+    Billing and subscription management API for moasy.tech.
+    
+    Includes tenant-facing endpoints for subscription management and 
+    platform admin endpoints for plan catalog management.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+tags:
+  - name: Billing (Tenant)
+    description: Subscription management for tenants
+  - name: Billing (Platform Admin)
+    description: Plan catalog management (super_admin/platform_admin only)
+
+paths:
+
+  # ── Tenant Endpoints ──────────────────────────────────────────────────────
+
+  /billing/plans:
+    get:
+      tags: [Billing (Tenant)]
+      summary: List available plans
+      operationId: listPlans
+      description: |
+        Lists plans available to the tenant:
+        - Public plans (is_public=true, is_active=true)
+        - Exclusive plans assigned to this tenant
+        
+        Authentication is optional. If authenticated, includes tenant-specific plans.
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Plan'
+
+  /billing/subscription:
+    get:
+      tags: [Billing (Tenant)]
+      summary: Get current subscription
+      operationId: getSubscription
+      description: Returns the tenant's active subscription with plan details
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Subscription'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '404':
+          description: No subscription found
+      x-required-permissions:
+        - billing.read
+
+  /billing/usage:
+    get:
+      tags: [Billing (Tenant)]
+      summary: Get current usage
+      operationId: getUsage
+      description: Returns current seat and integration usage
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      seats_used:
+                        type: integer
+                        example: 7
+                      integrations_used:
+                        type: integer
+                        example: 2
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      x-required-permissions:
+        - billing.read
+
+  /billing/events:
+    get:
+      tags: [Billing (Tenant)]
+      summary: List billing events
+      operationId: listBillingEvents
+      description: Returns paginated list of billing events for this tenant
+      parameters:
+        - in: query
+          name: event_type
+          schema:
+            type: string
+          description: Filter by event type
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+          description: Start date (ISO 8601)
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+          description: End date (ISO 8601)
+        - in: query
+          name: cursor
+          schema:
+            type: string
+          description: Pagination cursor (event ID)
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/BillingEvent'
+                  next_cursor:
+                    type: string
+                    nullable: true
+        '400':
+          description: Invalid query parameters
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+      x-required-permissions:
+        - billing.manage
+
+  /billing/checkout:
+    post:
+      tags: [Billing (Tenant)]
+      summary: Create checkout session
+      operationId: createCheckout
+      description: |
+        Creates a Stripe Checkout session for upgrading to a new plan.
+        
+        ⚠️ Currently returns 501 NOT_IMPLEMENTED - Stripe integration pending.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - plan_id
+                - success_url
+                - cancel_url
+              properties:
+                plan_id:
+                  type: string
+                  format: uuid
+                success_url:
+                  type: string
+                  format: uri
+                cancel_url:
+                  type: string
+                  format: uri
+      responses:
+        '201':
+          description: Checkout session created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                        description: Stripe Checkout URL
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '501':
+          description: Stripe integration not yet implemented
+      x-required-permissions:
+        - billing.manage
+
+  /billing/portal:
+    post:
+      tags: [Billing (Tenant)]
+      summary: Create customer portal session
+      operationId: createPortal
+      description: |
+        Creates a Stripe Customer Portal session for managing payment methods and invoices.
+        
+        ⚠️ Currently returns 501 NOT_IMPLEMENTED - Stripe integration pending.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - return_url
+              properties:
+                return_url:
+                  type: string
+                  format: uri
+      responses:
+        '201':
+          description: Portal session created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      url:
+                        type: string
+                        format: uri
+                        description: Stripe Customer Portal URL
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '501':
+          description: Stripe integration not yet implemented
+      x-required-permissions:
+        - billing.manage
+
+  /billing/cancel:
+    post:
+      tags: [Billing (Tenant)]
+      summary: Cancel subscription
+      operationId: cancelSubscription
+      description: |
+        Schedules subscription cancellation at the end of the current period.
+        
+        ⚠️ Currently returns 501 NOT_IMPLEMENTED - Stripe integration pending.
+      responses:
+        '200':
+          description: Cancellation scheduled
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+        '501':
+          description: Stripe integration not yet implemented
+      x-required-permissions:
+        - billing.manage
+
+  # ── Platform Admin Endpoints ──────────────────────────────────────────────
+
+  /platform/billing/plans:
+    get:
+      tags: [Billing (Platform Admin)]
+      summary: List all plans (admin)
+      operationId: listAllPlans
+      description: Lists all plans in the catalog with filters and pagination
+      parameters:
+        - in: query
+          name: is_active
+          schema:
+            type: string
+            enum: [true, false]
+        - in: query
+          name: is_public
+          schema:
+            type: string
+            enum: [true, false]
+        - in: query
+          name: is_system
+          schema:
+            type: string
+            enum: [true, false]
+        - in: query
+          name: cursor
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlanWithCounts'
+                  next_cursor:
+                    type: string
+                    nullable: true
+        '401':
+          description: Unauthorized
+        '403':
+          description: Insufficient platform role
+      x-required-platform-roles:
+        - super_admin
+        - platform_admin
+
+    post:
+      tags: [Billing (Platform Admin)]
+      summary: Create plan
+      operationId: createPlan
+      description: Creates a new plan in the catalog
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePlanRequest'
+      responses:
+        '201':
+          description: Plan created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PlanWithCounts'
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Insufficient platform role
+        '409':
+          description: Plan name already exists
+      x-required-platform-roles:
+        - super_admin
+        - platform_admin
+
+  /platform/billing/plans/{plan_id}:
+    get:
+      tags: [Billing (Platform Admin)]
+      summary: Get plan details
+      operationId: getPlan
+      parameters:
+        - in: path
+          name: plan_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PlanWithCounts'
+        '401':
+          description: Unauthorized
+        '403':
+          description: Insufficient platform role
+        '404':
+          description: Plan not found
+      x-required-platform-roles:
+        - super_admin
+        - platform_admin
+
+    patch:
+      tags: [Billing (Platform Admin)]
+      summary: Update plan
+      operationId: updatePlan
+      description: |
+        Updates an existing plan.
+        
+        If `apply_at_renewal: true` and there are active subscriptions,
+        changes are stored in `pendingPlanChanges` and applied at next renewal.
+      parameters:
+        - in: path
+          name: plan_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePlanRequest'
+      responses:
+        '200':
+          description: Plan updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    oneOf:
+                      - $ref: '#/components/schemas/PlanWithCounts'
+                      - $ref: '#/components/schemas/PlanWithPendingChanges'
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Insufficient platform role
+        '404':
+          description: Plan not found
+      x-required-platform-roles:
+        - super_admin
+        - platform_admin
+
+    delete:
+      tags: [Billing (Platform Admin)]
+      summary: Delete plan
+      operationId: deletePlan
+      description: |
+        Deletes a plan. Fails if:
+        - Plan is a system plan (is_system=true)
+        - Plan has active subscriptions
+      parameters:
+        - in: path
+          name: plan_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Plan deleted
+        '401':
+          description: Unauthorized
+        '403':
+          description: Cannot delete system plans
+        '404':
+          description: Plan not found
+        '409':
+          description: Plan has active subscriptions
+      x-required-platform-roles:
+        - super_admin
+        - platform_admin
+
+  /platform/billing/plans/{plan_id}/assignments:
+    post:
+      tags: [Billing (Platform Admin)]
+      summary: Create plan assignment
+      operationId: createAssignment
+      description: Makes a plan exclusively available to a specific tenant
+      parameters:
+        - in: path
+          name: plan_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+              properties:
+                tenant_id:
+                  type: string
+                  format: uuid
+      responses:
+        '201':
+          description: Assignment created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PlanAssignment'
+        '400':
+          description: Validation error
+        '401':
+          description: Unauthorized
+        '403':
+          description: Insufficient platform role
+        '404':
+          description: Plan not found
+        '409':
+          description: Assignment already exists
+      x-required-platform-roles:
+        - super_admin
+        - platform_admin
+
+  /platform/billing/plans/{plan_id}/assignments/{tenant_id}:
+    delete:
+      tags: [Billing (Platform Admin)]
+      summary: Delete plan assignment
+      operationId: deleteAssignment
+      parameters:
+        - in: path
+          name: plan_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - in: path
+          name: tenant_id
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Assignment deleted
+        '401':
+          description: Unauthorized
+        '403':
+          description: Insufficient platform role
+        '404':
+          description: Assignment not found
+      x-required-platform-roles:
+        - super_admin
+        - platform_admin
+
+# ── Components ──────────────────────────────────────────────────────────────
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Plan:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          pattern: '^[a-z0-9_-]+$'
+        display_name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        price_cents:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          example: USD
+        billing_period:
+          type: string
+          enum: [monthly, annual]
+        modules:
+          type: array
+          items:
+            type: string
+        max_seats:
+          type: integer
+          nullable: true
+        max_integrations:
+          type: integer
+          nullable: true
+        history_days:
+          type: integer
+          nullable: true
+        trial_days:
+          type: integer
+          minimum: 0
+        features:
+          type: object
+          additionalProperties:
+            type: boolean
+        is_public:
+          type: boolean
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PlanWithCounts:
+      allOf:
+        - $ref: '#/components/schemas/Plan'
+        - type: object
+          properties:
+            stripe_price_id:
+              type: string
+              nullable: true
+            is_system:
+              type: boolean
+            active_subscriptions_count:
+              type: integer
+
+    PlanWithPendingChanges:
+      allOf:
+        - $ref: '#/components/schemas/PlanWithCounts'
+        - type: object
+          properties:
+            pending_changes_scheduled:
+              type: boolean
+            affected_subscriptions:
+              type: integer
+
+    Subscription:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        plan:
+          $ref: '#/components/schemas/Plan'
+        scheduled_downgrade_plan:
+          oneOf:
+            - $ref: '#/components/schemas/Plan'
+            - type: 'null'
+        pending_plan_changes:
+          type: object
+          nullable: true
+        status:
+          type: string
+          enum: [trialing, active, past_due, downgraded, cancelled, expired]
+        trial_ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        current_period_start:
+          type: string
+          format: date-time
+        current_period_end:
+          type: string
+          format: date-time
+        past_due_since:
+          type: string
+          format: date-time
+          nullable: true
+        downgraded_at:
+          type: string
+          format: date-time
+          nullable: true
+        data_deletion_scheduled_at:
+          type: string
+          format: date-time
+          nullable: true
+        cancelled_at:
+          type: string
+          format: date-time
+          nullable: true
+        provider:
+          type: string
+          example: stripe
+        provider_subscription_id:
+          type: string
+          nullable: true
+        provider_customer_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    BillingEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          example: subscription_updated
+        provider:
+          type: string
+          example: stripe
+        occurred_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    PlanAssignment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        plan_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    CreatePlanRequest:
+      type: object
+      required:
+        - name
+        - display_name
+        - price_cents
+        - currency
+        - billing_period
+        - modules
+      properties:
+        name:
+          type: string
+          pattern: '^[a-z0-9_-]+$'
+        display_name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        price_cents:
+          type: integer
+          minimum: 0
+        currency:
+          type: string
+          default: USD
+        billing_period:
+          type: string
+          enum: [monthly, annual]
+        stripe_price_id:
+          type: string
+          description: Required if price_cents > 0
+        modules:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        max_seats:
+          type: integer
+          nullable: true
+        max_integrations:
+          type: integer
+          nullable: true
+        history_days:
+          type: integer
+          nullable: true
+        trial_days:
+          type: integer
+          minimum: 0
+          default: 0
+        features:
+          type: object
+          additionalProperties:
+            type: boolean
+          default: {}
+        is_public:
+          type: boolean
+          default: true
+        is_active:
+          type: boolean
+          default: true
+
+    UpdatePlanRequest:
+      type: object
+      properties:
+        display_name:
+          type: string
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 500
+        price_cents:
+          type: integer
+          minimum: 0
+        stripe_price_id:
+          type: string
+        modules:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        max_seats:
+          type: integer
+          nullable: true
+        max_integrations:
+          type: integer
+          nullable: true
+        history_days:
+          type: integer
+          nullable: true
+        trial_days:
+          type: integer
+          minimum: 0
+        features:
+          type: object
+          additionalProperties:
+            type: boolean
+        is_public:
+          type: boolean
+        is_active:
+          type: boolean
+        apply_at_renewal:
+          type: boolean
+          default: false
+          description: If true, changes are applied at next renewal instead of immediately

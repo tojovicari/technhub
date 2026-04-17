@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { ok, fail } from '../../lib/http.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
+import { requireModule } from '../billing/entitlement.js';
 import {
   createCogsEntrySchema,
   listCogsEntriesQuerySchema,
@@ -39,10 +40,12 @@ const budgetListQuerySchema = z.object({
 });
 
 export async function cogsRoutes(app: FastifyInstance) {
+  const cogsGuard = requireModule('cogs');
+  
   // ── POST /cogs/entries — create a cost entry ────────────────────────────────
   app.post(
     '/cogs/entries',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.write')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.write')] },
     async (req, reply) => {
       const parsed = createCogsEntrySchema.safeParse(req.body);
       if (!parsed.success) {
@@ -61,7 +64,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── POST /cogs/entries/estimate — estimate cost from story points ───────────
   app.post(
     '/cogs/entries/estimate',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.write')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.write')] },
     async (req, reply) => {
       const parsed = estimateFromSpSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -87,7 +90,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── GET /cogs/entries — list entries (with filters + superseded audit) ────────
   app.get(
     '/cogs/entries',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.read')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.read')] },
     async (req, reply) => {
       const parsed = listCogsEntriesAuditQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -106,7 +109,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── GET /cogs/rollup — aggregated cost with group_by ───────────────────────
   app.get(
     '/cogs/rollup',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.read')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.read')] },
     async (req, reply) => {
       const parsed = cogsRollupQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -125,7 +128,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── GET /cogs/epics/:epic_id — epic cost analysis + ROI ────────────────────
   app.get(
     '/cogs/epics/:epic_id',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.read')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.read')] },
     async (req, reply) => {
       const paramsParsed = epicAnalysisParamsSchema.safeParse(req.params);
       if (!paramsParsed.success) {
@@ -148,7 +151,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── POST /cogs/budgets — set/update budget for a period ────────────────────
   app.post(
     '/cogs/budgets',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.budget.manage')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.budget.manage')] },
     async (req, reply) => {
       const parsed = createCogsBudgetSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -167,7 +170,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── GET /cogs/budgets — list budgets ───────────────────────────────────────
   app.get(
     '/cogs/budgets',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.read')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.read')] },
     async (req, reply) => {
       const parsed = budgetListQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -186,7 +189,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── PATCH /cogs/budgets/:id — update budget amount/notes ───────────────────
   app.patch(
     '/cogs/budgets/:id',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.budget.manage')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.budget.manage')] },
     async (req, reply) => {
       const paramsParsed = budgetParamsSchema.safeParse(req.params);
       if (!paramsParsed.success) {
@@ -210,7 +213,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── DELETE /cogs/budgets/:id — remove a budget ─────────────────────────────
   app.delete(
     '/cogs/budgets/:id',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.budget.manage')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.budget.manage')] },
     async (req, reply) => {
       const paramsParsed = budgetParamsSchema.safeParse(req.params);
       if (!paramsParsed.success) {
@@ -230,7 +233,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── POST /cogs/initiatives/:project_id/generate — derive COGS from tasks ────
   app.post(
     '/cogs/initiatives/:project_id/generate',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.write')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.write')] },
     async (req, reply) => {
       const paramsParsed = initiativeParamsSchema.safeParse(req.params);
       if (!paramsParsed.success) {
@@ -264,7 +267,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── GET /cogs/initiatives/:project_id/summary — cost summary ─────────────────
   app.get(
     '/cogs/initiatives/:project_id/summary',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.read')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.read')] },
     async (req, reply) => {
       const paramsParsed = initiativeParamsSchema.safeParse(req.params);
       if (!paramsParsed.success) {
@@ -286,7 +289,7 @@ export async function cogsRoutes(app: FastifyInstance) {
   // ── GET /cogs/burn-rate — burn rate vs configured budget ───────────────────
   app.get(
     '/cogs/burn-rate',
-    { preHandler: [app.authenticate, app.requirePermission('cogs.read')] },
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.read')] },
     async (req, reply) => {
       const parsed = burnRateQuerySchema.safeParse(req.query);
       if (!parsed.success) {

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
+import { requireModule } from '../billing/entitlement.js';
 import {
   createSlaTemplateSchema,
   updateSlaTemplateSchema,
@@ -50,10 +51,12 @@ function mapTemplate(t: {
 }
 
 export async function slaRoutes(app: FastifyInstance) {
+  const slaGuard = requireModule('sla');
+  
   // ── POST /sla/templates ──────────────────────────────────────────────────────
   app.post(
     '/sla/templates',
-    { preHandler: [app.authenticate, app.requirePermission('sla.template.manage')] },
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.template.manage')] },
     async (req, reply) => {
       const parsed = createSlaTemplateSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -69,7 +72,7 @@ export async function slaRoutes(app: FastifyInstance) {
   // ── GET /sla/templates ───────────────────────────────────────────────────────
   app.get(
     '/sla/templates',
-    { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
       const parsed = listSlaTemplatesQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -88,7 +91,7 @@ export async function slaRoutes(app: FastifyInstance) {
   // ── GET /sla/templates/:id ───────────────────────────────────────────────────
   app.get(
     '/sla/templates/:id',
-    { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const tenantId = (req.user as { tenant_id: string }).tenant_id;
@@ -105,7 +108,7 @@ export async function slaRoutes(app: FastifyInstance) {
   // ── PATCH /sla/templates/:id ─────────────────────────────────────────────────
   app.patch(
     '/sla/templates/:id',
-    { preHandler: [app.authenticate, app.requirePermission('sla.template.manage')] },
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.template.manage')] },
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const parsed = updateSlaTemplateSchema.safeParse(req.body);
@@ -127,7 +130,7 @@ export async function slaRoutes(app: FastifyInstance) {
   // ── DELETE /sla/templates/:id ────────────────────────────────────────────────
   app.delete(
     '/sla/templates/:id',
-    { preHandler: [app.authenticate, app.requirePermission('sla.template.manage')] },
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.template.manage')] },
     async (req, reply) => {
       const { id } = req.params as { id: string };
       const tenantId = (req.user as { tenant_id: string }).tenant_id;
@@ -144,7 +147,7 @@ export async function slaRoutes(app: FastifyInstance) {
   // ── GET /sla/compliance ──────────────────────────────────────────────────────
   app.get(
     '/sla/compliance',
-    { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
       const parsed = slaComplianceQuerySchema.safeParse(req.query);
       if (!parsed.success) {
@@ -160,7 +163,7 @@ export async function slaRoutes(app: FastifyInstance) {
   // ── GET /sla/instances — compatibility shim (returns empty list) ─────────────
   app.get(
     '/sla/instances',
-    { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
       return reply.status(200).send(ok(req, { data: [], next_cursor: null }));
     }
@@ -169,7 +172,7 @@ export async function slaRoutes(app: FastifyInstance) {
   // ── GET /sla/summary — compatibility shim (delegates to compliance) ──────────
   app.get(
     '/sla/summary',
-    { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
       const tenantId = (req.user as { tenant_id: string }).tenant_id;
       const now = new Date();
@@ -207,7 +210,7 @@ export async function slaRoutes(app: FastifyInstance) {
   // ── GET /sla/summary/by-template — compatibility shim ───────────────────────
   app.get(
     '/sla/summary/by-template',
-    { preHandler: [app.authenticate, app.requirePermission('sla.template.read')] },
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.template.read')] },
     async (req, reply) => {
       const tenantId = (req.user as { tenant_id: string }).tenant_id;
       const now = new Date();

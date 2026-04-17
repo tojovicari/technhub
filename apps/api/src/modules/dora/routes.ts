@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { ok, fail } from '../../lib/http.js';
+import { requireModule } from '../billing/entitlement.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
 import {
   ingestDeployEvent,
@@ -24,10 +25,12 @@ const metricHistoryQuerySchema = z.object({
 });
 
 export async function doraRoutes(app: FastifyInstance) {
+  const doraGuard = requireModule('dora');
+  
   // POST /dora/deploys — ingest a deployment event
   app.post(
     '/dora/deploys',
-    { preHandler: [app.authenticate, app.requirePermission('dora.deploy.ingest')] },
+    { preHandler: [app.authenticate, doraGuard, app.requirePermission('dora.deploy.ingest')] },
     async (req, reply) => {
       const result = ingestDeployEventSchema.safeParse(req.body);
       if (!result.success) {
@@ -46,7 +49,7 @@ export async function doraRoutes(app: FastifyInstance) {
   // GET /dora/deploys — list deploy events
   app.get(
     '/dora/deploys',
-    { preHandler: [app.authenticate, app.requirePermission('dora.read')] },
+    { preHandler: [app.authenticate, doraGuard, app.requirePermission('dora.read')] },
     async (req, reply) => {
       const result = listDeployEventsQuerySchema.safeParse(req.query);
       if (!result.success) {
@@ -65,7 +68,7 @@ export async function doraRoutes(app: FastifyInstance) {
   // GET /dora/scorecard — compute DORA scorecard for a window
   app.get(
     '/dora/scorecard',
-    { preHandler: [app.authenticate, app.requirePermission('dora.read')] },
+    { preHandler: [app.authenticate, doraGuard, app.requirePermission('dora.read')] },
     async (req, reply) => {
       const result = doraQuerySchema.safeParse(req.query);
       if (!result.success) {
@@ -84,7 +87,7 @@ export async function doraRoutes(app: FastifyInstance) {
   // POST /dora/lead-time — ingest lead time from a merged PR
   app.post(
     '/dora/lead-time',
-    { preHandler: [app.authenticate, app.requirePermission('dora.deploy.ingest')] },
+    { preHandler: [app.authenticate, doraGuard, app.requirePermission('dora.deploy.ingest')] },
     async (req, reply) => {
       const result = ingestLeadTimeEventSchema.safeParse(req.body);
       if (!result.success) {
@@ -103,7 +106,7 @@ export async function doraRoutes(app: FastifyInstance) {
   // GET /dora/history/:metric_name — historical snapshots for a metric
   app.get(
     '/dora/history/:metric_name',
-    { preHandler: [app.authenticate, app.requirePermission('dora.read')] },
+    { preHandler: [app.authenticate, doraGuard, app.requirePermission('dora.read')] },
     async (req, reply) => {
       const { metric_name } = req.params as { metric_name: string };
       const result = metricHistoryQuerySchema.safeParse(req.query);

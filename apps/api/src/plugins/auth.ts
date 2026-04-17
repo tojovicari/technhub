@@ -7,6 +7,7 @@ type JwtUser = {
   tenant_id: string;
   roles: string[];
   permissions: string[];
+  platform_role?: string | null;  // 'super_admin' | 'platform_admin' | null
 };
 
 const DEV_USER: JwtUser = {
@@ -47,6 +48,23 @@ export async function registerAuth(app: FastifyInstance) {
           fail(request, 'FORBIDDEN', 'Missing required permission', {
             required_permission: permission,
             reason: 'missing_permission'
+          })
+        );
+      }
+    };
+  });
+
+  app.decorate('requirePlatformRole', (...allowedRoles: string[]) => {
+    return async (request: FastifyRequest, reply: FastifyReply) => {
+      const user = request.user as JwtUser | undefined;
+      const platformRole = user?.platform_role;
+
+      if (!platformRole || !allowedRoles.includes(platformRole)) {
+        return reply.status(403).send(
+          fail(request, 'FORBIDDEN', 'Insufficient platform role', {
+            required_roles: allowedRoles,
+            current_role: platformRole || null,
+            reason: 'insufficient_platform_role'
           })
         );
       }

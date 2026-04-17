@@ -24,9 +24,10 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
   manager: [
     'core.read', 'core.write',
     'dora.read', 'sla.read', 'cogs.read', 'intel.read',
-    'integrations.read', 'iam.permission_profile.read'
+    'integrations.read', 'iam.permission_profile.read',
+    'billing.read'
   ],
-  viewer: ['core.read', 'dora.read', 'sla.read', 'intel.read']
+  viewer: ['core.read', 'dora.read', 'sla.read', 'intel.read', 'billing.read']
 };
 
 function tokenHash(raw: string) {
@@ -97,6 +98,35 @@ export async function register(input: RegisterInput) {
       role: 'org_admin',
       isActive: false,
       coreUserId: coreUser?.id ?? null
+    }
+  });
+
+  // Criar Subscription no plano Free
+  const freePlan = await prisma.plan.findFirst({ where: { name: 'free', isActive: true } });
+  if (!freePlan) {
+    throw new Error('Free plan not found. Run billing seed before accepting registrations.');
+  }
+  
+  const now = new Date();
+  const subscription = await prisma.subscription.create({
+    data: {
+      tenantId: input.tenant_id,
+      planId: freePlan.id,
+      status: freePlan.trialDays > 0 ? 'trialing' : 'active',
+      trialEndsAt: freePlan.trialDays > 0 ? new Date(now.getTime() + freePlan.trialDays * 86400000) : null,
+      currentPeriodStart: now,
+      currentPeriodEnd: new Date(now.getTime() + 30 * 86400000)
+    }
+  });
+
+  // Criar primeiro registro no SubscriptionHistory
+  await prisma.subscriptionHistory.create({
+    data: {
+      subscriptionId: subscription.id,
+      planId: freePlan.id,
+      status: subscription.status,
+      effectiveFrom: now,
+      reason: 'initial_registration'
     }
   });
 
@@ -250,7 +280,8 @@ export async function login(
       sub: account.id,
       tenant_id: account.tenantId,
       roles: [account.role],
-      permissions
+      permissions,
+      platform_role: account.platformRole ?? null
     },
     { expiresIn: ACCESS_TOKEN_TTL }
   );
@@ -331,7 +362,8 @@ export async function refresh(
       sub: account.id,
       tenant_id: account.tenantId,
       roles: [account.role],
-      permissions
+      permissions,
+      platform_role: account.platformRole ?? null
     },
     { expiresIn: ACCESS_TOKEN_TTL }
   );

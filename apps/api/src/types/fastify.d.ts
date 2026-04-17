@@ -8,12 +8,14 @@ declare module '@fastify/jwt' {
       tenant_id: string;
       roles: string[];
       permissions: string[];
+      platform_role?: string | null;
     };
     user: {
       sub: string;
       tenant_id: string;
       roles: string[];
       permissions: string[];
+      platform_role?: string | null;
     };
   }
 }
@@ -23,6 +25,9 @@ declare module 'fastify' {
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
     requirePermission: (
       permission: string
+    ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+    requirePlatformRole: (
+      ...allowedRoles: string[]
     ) => (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 }
