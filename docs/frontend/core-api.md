@@ -79,6 +79,7 @@ All responses follow this wrapper:
 | `/core/tasks/:task_id/dependencies` | GET | `core.task.read` |
 | `/core/tasks/:task_id/dependencies` | POST | `core.task.manage` |
 | `/core/tasks/:task_id/dependencies/:blocked_id` | DELETE | `core.task.manage` |
+| `/core/summary` | GET | `core.task.read` |
 | `/core/users` | POST | `core.user.manage` |
 | `/core/users` | GET | `core.user.read` |
 
@@ -693,8 +694,8 @@ Create a task.
     "started_at": null,
     "completed_at": null,
     "due_date": "2026-04-25T23:59:59Z",
-    "sla_status": null,
     "cycle_time_hours": null,
+    "project": { "id": "proj-aa1234", "name": "Plataforma v2", "key": "PLT" },
     "related_pr_ids": [],
     "tags": ["observability"],
     "custom_fields": null
@@ -704,7 +705,9 @@ Create a task.
 }
 ```
 
-> **Computed fields (read-only):** `started_at`, `completed_at`, `cycle_time_hours`, `hours_actual`, `sla_status` — managed automatically by the platform.
+> **Computed fields (read-only):** `started_at`, `completed_at`, `cycle_time_hours`, `hours_actual` — managed automatically by the platform.
+>
+> **Note on `sla_status`:** this field was previously referenced in the response but was never emitted. SLA status is owned by the SLA module — see `GET /sla/compliance` for per-task SLA data.
 
 ---
 
@@ -721,9 +724,21 @@ List tasks. Scoped to tenant.
 | `project_id` | string (UUID) | ❌ | — | Filter to a project |
 | `epic_id` | string (UUID) | ❌ | — | Filter to an epic |
 | `assignee_id` | string (UUID) | ❌ | — | Filter by assignee |
-| `status` | string | ❌ | — | One of the task status values |
+| `status` | string | ❌ | — | One value **or** comma-separated list: `in_progress,review` |
 | `limit` | integer | ❌ | 25 | Max 100 |
 | `cursor` | string (UUID) | ❌ | — | Pagination cursor |
+
+**Multi-value status example:**
+
+```
+GET /api/v1/core/tasks?status=in_progress,review&limit=10
+```
+
+Each task in the response now includes an embedded `project` object:
+
+```json
+"project": { "id": "proj-aa1234", "name": "Plataforma v2", "key": "PLT" }
+```
 
 ---
 
@@ -853,6 +868,47 @@ Declare that `:task_id` blocks another task (`:task_id` must finish before `bloc
 | 401 | `UNAUTHORIZED` | — |
 | 403 | `FORBIDDEN` | Permission denied |
 | 404 | `NOT_FOUND` | Blocker or blocked task not found |
+
+---
+
+### GET /core/summary
+
+Aggregate counts for dashboard stat cards. Single call replaces multiple list queries.
+
+**Permission:** `core.task.read`
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "tasks": {
+      "by_status": {
+        "backlog": 12,
+        "todo": 5,
+        "in_progress": 8,
+        "review": 3,
+        "done": 47,
+        "cancelled": 2
+      },
+      "total_open": 28
+    },
+    "projects_active": 4,
+    "epics_active": 9
+  },
+  "meta": { "request_id": "req_sum1", "version": "v1", "timestamp": "2026-04-17T10:00:00Z" },
+  "error": null
+}
+```
+
+> `total_open` = all tasks excluding `done` and `cancelled`.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 401 | `UNAUTHORIZED` | — |
+| 403 | `FORBIDDEN` | Permission denied |
 
 ---
 

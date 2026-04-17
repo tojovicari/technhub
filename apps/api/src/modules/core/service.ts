@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma, TaskStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import type {
   AddProjectSourceInput,
@@ -478,7 +478,10 @@ export async function listTasks(tenantId: string, query: ListQueryInput) {
   const { limit, cursor, status, project_id, epic_id, assignee_id } = query;
   const where: Prisma.TaskWhereInput = { tenantId };
   if (status) {
-    where.status = status as Prisma.EnumTaskStatusFilter;
+    const statuses = status.split(',').map(s => s.trim()).filter(Boolean) as TaskStatus[];
+    where.status = statuses.length === 1
+      ? statuses[0]
+      : { in: statuses };
   }
 
   if (project_id) {
@@ -497,12 +500,43 @@ export async function listTasks(tenantId: string, query: ListQueryInput) {
     where,
     take: limit + 1,
     ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    orderBy: { createdAt: 'desc' }
+    orderBy: { createdAt: 'desc' },
+    include: { project: { select: { id: true, name: true, key: true } } }
   });
 
   const hasMore = rows.length > limit;
   const items = hasMore ? rows.slice(0, limit) : rows;
   return { items, nextCursor: hasMore ? items[items.length - 1].id : null };
+}
+
+export async function getCoreSummary(tenantId: string) {
+  const [tasksByStatus, projectsActive, epicsActive] = await Promise.all([
+    prisma.task.groupBy({
+      by: ['status'],
+      where: { tenantId },
+      _count: { _all: true }
+    }),
+    prisma.project.count({ where: { tenantId, status: 'active' } }),
+    prisma.epic.count({ where: { tenantId, status: 'active' } })
+  ]);
+
+  const statusCounts: Record<string, number> = {};
+  let totalOpen = 0;
+  for (const row of tasksByStatus) {
+    statusCounts[row.status] = row._count._all;
+    if (row.status !== 'done' && row.status !== 'cancelled') {
+      totalOpen += row._count._all;
+    }
+  }
+
+  return {
+    tasks: {
+      by_status: statusCounts,
+      total_open: totalOpen
+    },
+    projects_active: projectsActive,
+    epics_active: epicsActive
+  };
 }
 
 // ── Task dependencies ─────────────────────────────────────────────────────────

@@ -40,7 +40,8 @@ import {
   updateProject,
   updateTask,
   updateTeam,
-  upsertUser
+  upsertUser,
+  getCoreSummary
 } from './service.js';
 
 function mapTeam(team: { id: string; tenantId: string; name: string; description: string | null; leadId: string | null; budgetQuarterly: number | null; hourlyRate: number | null; tags: string[] }) {
@@ -119,6 +120,9 @@ function mapTask(task: any) {
     source: task.source,
     source_id: task.sourceId,
     project_id: task.projectId,
+    project: task.project
+      ? { id: task.project.id, name: task.project.name, key: task.project.key }
+      : null,
     epic_id: task.epicId,
     title: task.title,
     description: task.description,
@@ -516,6 +520,14 @@ export async function coreRoutes(app: FastifyInstance) {
     const tenantId = (request.user as { tenant_id: string }).tenant_id;
     const { items, nextCursor } = await listTasks(tenantId, parsed.data);
     return reply.status(200).send(ok(request, { items: items.map(mapTask), next_cursor: nextCursor }));
+  });
+
+  app.get('/core/summary', {
+    preHandler: [app.authenticate, app.requirePermission('core.task.read')]
+  }, async (request, reply) => {
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const summary = await getCoreSummary(tenantId);
+    return reply.status(200).send(ok(request, summary));
   });
 
   // ── Task dependencies ─────────────────────────────────────────────────────────
