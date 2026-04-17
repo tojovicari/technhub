@@ -68,8 +68,8 @@ Ingest a deployment event. Idempotent when `external_id` is provided.
 | `external_id` | string | ❌ | null | Provider-assigned ID — used as idempotency key |
 | `commit_sha` | string | ❌ | null | Git commit SHA |
 | `environment` | string | ❌ | `production` | Deployment target environment |
-| `is_hotfix` | boolean | ❌ | `false` | Mark as hotfix — contributes to MTTR |
-| `is_rollback` | boolean | ❌ | `false` | Mark as rollback — contributes to Change Failure Rate |
+| `is_hotfix` | boolean | ❌ | `false` | Mark as hotfix — stored for audit and future use; does not directly affect current metric calculations |
+| `is_rollback` | boolean | ❌ | `false` | Mark as rollback — stored for audit and future use; does not directly affect current CFR calculation (see scorecard notes) |
 | `pr_ids` | string[] | ❌ | `[]` | PR identifiers included in this deploy |
 | `raw_payload` | object | ❌ | null | Original webhook payload for audit |
 
@@ -225,6 +225,17 @@ Compute all 4 DORA metrics over a rolling time window. Also persists a `HealthMe
 
 > **Nullable metrics:** `lead_time`, `mttr`, `mtta`, `incident_frequency`, and `change_failure_rate` are `null` if no qualifying data exists in the window. Always check for null before accessing sub-fields.
 
+> **`overall_level` calculation:** Computed from the average rank of whichever of these four metrics have data: `deployment_frequency`, `lead_time`, `mttr`, and `change_failure_rate`. `mtta` and `incident_frequency` are supplemental health metrics and are **not** included in the `overall_level` formula.
+
+> **Change Failure Rate calculation:** A deploy is counted as failed when at least one P0 or P1 bug task is created within 24 hours after the deploy timestamp. The fields `is_rollback` and `is_hotfix` on the deploy record are stored for auditing but are **not** used in the CFR formula.
+
+> **`mttr_source` possible values:**
+>
+> | Value | Meaning |
+> |---|---|
+> | `"incidents"` | MTTR computed from IncidentEvent records (OpsGenie or incident.io integration active) |
+> | `"not_configured"` | No active incident integration — `mttr`, `mtta`, and `incident_frequency` are all `null` |
+
 > **Incident integration not configured:** When no active OpsGenie or incident.io connection exists for the tenant, `mttr_source` is `"not_configured"` and `mttr`, `mtta`, and `incident_frequency` are all `null`. The overall scorecard level is computed from the remaining available metrics only — the tenant is not penalised. To enable incident metrics, add an OpsGenie or incident.io connection via the Integrations module.
 
 **Error Scenarios:**
@@ -303,7 +314,7 @@ Retrieve historical health metric snapshots for trend charts.
 
 | Param | Type | Notes |
 |---|---|---|
-| `metric_name` | string | One of: `deployment_frequency`, `lead_time_p50`, `lead_time_p95`, `mttr`, `mtta`, `incident_frequency`, `change_failure_rate` |
+| `metric_name` | string | One of: `deployment_frequency`, `lead_time_p50`, `lead_time_p95`, `mttr`, `mtta`, `incident_frequency`, `change_failure_rate`. Unknown values are not rejected — the response returns an empty list. |
 
 **Query Params:**
 
@@ -365,13 +376,25 @@ Fetch the severity list configured in the tenant's incident.io account. Use in t
     "severities": [
       { "id": "sev-1", "name": "Critical", "rank": 1, "description": "Service outage" },
       { "id": "sev-2", "name": "Major",    "rank": 2, "description": "Significant impact" },
-      { "id": "sev-3", "name": "Minor",    "rank": 3, "description": "Partial degradation" }
+      { "id": "sev-3", "name": "Minor",    "rank": 3, "description": null }
     ]
   },
   "meta": { "request_id": "req_010", "version": "v1", "timestamp": "2026-04-14T10:00:00Z" },
   "error": null
 }
 ```
+
+> **Nullable field:** `description` may be `null` when not set in incident.io.
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Connection exists but is not an `incident_io` connection, or has no stored credentials |
+| 401 | `UNAUTHORIZED` | Invalid token |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Connection not found or does not belong to tenant |
+| 502 | `BAD_GATEWAY` | incident.io API returned an error |
 
 ---
 
@@ -405,6 +428,15 @@ Return the standard OpsGenie priority list (static — no API call). Use in the 
   "error": null
 }
 ```
+
+**Error Scenarios:**
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `BAD_REQUEST` | Connection exists but is not an `opsgenie` connection |
+| 401 | `UNAUTHORIZED` | Invalid token |
+| 403 | `FORBIDDEN` | Permission denied |
+| 404 | `NOT_FOUND` | Connection not found or does not belong to tenant |
 
 ---
 
