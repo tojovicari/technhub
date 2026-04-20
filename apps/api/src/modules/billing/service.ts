@@ -1,5 +1,7 @@
+import type Stripe from 'stripe';
 import { prisma } from '../../lib/prisma.js';
 import { invalidateEntitlementCache } from './entitlement.js';
+import { getStripe } from './stripe.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -189,6 +191,20 @@ export async function listAllPlans(filters: {
   return { data, next_cursor: nextCursor };
 }
 
+export async function getPlanById(planId: string) {
+  const plan = await prisma.plan.findUnique({ where: { id: planId } });
+  if (!plan) return null;
+
+  const activeSubscriptions = await prisma.subscription.count({
+    where: {
+      planId: plan.id,
+      status: { in: ['trialing', 'active', 'past_due'] }
+    }
+  });
+
+  return { ...plan, active_subscriptions_count: activeSubscriptions };
+}
+
 export async function createPlan(input: CreatePlanInput) {
   // Validar que planos pagos têm stripe_price_id
   if (input.price_cents > 0 && !input.stripe_price_id) {
@@ -374,32 +390,120 @@ export async function deleteAssignment(planId: string, tenantId: string) {
   return true;
 }
 
-// ── Stripe Integration (TODO) ────────────────────────────────────────────────
+// ── Stripe Integration ────────────────────────────────────────────────────────
 
 export async function createCheckoutSession(
-  _tenantId: string,
-  _planId: string,
-  _urls: { success_url: string; cancel_url: string }
+  tenantId: string,
+  planId: string,
+  urls: { success_url: string; cancel_url: string }
 ) {
-  // TODO: Implementar integração com Stripe Checkout
-  throw Object.assign(
-    new Error('Stripe integration not yet implemented'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+  const stripe = getStripe();
+
+  // Buscar plano com stripe_price_id
+  const plan = await prisma.plan.findUnique({ where: { id: planId } });
+  if (!plan) {
+    throw Object.assign(new Error('Plan not found'), { code: 'NOT_FOUND' });
+  }
+  if (!plan.stripePriceId) {
+    throw Object.assign(
+      new Error('This plan has no Stripe price configured'),
+      { code: 'VALIDATION_ERROR' }
+    );
+  }
+
+  // Buscar subscription atual para reutilizar customer
+  const subscription = await prisma.subscription.findUnique({ where: { tenantId } });
+
+  // Buscar email do org_admin para criação de customer
+  const orgAdmin = await prisma.platformAccount.findFirst({
+    where: { tenantId, role: 'org_admin', isActive: true },
+    select: { email: true, fullName: true }
+  });
+
+  const sessionParams: Stripe.Checkout.SessionCreateParams = {
+    mode: 'subscription',
+    line_items: [{ price: plan.stripePriceId, quantity: 1 }],
+    success_url: urls.success_url,
+    cancel_url: urls.cancel_url,
+    client_reference_id: tenantId,
+    metadata: { tenantId, planId },
+  };
+
+  if (subscription?.providerCustomerId) {
+    sessionParams.customer = subscription.providerCustomerId;
+  } else if (orgAdmin?.email) {
+    sessionParams.customer_email = orgAdmin.email;
+  }
+
+  if (plan.trialDays > 0) {
+    sessionParams.subscription_data = { trial_period_days: plan.trialDays };
+  }
+
+  const session = await stripe.checkout.sessions.create(sessionParams);
+  return { url: session.url, session_id: session.id };
 }
 
-export async function createPortalSession(_tenantId: string, _returnUrl: string) {
-  // TODO: Implementar integração com Stripe Customer Portal
-  throw Object.assign(
-    new Error('Stripe integration not yet implemented'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+export async function createPortalSession(tenantId: string, returnUrl: string) {
+  const stripe = getStripe();
+
+  const subscription = await prisma.subscription.findUnique({ where: { tenantId } });
+  if (!subscription?.providerCustomerId) {
+    throw Object.assign(
+      new Error('No Stripe customer found. Complete a checkout first.'),
+      { code: 'PRECONDITION_FAILED' }
+    );
+  }
+
+  const session = await stripe.billingPortal.sessions.create({
+    customer: subscription.providerCustomerId,
+    return_url: returnUrl,
+  });
+
+  return { url: session.url };
 }
 
-export async function cancelSubscription(_tenantId: string) {
-  // TODO: Implementar cancelamento via Stripe
-  throw Object.assign(
-    new Error('Stripe integration not yet implemented'),
-    { code: 'NOT_IMPLEMENTED' }
-  );
+export async function cancelSubscription(tenantId: string) {
+  const stripe = getStripe();
+
+  const subscription = await prisma.subscription.findUnique({ where: { tenantId } });
+  if (!subscription) {
+    throw Object.assign(new Error('Subscription not found'), { code: 'NOT_FOUND' });
+  }
+
+  const now = new Date();
+
+  if (subscription.providerSubscriptionId) {
+    // Agendar cancelamento no fim do período via Stripe
+    await stripe.subscriptions.update(subscription.providerSubscriptionId, {
+      cancel_at_period_end: true,
+    });
+  }
+
+  // Registrar intenção de cancelamento no DB (acesso continua até current_period_end)
+  await prisma.subscription.update({
+    where: { tenantId },
+    data: { cancelledAt: now, status: 'cancelled' }
+  });
+
+  await prisma.subscriptionHistory.create({
+    data: {
+      subscriptionId: subscription.id,
+      planId: subscription.planId,
+      status: 'cancelled',
+      effectiveFrom: now,
+      reason: 'cancellation_requested'
+    }
+  });
+
+  await prisma.billingEvent.create({
+    data: {
+      tenantId,
+      eventType: 'subscription.cancelled',
+      provider: subscription.provider ?? null,
+      occurredAt: now
+    }
+  });
+
+  invalidateEntitlementCache(tenantId);
+  return { cancelled_at: now.toISOString(), access_until: subscription.currentPeriodEnd.toISOString() };
 }

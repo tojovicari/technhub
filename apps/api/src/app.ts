@@ -16,6 +16,7 @@ import { commsRoutes } from './modules/comms/routes.js';
 import { startCommsWorker } from './modules/comms/worker.js';
 import { billingRoutes } from './modules/billing/routes.js';
 import { platformBillingRoutes } from './modules/billing/platform-routes.js';
+import { billingWebhookRoutes } from './modules/billing/webhook-routes.js';
 import { startBillingWorker } from './modules/billing/worker.js';
 import { registerAuth } from './plugins/auth.js';
 import { loadEntitlement } from './modules/billing/entitlement.js';
@@ -83,6 +84,7 @@ export function buildApp() {
   app.register(commsRoutes, { prefix: '/api/v1' });
   app.register(billingRoutes, { prefix: '/api/v1' });
   app.register(platformBillingRoutes, { prefix: '/api/v1' });
+  app.register(billingWebhookRoutes, { prefix: '/api/v1' });
   startIntegrationsWorker(app);
   startSlaScheduler(app);
   startCommsWorker(app);

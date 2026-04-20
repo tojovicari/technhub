@@ -164,10 +164,11 @@ export async function billingRoutes(app: FastifyInstance) {
 
         return reply.status(201).send(ok(req, session));
       } catch (error: any) {
-        if (error.code === 'NOT_IMPLEMENTED') {
-          return reply.status(501).send(
-            fail(req, 'NOT_IMPLEMENTED', 'Stripe integration not yet available')
-          );
+        if (error.code === 'NOT_FOUND') {
+          return reply.status(404).send(fail(req, 'NOT_FOUND', error.message));
+        }
+        if (error.code === 'VALIDATION_ERROR') {
+          return reply.status(400).send(fail(req, 'BAD_REQUEST', error.message));
         }
         throw error;
       }
@@ -192,10 +193,8 @@ export async function billingRoutes(app: FastifyInstance) {
         const session = await createPortalSession(tenantId, parsed.data.return_url);
         return reply.status(201).send(ok(req, session));
       } catch (error: any) {
-        if (error.code === 'NOT_IMPLEMENTED') {
-          return reply.status(501).send(
-            fail(req, 'NOT_IMPLEMENTED', 'Stripe integration not yet available')
-          );
+        if (error.code === 'PRECONDITION_FAILED') {
+          return reply.status(422).send(fail(req, 'UNPROCESSABLE', error.message));
         }
         throw error;
       }
@@ -213,10 +212,8 @@ export async function billingRoutes(app: FastifyInstance) {
         const result = await cancelSubscription(tenantId);
         return reply.status(200).send(ok(req, result));
       } catch (error: any) {
-        if (error.code === 'NOT_IMPLEMENTED') {
-          return reply.status(501).send(
-            fail(req, 'NOT_IMPLEMENTED', 'Stripe integration not yet available')
-          );
+        if (error.code === 'NOT_FOUND') {
+          return reply.status(404).send(fail(req, 'NOT_FOUND', error.message));
         }
         throw error;
       }

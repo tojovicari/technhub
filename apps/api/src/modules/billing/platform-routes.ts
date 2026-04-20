@@ -8,6 +8,7 @@ import {
 } from './schema.js';
 import {
   listAllPlans,
+  getPlanById,
   createPlan,
   updatePlan,
   deletePlan,
@@ -100,20 +101,12 @@ export async function platformBillingRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { plan_id } = req.params as { plan_id: string };
 
-      const plan = await listAllPlans({
-        cursor: undefined,
-        limit: 1,
-        is_active: undefined,
-        is_public: undefined,
-        is_system: undefined
-      });
-
-      const found = plan.data.find(p => p.id === plan_id);
-      if (!found) {
+      const plan = await getPlanById(plan_id);
+      if (!plan) {
         return reply.status(404).send(fail(req, 'NOT_FOUND', 'Plan not found'));
       }
 
-      return reply.status(200).send(ok(req, mapPlan(found)));
+      return reply.status(200).send(ok(req, mapPlan(plan)));
     }
   );
 

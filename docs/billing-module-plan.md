@@ -1,7 +1,7 @@
 # Módulo de Subscription & Billing — Plano de Refinamento
 
-> **Status:** aprovado para implementação — plano de implementação em Seção 13  
-> **Data:** 2026-04-17  
+> **Status:** ✅ implementado — sandbox Stripe ativo e pronto para testes de integração  
+> **Data do plano:** 2026-04-17 | **Implementado:** 2026-04-20  
 > **Autor:** colaboração CTO AI + produto
 
 ---
@@ -15,6 +15,7 @@ Adicionar ao moasy.tech a capacidade de gerenciar planos de subscrição por ten
 ## 2. Contexto arquitetural
 
 O moasy.tech já tem:
+
 - **Tenants** como unidade de isolamento de dados (multi-tenant por `tenant_id`)
 - **IAM** com Permission Profiles e RBAC por usuário dentro do tenant
 - **Auth** com `PlatformAccount` e JWT carregando `tenant_id`, `roles`, `permissions`
@@ -32,20 +33,20 @@ O módulo de billing será o **produtor** das restrições de plano; outros mód
 
 Os planos abaixo são gerados no seed inicial (`is_system: true`) apenas como **ponto de referência**. Todos os campos — preço, módulos habilitados, limites de seats e integrações, janela de histórico, features — são editáveis no admin da plataforma sem nenhuma mudança de código. Novos planos podem ser criados a qualquer momento.
 
-| Feature | **Free** | **Starter** | **Pro** | **Enterprise** |
-|---|---|---|---|---|
-| Preço / mês (sugestão) | $0 | $49 | $149 | negociável |
-| Seats (usuários do dashboard) | 2 | 5 | 15 | ilimitado |
-| Integrações ativas | 1 | 2 | ilimitado | ilimitado |
-| Janela de dados históricos | 30 dias | 90 dias | 1 ano | ilimitado |
-| Core (projetos, tasks, epics) | ✅ | ✅ | ✅ | ✅ |
-| DORA metrics | ✅ limitado¹ | ✅ | ✅ | ✅ |
-| SLA | ❌ | ✅ | ✅ | ✅ |
-| COGS | ❌ | ❌ | ✅ | ✅ |
-| Intel (forecasting/anomalias) | ❌ | ❌ | ❌ | ✅ |
-| Alertas Slack/Email | ❌ | ✅ | ✅ | ✅ |
-| API programática (webhooks out) | ❌ | ❌ | ✅ | ✅ |
-| Suporte | community | email | email prioritário | SLA dedicado |
+| Feature                         | **Free**     | **Starter** | **Pro**           | **Enterprise** |
+| ------------------------------- | ------------ | ----------- | ----------------- | -------------- |
+| Preço / mês (sugestão)          | $0           | $49         | $149              | negociável     |
+| Seats (usuários do dashboard)   | 2            | 5           | 15                | ilimitado      |
+| Integrações ativas              | 1            | 2           | ilimitado         | ilimitado      |
+| Janela de dados históricos      | 30 dias      | 90 dias     | 1 ano             | ilimitado      |
+| Core (projetos, tasks, epics)   | ✅           | ✅          | ✅                | ✅             |
+| DORA metrics                    | ✅ limitado¹ | ✅          | ✅                | ✅             |
+| SLA                             | ❌           | ✅          | ✅                | ✅             |
+| COGS                            | ❌           | ❌          | ✅                | ✅             |
+| Intel (forecasting/anomalias)   | ❌           | ❌          | ❌                | ✅             |
+| Alertas Slack/Email             | ❌           | ✅          | ✅                | ✅             |
+| API programática (webhooks out) | ❌           | ❌          | ✅                | ✅             |
+| Suporte                         | community    | email       | email prioritário | SLA dedicado   |
 
 > ¹ DORA no Free: Deployment Frequency e Lead Time apenas; sem scorecard completo, sem MTTR/CFR. Isso é configurado pelo campo `features.dora_full_scorecard = false` no plano — editável no admin.
 
@@ -54,6 +55,7 @@ Os planos abaixo são gerados no seed inicial (`is_system: true`) apenas como **
 ### 3.2 Planos customizados
 
 Além dos tiers base, o `super_admin` da plataforma pode criar planos customizados para clientes Enterprise com configurações específicas de módulos, limites e preço. Planos customizados podem ser:
+
 - **Ativos ou inativos** (`is_active`) — inativos não aceitam novas subscriptions
 - **Públicos** (`is_public: true`) — visíveis no checkout para qualquer tenant
 - **Exclusivos** (`is_public: false`) — vinculados a tenants específicos via `PlanTenantAssignment`
@@ -65,6 +67,7 @@ Além dos tiers base, o `super_admin` da plataforma pode criar planos customizad
 ## 4. Entidades do módulo
 
 ### 4.1 `Plan`
+
 Definição de um plano. Planos são gerenciados por operadores da plataforma (não por tenants). Planos do sistema (`is_system: true`) não podem ser deletados.
 
 ```
@@ -93,19 +96,20 @@ updated_at       timestamptz
 
 **Módulos válidos para `modules[]`:**
 
-| Valor | Módulo |
-|---|---|
-| `core` | Projetos, tasks, epics, times |
+| Valor          | Módulo                        |
+| -------------- | ----------------------------- |
+| `core`         | Projetos, tasks, epics, times |
 | `integrations` | Conectores JIRA, GitHub, etc. |
-| `dora` | DORA metrics e scorecard |
-| `sla` | SLA templates e compliance |
-| `cogs` | Custo de engenharia e COGS |
-| `intel` | Forecasting e anomalias |
-| `comms` | Comunicação e alertas |
+| `dora`         | DORA metrics e scorecard      |
+| `sla`          | SLA templates e compliance    |
+| `cogs`         | Custo de engenharia e COGS    |
+| `intel`        | Forecasting e anomalias       |
+| `comms`        | Comunicação e alertas         |
 
 > `core` e `integrations` são sempre incluídos em qualquer plano pago; `core` é incluído mesmo no Free.
 
 ### 4.2 `Subscription`
+
 Estado da assinatura atual de um tenant.
 
 ```
@@ -132,6 +136,7 @@ updated_at                  timestamptz
 > ✅ **Decisões #5 e #6 fechadas:** Após `past_due_since + 10 dias` sem quitação, downgrade automático para Free (`status → downgraded`, `data_deletion_scheduled_at = downgraded_at + 30 dias`). Se o tenant reativar dentro de 30 dias, os dados são preservados e `data_deletion_scheduled_at` é zerado. Após 30 dias, um job de expurgo remove os dados do tenant do armazenamento permanente. Veja seção 6.4.
 
 ### 4.3 `SubscriptionHistory`
+
 Registro histórico de todos os planos pelos quais a subscription passou, para auditoria e análise de upgrade/downgrade paths.
 
 ```
@@ -147,6 +152,7 @@ created_at      timestamptz
 > Novo registro é criado sempre que a subscription muda de plano (upgrade, downgrade, reativação) ou status. O campo `reason` documenta o motivo da mudança para auditoria. Para consultar histórico por tenant, basta fazer JOIN via `Subscription.tenant_id`. A ordem cronológica é garantida por `effective_from + created_at`.
 
 ### 4.4 `PlanTenantAssignment`
+
 Vincula um plano exclusivo (`is_public: false`) a tenants específicos que podem subscrevê-lo.
 
 ```
@@ -159,6 +165,7 @@ created_at timestamptz
 > Tenants sem `PlanTenantAssignment` para um plano `is_public: false` não o veem no checkout nem podem subscrevê-lo.
 
 ### 4.5 `SubscriptionUsage` (opcional — fase posterior)
+
 Rastreia consumo real para planos com overage ou cobrança baseada em uso.
 
 ```
@@ -170,6 +177,7 @@ recorded_at    timestamptz
 ```
 
 ### 4.6 `BillingEvent`
+
 Log auditável de eventos de cobrança (webhook do provedor de pagamento ou ação interna).
 
 ```
@@ -184,6 +192,7 @@ created_at        timestamptz
 ```
 
 ### 4.7 `PurgeFailureQueue`
+
 Fila de falhas (DLQ) para retry exponencial de expurgo de dados quando o job de purge falha.
 
 ```
@@ -226,6 +235,7 @@ O guard de entitlement busca esses campos diretamente do `Plan` associado à `Su
 > ✅ **Decisão #3 fechada:** Guard **por módulo**. Cada módulo é responsável por validar o próprio entitlement nas suas rotas.
 
 **Mecanismo sem acoplamento direto:**
+
 - O Billing module expõe funções standalone `requireModule(moduleName)` e `requireFeature(featureName)` em `src/modules/billing/entitlement.ts`
 - Cada módulo importa essas funções e as usa como `preHandler` nas rotas: `preHandler: [app.authenticate, requireModule('sla')]`
 - O `tenantId` é extraído de `request.user.tenant_id` internamente — o módulo consumidor não precisa passá-lo
@@ -239,6 +249,7 @@ O guard de entitlement busca esses campos diretamente do `Plan` associado à `Su
 **Status `downgraded`:** o entitlement reflete o plano Free imediatamente. O header passa a ser `X-Billing-Warning: downgraded`. Os dados existentes (projetos, métricas, etc.) são mantidos por 30 dias (`data_deletion_scheduled_at`). Se reativar dentro desse prazo, tudo é preservado; caso contrário, o job de expurgo remove os dados.
 
 **Limites `max_seats` e `max_integrations`:** Funcionam como **hard limits**. Ao atingir o limite, a API bloqueia a adição de novos usuários ou integrações com erro `402 UPGRADE_REQUIRED`. Guards são aplicados em:
+
 - `POST /iam/users/:tenant_id/members` — verifica `max_seats` antes de criar usuário
 - `POST /integrations/connections` — verifica `max_integrations` antes de ativar integração
 
@@ -331,6 +342,7 @@ Se data_deletion_scheduled_at já passou (D+30 expirado):
 ```
 
 > ✅ **Decisões finais fechadas:**
+>
 > - Após 10 dias `past_due` → **downgrade para Free** (não suspensão total; o tenant pode continuar usando a plataforma no nível Free)
 > - Dados retidos por **30 dias** após o downgrade — janela para reativar sem perder histórico
 > - Reativação é **automática** via webhook do provedor — sem intervenção manual
@@ -346,16 +358,17 @@ Se data_deletion_scheduled_at já passou (D+30 expirado):
 
 ### 7.1 Visão geral de permissões
 
-| Permissão | Quem tem | Como é verificada |
-|---|---|---|
-| _(nenhuma)_ | Qualquer pessoa | Rota pública |
-| `billing.read` | `org_admin`, `manager` do tenant | claim `permissions` no JWT |
-| `billing.manage` | `org_admin` do tenant | claim `permissions` no JWT |
-| `platform.billing.manage` | `super_admin`, `platform_admin` | campo `platform_role` no JWT — verificado **antes** das claims de tenant |
+| Permissão                 | Quem tem                         | Como é verificada                                                        |
+| ------------------------- | -------------------------------- | ------------------------------------------------------------------------ |
+| _(nenhuma)_               | Qualquer pessoa                  | Rota pública                                                             |
+| `billing.read`            | `org_admin`, `manager` do tenant | claim `permissions` no JWT                                               |
+| `billing.manage`          | `org_admin` do tenant            | claim `permissions` no JWT                                               |
+| `platform.billing.manage` | `super_admin`, `platform_admin`  | campo `platform_role` no JWT — verificado **antes** das claims de tenant |
 
 **Separação super_admin × tenant:**
 
 O JWT carrega dois contextos:
+
 - `platform_role: "super_admin" | "platform_admin" | null` — escopo da plataforma
 - `tenant_id` + `permissions[]` — escopo do tenant
 
@@ -377,13 +390,13 @@ Lista todos os planos existentes, incluindo inativos, exclusivos e do sistema.
 
 **Query params:**
 
-| Param | Tipo | Obrigatório | Default | Notas |
-|---|---|---|---|---|
-| `is_active` | boolean | ❌ | — | Filtra por status ativo/inativo |
-| `is_public` | boolean | ❌ | — | `true` = públicos; `false` = exclusivos |
-| `is_system` | boolean | ❌ | — | `true` = apenas planos seed do sistema |
-| `limit` | integer | ❌ | 20 | Máx 100 |
-| `cursor` | string | ❌ | — | Cursor de paginação (UUID do último item) |
+| Param       | Tipo    | Obrigatório | Default | Notas                                     |
+| ----------- | ------- | ----------- | ------- | ----------------------------------------- |
+| `is_active` | boolean | ❌          | —       | Filtra por status ativo/inativo           |
+| `is_public` | boolean | ❌          | —       | `true` = públicos; `false` = exclusivos   |
+| `is_system` | boolean | ❌          | —       | `true` = apenas planos seed do sistema    |
+| `limit`     | integer | ❌          | 20      | Máx 100                                   |
+| `cursor`    | string  | ❌          | —       | Cursor de paginação (UUID do último item) |
 
 **Resposta — 200 OK:**
 
@@ -420,7 +433,11 @@ Lista todos os planos existentes, incluindo inativos, exclusivos e do sistema.
     ],
     "next_cursor": null
   },
-  "meta": { "request_id": "req_001", "version": "v1", "timestamp": "2026-04-17T10:00:00Z" },
+  "meta": {
+    "request_id": "req_001",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:00:00Z"
+  },
   "error": null
 }
 ```
@@ -429,10 +446,10 @@ Lista todos os planos existentes, incluindo inativos, exclusivos e do sistema.
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | Token inválido ou ausente |
-| 403 | `FORBIDDEN` | `platform_role` insuficiente |
+| Status | Código         | Quando                       |
+| ------ | -------------- | ---------------------------- |
+| 401    | `UNAUTHORIZED` | Token inválido ou ausente    |
+| 403    | `FORBIDDEN`    | `platform_role` insuficiente |
 
 ---
 
@@ -444,30 +461,30 @@ Cria um novo plano.
 
 **Body:**
 
-| Campo | Tipo | Obrigatório | Default | Notas |
-|---|---|---|---|---|
-| `name` | string | ✅ | — | Slug único, sem espaços, ex: `"acme-enterprise"` |
-| `display_name` | string | ✅ | — | Nome exibido no checkout |
-| `description` | string | ❌ | `null` | Texto de apoio no checkout |
-| `price_cents` | integer | ✅ | — | Em centavos; `0` para planos grátis |
-| `currency` | string | ❌ | `"USD"` | ISO 4217 |
-| `billing_period` | enum | ✅ | — | `"monthly"` \| `"annual"` |
-| `stripe_price_id` | string | ❌ | `null` | ID do price no Stripe (`price_xxx`); obrigatório para planos pagos que usam Checkout |
-| `modules` | string[] | ✅ | — | Ao menos `["core"]`. Ver lista de módulos válidos. |
-| `max_seats` | integer \| null | ❌ | `null` | `null` = ilimitado |
-| `max_integrations` | integer \| null | ❌ | `null` | `null` = ilimitado |
-| `history_days` | integer \| null | ❌ | `null` | `null` = ilimitado |
-| `trial_days` | integer | ❌ | `0` | `0` = sem trial |
-| `features` | object | ❌ | `{}` | Flags booleanas opcionais (ver abaixo) |
-| `is_public` | boolean | ❌ | `true` | `false` = exclusivo; requer assignments |
-| `is_active` | boolean | ❌ | `true` | Pode criar já inativo |
+| Campo              | Tipo            | Obrigatório | Default | Notas                                                                                |
+| ------------------ | --------------- | ----------- | ------- | ------------------------------------------------------------------------------------ |
+| `name`             | string          | ✅          | —       | Slug único, sem espaços, ex: `"acme-enterprise"`                                     |
+| `display_name`     | string          | ✅          | —       | Nome exibido no checkout                                                             |
+| `description`      | string          | ❌          | `null`  | Texto de apoio no checkout                                                           |
+| `price_cents`      | integer         | ✅          | —       | Em centavos; `0` para planos grátis                                                  |
+| `currency`         | string          | ❌          | `"USD"` | ISO 4217                                                                             |
+| `billing_period`   | enum            | ✅          | —       | `"monthly"` \| `"annual"`                                                            |
+| `stripe_price_id`  | string          | ❌          | `null`  | ID do price no Stripe (`price_xxx`); obrigatório para planos pagos que usam Checkout |
+| `modules`          | string[]        | ✅          | —       | Ao menos `["core"]`. Ver lista de módulos válidos.                                   |
+| `max_seats`        | integer \| null | ❌          | `null`  | `null` = ilimitado                                                                   |
+| `max_integrations` | integer \| null | ❌          | `null`  | `null` = ilimitado                                                                   |
+| `history_days`     | integer \| null | ❌          | `null`  | `null` = ilimitado                                                                   |
+| `trial_days`       | integer         | ❌          | `0`     | `0` = sem trial                                                                      |
+| `features`         | object          | ❌          | `{}`    | Flags booleanas opcionais (ver abaixo)                                               |
+| `is_public`        | boolean         | ❌          | `true`  | `false` = exclusivo; requer assignments                                              |
+| `is_active`        | boolean         | ❌          | `true`  | Pode criar já inativo                                                                |
 
 **Flags válidas em `features`:**
 
-| Flag | Tipo | Default | Descrição |
-|---|---|---|---|
-| `alerts` | boolean | `false` | Alertas Slack/Email habilitados |
-| `api_webhooks` | boolean | `false` | API programática e webhooks de saída |
+| Flag                  | Tipo    | Default | Descrição                                                                |
+| --------------------- | ------- | ------- | ------------------------------------------------------------------------ |
+| `alerts`              | boolean | `false` | Alertas Slack/Email habilitados                                          |
+| `api_webhooks`        | boolean | `false` | API programática e webhooks de saída                                     |
 | `dora_full_scorecard` | boolean | `false` | Scorecard completo DORA (MTTR, CFR); `false` = somente freq. e lead time |
 
 **Exemplo de request:**
@@ -514,7 +531,11 @@ Cria um novo plano.
     "max_integrations": null,
     "history_days": null,
     "trial_days": 0,
-    "features": { "alerts": true, "api_webhooks": true, "dora_full_scorecard": true },
+    "features": {
+      "alerts": true,
+      "api_webhooks": true,
+      "dora_full_scorecard": true
+    },
     "is_system": false,
     "is_public": false,
     "is_active": true,
@@ -522,20 +543,24 @@ Cria um novo plano.
     "created_at": "2026-04-17T10:05:00Z",
     "updated_at": "2026-04-17T10:05:00Z"
   },
-  "meta": { "request_id": "req_002", "version": "v1", "timestamp": "2026-04-17T10:05:00Z" },
+  "meta": {
+    "request_id": "req_002",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:05:00Z"
+  },
   "error": null
 }
 ```
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Campo obrigatório ausente, `modules[]` vazio, `billing_period` inválido |
-| 401 | `UNAUTHORIZED` | Token inválido |
-| 403 | `FORBIDDEN` | `platform_role` insuficiente |
-| 409 | `CONFLICT` | `name` já existe |
-| 422 | `UNPROCESSABLE` | Módulo inválido em `modules[]` |
+| Status | Código          | Quando                                                                  |
+| ------ | --------------- | ----------------------------------------------------------------------- |
+| 400    | `BAD_REQUEST`   | Campo obrigatório ausente, `modules[]` vazio, `billing_period` inválido |
+| 401    | `UNAUTHORIZED`  | Token inválido                                                          |
+| 403    | `FORBIDDEN`     | `platform_role` insuficiente                                            |
+| 409    | `CONFLICT`      | `name` já existe                                                        |
+| 422    | `UNPROCESSABLE` | Módulo inválido em `modules[]`                                          |
 
 ---
 
@@ -549,11 +574,11 @@ Detalhe completo de um plano.
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | — |
-| 404 | `NOT_FOUND` | Plano não encontrado |
+| Status | Código         | Quando               |
+| ------ | -------------- | -------------------- |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | —                    |
+| 404    | `NOT_FOUND`    | Plano não encontrado |
 
 ---
 
@@ -565,22 +590,22 @@ Edita campos de um plano. Todos os campos são opcionais — apenas os enviados 
 
 **Body (todos opcionais):**
 
-| Campo | Tipo | Notas |
-|---|---|---|
-| `display_name` | string | — |
-| `description` | string \| null | — |
-| `price_cents` | integer | Muda preço para novas subscriptions; existentes não são afetadas |
-| `billing_period` | enum | `"monthly"` \| `"annual"` |
-| `stripe_price_id` | string \| null | Atualiza o price vinculado no Stripe |
-| `modules` | string[] | Deve sempre incluir `"core"`. **Reduções de módulos/limits são agendadas** via `apply_at_renewal` |
-| `max_seats` | integer \| null | — |
-| `max_integrations` | integer \| null | — |
-| `history_days` | integer \| null | — |
-| `trial_days` | integer | — |
-| `features` | object | Merge parcial — campos não enviados são mantidos |
-| `is_public` | boolean | — |
-| `is_active` | boolean | `false` impede novas subscriptions; ativas continuam normalmente |
-| `apply_at_renewal` | boolean | Default: `false`. Se `true`, mudanças em `modules`, `max_seats`, `max_integrations`, `history_days` e `features` são agendadas em `pending_plan_changes` de cada subscription ativa e aplicadas automaticamente em `current_period_end` via job. Se `false`, propagam imediatamente. |
+| Campo              | Tipo            | Notas                                                                                                                                                                                                                                                                                |
+| ------------------ | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `display_name`     | string          | —                                                                                                                                                                                                                                                                                    |
+| `description`      | string \| null  | —                                                                                                                                                                                                                                                                                    |
+| `price_cents`      | integer         | Muda preço para novas subscriptions; existentes não são afetadas                                                                                                                                                                                                                     |
+| `billing_period`   | enum            | `"monthly"` \| `"annual"`                                                                                                                                                                                                                                                            |
+| `stripe_price_id`  | string \| null  | Atualiza o price vinculado no Stripe                                                                                                                                                                                                                                                 |
+| `modules`          | string[]        | Deve sempre incluir `"core"`. **Reduções de módulos/limits são agendadas** via `apply_at_renewal`                                                                                                                                                                                    |
+| `max_seats`        | integer \| null | —                                                                                                                                                                                                                                                                                    |
+| `max_integrations` | integer \| null | —                                                                                                                                                                                                                                                                                    |
+| `history_days`     | integer \| null | —                                                                                                                                                                                                                                                                                    |
+| `trial_days`       | integer         | —                                                                                                                                                                                                                                                                                    |
+| `features`         | object          | Merge parcial — campos não enviados são mantidos                                                                                                                                                                                                                                     |
+| `is_public`        | boolean         | —                                                                                                                                                                                                                                                                                    |
+| `is_active`        | boolean         | `false` impede novas subscriptions; ativas continuam normalmente                                                                                                                                                                                                                     |
+| `apply_at_renewal` | boolean         | Default: `false`. Se `true`, mudanças em `modules`, `max_seats`, `max_integrations`, `history_days` e `features` são agendadas em `pending_plan_changes` de cada subscription ativa e aplicadas automaticamente em `current_period_end` via job. Se `false`, propagam imediatamente. |
 
 > ✅ **Decisão #9 fechada:** Mudanças que reduzem entitlements (`modules`, `max_seats`, `max_integrations`, `history_days`, `features`) devem usar `apply_at_renewal: true` para evitar surpresa aos tenants pagantes. A API valida e armazena as mudanças em `Subscription.pending_plan_changes`; um job periódico as aplica em `current_period_end`. Mudanças que **aumentam** entitlements podem usar `apply_at_renewal: false` para efeito imediato.
 
@@ -599,7 +624,9 @@ Edita campos de um plano. Todos os campos são opcionais — apenas os enviados 
 
 ```json
 {
-  "data": { /* objeto Plan completo atualizado */ },
+  "data": {
+    /* objeto Plan completo atualizado */
+  },
   "meta": {
     "request_id": "req_003",
     "version": "v1",
@@ -612,14 +639,14 @@ Edita campos de um plano. Todos os campos são opcionais — apenas os enviados 
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 400 | `BAD_REQUEST` | `modules[]` ficaria vazio; `billing_period` inválido; `modules` não inclui `"core"` |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | — |
-| 404 | `NOT_FOUND` | Plano não encontrado |
-| 409 | `CONFLICT` | `name` já existe em outro plano |
-| 422 | `UNPROCESSABLE` | Módulo inválido |
+| Status | Código          | Quando                                                                              |
+| ------ | --------------- | ----------------------------------------------------------------------------------- |
+| 400    | `BAD_REQUEST`   | `modules[]` ficaria vazio; `billing_period` inválido; `modules` não inclui `"core"` |
+| 401    | `UNAUTHORIZED`  | —                                                                                   |
+| 403    | `FORBIDDEN`     | —                                                                                   |
+| 404    | `NOT_FOUND`     | Plano não encontrado                                                                |
+| 409    | `CONFLICT`      | `name` já existe em outro plano                                                     |
+| 422    | `UNPROCESSABLE` | Módulo inválido                                                                     |
 
 ---
 
@@ -630,6 +657,7 @@ Exclui um plano permanentemente.
 **Permissão:** `platform.billing.manage`
 
 **Restrições:**
+
 - Planos com `is_system: true` **nunca podem ser deletados** — retorna `403 FORBIDDEN`.
 - Planos com `active_subscriptions_count > 0` **não podem ser deletados** — retorna `409 CONFLICT`. Desative o plano via `PATCH` primeiro.
 
@@ -637,12 +665,12 @@ Exclui um plano permanentemente.
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Plano é `is_system: true` |
-| 404 | `NOT_FOUND` | Plano não encontrado |
-| 409 | `CONFLICT` | Plano tem subscriptions ativas |
+| Status | Código         | Quando                         |
+| ------ | -------------- | ------------------------------ |
+| 401    | `UNAUTHORIZED` | —                              |
+| 403    | `FORBIDDEN`    | Plano é `is_system: true`      |
+| 404    | `NOT_FOUND`    | Plano não encontrado           |
+| 409    | `CONFLICT`     | Plano tem subscriptions ativas |
 
 ---
 
@@ -654,9 +682,9 @@ Vincula um plano `is_public: false` a um tenant específico, tornando-o visível
 
 **Body:**
 
-| Campo | Tipo | Obrigatório | Notas |
-|---|---|---|---|
-| `tenant_id` | string (UUID) | ✅ | Tenant a receber acesso ao plano |
+| Campo       | Tipo          | Obrigatório | Notas                            |
+| ----------- | ------------- | ----------- | -------------------------------- |
+| `tenant_id` | string (UUID) | ✅          | Tenant a receber acesso ao plano |
 
 **Exemplo:**
 
@@ -673,20 +701,24 @@ Vincula um plano `is_public: false` a um tenant específico, tornando-o visível
     "tenant_id": "tenant-uuid-acme",
     "created_at": "2026-04-17T10:15:00Z"
   },
-  "meta": { "request_id": "req_004", "version": "v1", "timestamp": "2026-04-17T10:15:00Z" },
+  "meta": {
+    "request_id": "req_004",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:15:00Z"
+  },
   "error": null
 }
 ```
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Plano é `is_public: true` (não precisa de assignment) |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | — |
-| 404 | `NOT_FOUND` | Plano ou tenant não encontrado |
-| 409 | `CONFLICT` | Assignment já existe |
+| Status | Código         | Quando                                                |
+| ------ | -------------- | ----------------------------------------------------- |
+| 400    | `BAD_REQUEST`  | Plano é `is_public: true` (não precisa de assignment) |
+| 401    | `UNAUTHORIZED` | —                                                     |
+| 403    | `FORBIDDEN`    | —                                                     |
+| 404    | `NOT_FOUND`    | Plano ou tenant não encontrado                        |
+| 409    | `CONFLICT`     | Assignment já existe                                  |
 
 ---
 
@@ -700,11 +732,11 @@ Remove o vínculo exclusivo entre plano e tenant. O tenant perde visibilidade do
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | — |
-| 404 | `NOT_FOUND` | Assignment não encontrado |
+| Status | Código         | Quando                    |
+| ------ | -------------- | ------------------------- |
+| 401    | `UNAUTHORIZED` | —                         |
+| 403    | `FORBIDDEN`    | —                         |
+| 404    | `NOT_FOUND`    | Assignment não encontrado |
 
 ---
 
@@ -748,7 +780,11 @@ Lista planos disponíveis para o tenant: planos `is_public: true` + planos exclu
       }
     ]
   },
-  "meta": { "request_id": "req_005", "version": "v1", "timestamp": "2026-04-17T10:00:00Z" },
+  "meta": {
+    "request_id": "req_005",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:00:00Z"
+  },
   "error": null
 }
 ```
@@ -783,7 +819,11 @@ Retorna a subscription ativa do tenant chamante, incluindo o plano associado e d
       "max_seats": 5,
       "max_integrations": 2,
       "history_days": 90,
-      "features": { "alerts": true, "api_webhooks": false, "dora_full_scorecard": true }
+      "features": {
+        "alerts": true,
+        "api_webhooks": false,
+        "dora_full_scorecard": true
+      }
     },
     "scheduled_downgrade_plan": null,
     "trial_ends_at": null,
@@ -794,21 +834,25 @@ Retorna a subscription ativa do tenant chamante, incluindo o plano associado e d
     "data_deletion_scheduled_at": null,
     "cancelled_at": null
   },
-  "meta": { "request_id": "req_006", "version": "v1", "timestamp": "2026-04-17T10:00:00Z" },
+  "meta": {
+    "request_id": "req_006",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:00:00Z"
+  },
   "error": null
 }
 ```
 
 **Campos de status e o que exibir no UI:**
 
-| `status` | O que exibir |
-|---|---|
-| `trialing` | Banner informativo: "Trial ativo até `trial_ends_at`" |
-| `active` | Nada especial; exibir renovação em `current_period_end` |
-| `past_due` | Banner de alerta: "Pagamento falhou — regularize até `past_due_since + 10 dias`" |
+| `status`     | O que exibir                                                                                 |
+| ------------ | -------------------------------------------------------------------------------------------- |
+| `trialing`   | Banner informativo: "Trial ativo até `trial_ends_at`"                                        |
+| `active`     | Nada especial; exibir renovação em `current_period_end`                                      |
+| `past_due`   | Banner de alerta: "Pagamento falhou — regularize até `past_due_since + 10 dias`"             |
 | `downgraded` | Banner de erro: "Conta rebaixada para Free. Dados excluídos em `data_deletion_scheduled_at`" |
-| `cancelled` | Banner informativo: "Acesso encerra em `current_period_end`" |
-| `expired` | Bloquear acesso; redirecionar para checkout |
+| `cancelled`  | Banner informativo: "Acesso encerra em `current_period_end`"                                 |
+| `expired`    | Bloquear acesso; redirecionar para checkout                                                  |
 
 ---
 
@@ -820,11 +864,11 @@ Inicia uma Stripe Checkout Session para upgrade ou reativação de plano.
 
 **Body:**
 
-| Campo | Tipo | Obrigatório | Notas |
-|---|---|---|---|
-| `plan_id` | string (UUID) | ✅ | Plano desejado (deve estar disponível para o tenant) |
-| `success_url` | string (URL) | ✅ | URL de redirecionamento após pagamento confirmado |
-| `cancel_url` | string (URL) | ✅ | URL de redirecionamento ao cancelar o checkout |
+| Campo         | Tipo          | Obrigatório | Notas                                                |
+| ------------- | ------------- | ----------- | ---------------------------------------------------- |
+| `plan_id`     | string (UUID) | ✅          | Plano desejado (deve estar disponível para o tenant) |
+| `success_url` | string (URL)  | ✅          | URL de redirecionamento após pagamento confirmado    |
+| `cancel_url`  | string (URL)  | ✅          | URL de redirecionamento ao cancelar o checkout       |
 
 **Exemplo:**
 
@@ -843,7 +887,11 @@ Inicia uma Stripe Checkout Session para upgrade ou reativação de plano.
   "data": {
     "checkout_url": "https://checkout.stripe.com/pay/cs_live_xxx"
   },
-  "meta": { "request_id": "req_007", "version": "v1", "timestamp": "2026-04-17T10:00:00Z" },
+  "meta": {
+    "request_id": "req_007",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:00:00Z"
+  },
   "error": null
 }
 ```
@@ -852,12 +900,12 @@ Inicia uma Stripe Checkout Session para upgrade ou reativação de plano.
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 400 | `BAD_REQUEST` | `plan_id` inválido ou plano não disponível para o tenant |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permissão insuficiente |
-| 502 | `BAD_GATEWAY` | Erro na API do Stripe |
+| Status | Código         | Quando                                                   |
+| ------ | -------------- | -------------------------------------------------------- |
+| 400    | `BAD_REQUEST`  | `plan_id` inválido ou plano não disponível para o tenant |
+| 401    | `UNAUTHORIZED` | —                                                        |
+| 403    | `FORBIDDEN`    | Permissão insuficiente                                   |
+| 502    | `BAD_GATEWAY`  | Erro na API do Stripe                                    |
 
 ---
 
@@ -869,9 +917,9 @@ Abre o Stripe Customer Portal para o tenant gerenciar cartão de crédito e visu
 
 **Body:**
 
-| Campo | Tipo | Obrigatório | Notas |
-|---|---|---|---|
-| `return_url` | string (URL) | ✅ | URL para retornar após fechar o portal |
+| Campo        | Tipo         | Obrigatório | Notas                                  |
+| ------------ | ------------ | ----------- | -------------------------------------- |
+| `return_url` | string (URL) | ✅          | URL para retornar após fechar o portal |
 
 **Resposta — 200 OK:**
 
@@ -880,19 +928,23 @@ Abre o Stripe Customer Portal para o tenant gerenciar cartão de crédito e visu
   "data": {
     "portal_url": "https://billing.stripe.com/session/xxx"
   },
-  "meta": { "request_id": "req_008", "version": "v1", "timestamp": "2026-04-17T10:00:00Z" },
+  "meta": {
+    "request_id": "req_008",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:00:00Z"
+  },
   "error": null
 }
 ```
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Tenant não possui `provider_customer_id` (nunca assinou um plano pago) |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | — |
-| 502 | `BAD_GATEWAY` | Erro na API do Stripe |
+| Status | Código         | Quando                                                                 |
+| ------ | -------------- | ---------------------------------------------------------------------- |
+| 400    | `BAD_REQUEST`  | Tenant não possui `provider_customer_id` (nunca assinou um plano pago) |
+| 401    | `UNAUTHORIZED` | —                                                                      |
+| 403    | `FORBIDDEN`    | —                                                                      |
+| 502    | `BAD_GATEWAY`  | Erro na API do Stripe                                                  |
 
 ---
 
@@ -912,18 +964,22 @@ Agenda o cancelamento da subscription ao final do ciclo atual. O acesso é manti
     "cancelled_at": "2026-04-17T10:20:00Z",
     "access_until": "2026-05-01T00:00:00Z"
   },
-  "meta": { "request_id": "req_009", "version": "v1", "timestamp": "2026-04-17T10:20:00Z" },
+  "meta": {
+    "request_id": "req_009",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:20:00Z"
+  },
   "error": null
 }
 ```
 
 **Erros:**
 
-| Status | Código | Quando |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Tenant já está cancelado ou no plano Free (`price_cents = 0`) |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | — |
+| Status | Código         | Quando                                                        |
+| ------ | -------------- | ------------------------------------------------------------- |
+| 400    | `BAD_REQUEST`  | Tenant já está cancelado ou no plano Free (`price_cents = 0`) |
+| 401    | `UNAUTHORIZED` | —                                                             |
+| 403    | `FORBIDDEN`    | —                                                             |
 
 ---
 
@@ -953,7 +1009,11 @@ Retorna o consumo atual do tenant em relação aos limites do plano ativo.
       "unlimited": false
     }
   },
-  "meta": { "request_id": "req_010", "version": "v1", "timestamp": "2026-04-17T10:00:00Z" },
+  "meta": {
+    "request_id": "req_010",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:00:00Z"
+  },
   "error": null
 }
 ```
@@ -970,10 +1030,10 @@ Histórico de eventos de cobrança do tenant (audit log).
 
 **Query params:**
 
-| Param | Tipo | Obrigatório | Default | Notas |
-|---|---|---|---|---|
-| `limit` | integer | ❌ | 20 | Máx 100 |
-| `cursor` | string | ❌ | — | Cursor de paginação |
+| Param    | Tipo    | Obrigatório | Default | Notas               |
+| -------- | ------- | ----------- | ------- | ------------------- |
+| `limit`  | integer | ❌          | 20      | Máx 100             |
+| `cursor` | string  | ❌          | —       | Cursor de paginação |
 
 **Resposta — 200 OK:**
 
@@ -996,7 +1056,11 @@ Histórico de eventos de cobrança do tenant (audit log).
     ],
     "next_cursor": null
   },
-  "meta": { "request_id": "req_011", "version": "v1", "timestamp": "2026-04-17T10:00:00Z" },
+  "meta": {
+    "request_id": "req_011",
+    "version": "v1",
+    "timestamp": "2026-04-17T10:00:00Z"
+  },
   "error": null
 }
 ```
@@ -1005,20 +1069,20 @@ Histórico de eventos de cobrança do tenant (audit log).
 
 **Tipos de evento possíveis:**
 
-| `event_type` | Descrição |
-|---|---|
-| `subscription.created` | Nova subscription criada |
-| `subscription.activated` | Tornou-se ativa (trial encerrado ou pagamento confirmado) |
-| `subscription.past_due` | Pagamento falhou |
-| `subscription.downgraded` | Rebaixamento automático após grace period |
-| `subscription.reactivated` | Reativação após downgrade |
-| `subscription.cancelled` | Cancelamento agendado confirmado |
-| `invoice.paid` | Fatura paga com sucesso |
-| `invoice.payment_failed` | Falha no pagamento |
-| `plan.changes_applied` | Mudanças agendadas de plano aplicadas em current_period_end |
-| `data_purge_scheduled` | Expurgo de dados agendado |
-| `data_purge_completed` | Dados expurgados com sucesso |
-| `data_purge_failed` | Falha no expurgo de dados (super_admin alertado) |
+| `event_type`               | Descrição                                                   |
+| -------------------------- | ----------------------------------------------------------- |
+| `subscription.created`     | Nova subscription criada                                    |
+| `subscription.activated`   | Tornou-se ativa (trial encerrado ou pagamento confirmado)   |
+| `subscription.past_due`    | Pagamento falhou                                            |
+| `subscription.downgraded`  | Rebaixamento automático após grace period                   |
+| `subscription.reactivated` | Reativação após downgrade                                   |
+| `subscription.cancelled`   | Cancelamento agendado confirmado                            |
+| `invoice.paid`             | Fatura paga com sucesso                                     |
+| `invoice.payment_failed`   | Falha no pagamento                                          |
+| `plan.changes_applied`     | Mudanças agendadas de plano aplicadas em current_period_end |
+| `data_purge_scheduled`     | Expurgo de dados agendado                                   |
+| `data_purge_completed`     | Dados expurgados com sucesso                                |
+| `data_purge_failed`        | Falha no expurgo de dados (super_admin alertado)            |
 
 ---
 
@@ -1032,8 +1096,8 @@ Recebe eventos do Stripe. **Autenticação via HMAC** — não usa JWT. O header
 
 **Headers obrigatórios:**
 
-| Header | Valor |
-|---|---|
+| Header             | Valor                         |
+| ------------------ | ----------------------------- |
 | `Stripe-Signature` | Assinatura gerada pelo Stripe |
 
 **Resposta — 200 OK:** `{}` (Stripe exige 2xx para considerar entregue)
@@ -1050,12 +1114,12 @@ Recebe eventos do Stripe. **Autenticação via HMAC** — não usa JWT. O header
 
 Todas as respostas autenticadas do tenant incluem o header `X-Billing-Warning` quando aplicável:
 
-| Valor | Quando | O que exibir no frontend |
-|---|---|---|
-| `past_due` | Subscription em `past_due` | Banner amarelo: "Pagamento pendente. Regularize até [data] para evitar perda de acesso." |
-| `downgraded` | Subscription em `downgraded` | Banner vermelho: "Conta rebaixada para Free. Dados excluídos em [data_deletion_scheduled_at]." |
-| `trial_ending` | Trial encerra em ≤ 3 dias | Banner azul: "Seu trial encerra em X dias. Adicione um cartão para continuar." |
-| `cancellation_scheduled` | `cancelled_at` preenchido | Banner informativo: "Sua subscription encerra em [current_period_end]." |
+| Valor                    | Quando                       | O que exibir no frontend                                                                       |
+| ------------------------ | ---------------------------- | ---------------------------------------------------------------------------------------------- |
+| `past_due`               | Subscription em `past_due`   | Banner amarelo: "Pagamento pendente. Regularize até [data] para evitar perda de acesso."       |
+| `downgraded`             | Subscription em `downgraded` | Banner vermelho: "Conta rebaixada para Free. Dados excluídos em [data_deletion_scheduled_at]." |
+| `trial_ending`           | Trial encerra em ≤ 3 dias    | Banner azul: "Seu trial encerra em X dias. Adicione um cartão para continuar."                 |
+| `cancellation_scheduled` | `cancelled_at` preenchido    | Banner informativo: "Sua subscription encerra em [current_period_end]."                        |
 
 O frontend deve ler este header em todas as respostas e exibir o banner correspondente globalmente (ex: topo da aplicação).
 
@@ -1076,6 +1140,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como super_admin, quero ver todos os planos existentes (ativos, inativos, exclusivos e do sistema) para ter visão completa do catálogo.
 
 **Critérios de aceite:**
+
 - Exibir lista paginada com nome, preço, módulos, status ativo/inativo, visibilidade (público/exclusivo) e quantidade de subscribers ativos.
 - Permitir filtrar por: `is_active`, `is_public`, `is_system`.
 - Itens sem subscriber devem ser visualmente distintos dos que têm.
@@ -1090,6 +1155,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como super_admin, quero criar um plano customizado com módulos, limites, preço e trial configuráveis, para atender clientes Enterprise com condições específicas.
 
 **Critérios de aceite:**
+
 - Formulário com campos: nome (slug), nome de exibição, descrição, preço em centavos, moeda, período de cobrança, módulos habilitados (multi-select), max seats, max integrações, dias de histórico, dias de trial, flags de features, visibilidade pública/exclusiva, status ativo/inativo.
 - Validações no frontend antes de submeter: `name` sem espaços; ao menos `core` em `modules[]`; `price_cents ≥ 0`.
 - Exibir erro `409` como: "Já existe um plano com esse identificador."
@@ -1105,6 +1171,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como super_admin, quero editar qualquer campo de um plano (inclusive preço e módulos), para ajustar condições sem precisar criar um novo plano.
 
 **Critérios de aceite:**
+
 - Formulário pré-preenchido com os dados atuais.
 - Ao reduzir `modules`, `max_seats`, `max_integrations` ou `history_days`, exibir modal de confirmação: "Este plano tem X subscribers ativos. Escolha quando aplicar as mudanças:" com opções:
   - ⚡ "Aplicar imediatamente" (marca `apply_at_renewal: false` — propagação em até 60s)
@@ -1124,6 +1191,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como super_admin, quero ativar ou desativar um plano para controlar quais estão disponíveis no checkout, sem precisar deletá-los.
 
 **Critérios de aceite:**
+
 - Toggle de status visível na listagem e no detalhe do plano.
 - Desativar plano com subscribers ativos é permitido — apenas novos não podem subscrever. Exibir aviso: "Subscribers existentes continuarão neste plano até cancelarem ou mudarem."
 - Reativar plano exige apenas confirmar a ação.
@@ -1138,6 +1206,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como super_admin, quero deletar planos customizados que não são mais necessários.
 
 **Critérios de aceite:**
+
 - Botão de exclusão disponível apenas quando `is_system: false`.
 - Se `active_subscriptions_count > 0`, exibir mensagem de erro: "Este plano tem subscribers ativos. Desative-o primeiro ou mova os tenants para outro plano."
 - Confirmar exclusão com modal antes de submeter o `DELETE`.
@@ -1153,6 +1222,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como super_admin, quero vincular um plano `is_public: false` a um tenant específico para que ele possa subscrevê-lo no checkout.
 
 **Critérios de aceite:**
+
 - Dentro do detalhe de um plano exclusivo, exibir seção "Tenants com acesso" com lista dos assignments.
 - Campo de busca de tenant por nome ou ID para adicionar novo vínculo.
 - Ao vincular, exibir confirmação: "Tenant [nome] agora pode subscrever este plano."
@@ -1172,6 +1242,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como org_admin ou manager, quero ver qual plano meu tenant usa atualmente, quais módulos estão ativos e quanto do limite de seats e integrações já consumimos.
 
 **Critérios de aceite:**
+
 - Exibir nome do plano, preço/ciclo (`billing_period`), data de renovação (`current_period_end`), status da subscription.
 - Exibir gráficos ou barras de progresso para: seats usados/limite e integrações usadas/limite.
 - Para limites `unlimited: true`, exibir "Ilimitado" em vez de barra de progresso.
@@ -1188,6 +1259,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como org_admin, quero comparar os planos disponíveis e fazer upgrade para um plano pago via Stripe Checkout.
 
 **Critérios de aceite:**
+
 - Listar planos com destaque no plano atual (`is_current: true`).
 - Exibir módulos, limites e preço de cada plano.
 - Botão "Assinar" ou "Fazer upgrade" em planos não-atuais.
@@ -1205,6 +1277,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como org_admin, quero atualizar meu cartão de crédito e consultar faturas — sem que esses dados passem pela API da moasy.
 
 **Critérios de aceite:**
+
 - Botão "Gerenciar pagamento" que chama `POST /billing/portal` e redireciona para o Stripe Customer Portal.
 - Disponível apenas para tenants com plano pago (`price_cents > 0`).
 - Se tenant nunca teve plano pago (sem `provider_customer_id`), o botão não aparece ou exibe tooltip: "Disponível após assinar um plano pago."
@@ -1220,6 +1293,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como org_admin, quero cancelar minha subscription, mantendo acesso até o fim do período pago.
 
 **Critérios de aceite:**
+
 - Botão "Cancelar assinatura" disponível apenas para subscriptions com `status: active | trialing`.
 - Modal de confirmação com: data de encerramento do acesso (`current_period_end`), aviso sobre perda de módulos.
 - Após confirmar, chamar `POST /billing/cancel` e exibir: "Assinatura cancelada. Você terá acesso até [data]."
@@ -1236,6 +1310,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como org_admin, quero ser avisado claramente quando meu pagamento falhar e saber quanto tempo tenho antes de perder acesso aos módulos premium.
 
 **Critérios de aceite:**
+
 - Detectar header `X-Billing-Warning: past_due` em qualquer resposta da API.
 - Exibir banner amarelo fixo no topo: "Pagamento pendente. Regularize até [past_due_since + 10 dias] para evitar rebaixamento do plano."
 - Botão no banner: "Atualizar pagamento" → abre Stripe Customer Portal via `POST /billing/portal`.
@@ -1251,6 +1326,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como org_admin, quero saber que minha conta foi rebaixada para Free por inadimplência e ter clareza sobre quando meus dados serão excluídos.
 
 **Critérios de aceite:**
+
 - Detectar header `X-Billing-Warning: downgraded`.
 - Exibir banner vermelho fixo: "Conta rebaixada para Free. Seus dados serão excluídos em [data_deletion_scheduled_at]. Reative agora para preservá-los."
 - Botão "Reativar" → redireciona para listagem de planos com `POST /billing/checkout`.
@@ -1266,6 +1342,7 @@ As histórias abaixo cobrem as duas interfaces: **Admin da Plataforma** (super_a
 > Como org_admin, quero consultar o histórico de eventos da minha subscription para fins de auditoria.
 
 **Critérios de aceite:**
+
 - Lista paginada com: tipo de evento (traduzido para português), data/hora, provedor.
 - Labels amigáveis por `event_type` (ex: `invoice.paid` → "Fatura paga", `subscription.downgraded` → "Plano rebaixado automaticamente").
 - Paginação via cursor.
@@ -1290,6 +1367,7 @@ O módulo de Billing não pertence explicitamente a nenhuma das fases 1–4 atua
 **Proposta:** Inserir como **Fase 0.5 — Monetização & Acesso** a ser implementado após estabilizar a Fase 1, antes de abrir para beta público. Isso garante que o produto já tenha a estrutura de planos operacional quando começar a crescer.
 
 Dependências mínimas para implementar:
+
 - Fase 1 completa (Auth, IAM, Tenants)
 - Conta Stripe configurada (API keys, webhook endpoint registrado)
 
@@ -1297,17 +1375,18 @@ Dependências mínimas para implementar:
 
 ## 11. Riscos e não-decisões
 
-| Risco | Mitigação |
-|---|---|
-| Stripe webhook fora de ordem (ex: invoice antes de subscription) | ✅ Idempotência por `provider_subscription_id` + log em `BillingEvent` |
-| Tenant em `past_due` continua usando features premium | ✅ Grace period explícito + job periódico de enforce |
-| Tenant reativa após D+30 e espera dado existente | ✅ Email de aviso explícito antes do D+30; tela de onboarding após reativação tardia. **Decisão comercial:** Reativação não gera crédito pelos dias de downgrade — Stripe não emite crédito automático. |
-| Job de expurgo falha | ✅ Retry com backoff exponencial (3 tentativas); DLQ para falhas persistentes; alerta `super_admin` via Slack/email |
-| Dados de cartão tratados aqui → PCI | ✅ Stripe Hosted Checkout — **nenhum dado de cartão passa pela API moasy** |
-| Webhook endpoint sem rate limit | ✅ Rate limit de 100 req/min por IP — previne flood de HMAC inválidos |
-| Mudanças de plano afetam tenants pagantes no meio do ciclo | ✅ Flag `apply_at_renewal` — mudanças agendadas em `pending_plan_changes` e aplicadas em `current_period_end` |
+| Risco                                                            | Mitigação                                                                                                                                                                                               |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Stripe webhook fora de ordem (ex: invoice antes de subscription) | ✅ Idempotência por `provider_subscription_id` + log em `BillingEvent`                                                                                                                                  |
+| Tenant em `past_due` continua usando features premium            | ✅ Grace period explícito + job periódico de enforce                                                                                                                                                    |
+| Tenant reativa após D+30 e espera dado existente                 | ✅ Email de aviso explícito antes do D+30; tela de onboarding após reativação tardia. **Decisão comercial:** Reativação não gera crédito pelos dias de downgrade — Stripe não emite crédito automático. |
+| Job de expurgo falha                                             | ✅ Retry com backoff exponencial (3 tentativas); DLQ para falhas persistentes; alerta `super_admin` via Slack/email                                                                                     |
+| Dados de cartão tratados aqui → PCI                              | ✅ Stripe Hosted Checkout — **nenhum dado de cartão passa pela API moasy**                                                                                                                              |
+| Webhook endpoint sem rate limit                                  | ✅ Rate limit de 100 req/min por IP — previne flood de HMAC inválidos                                                                                                                                   |
+| Mudanças de plano afetam tenants pagantes no meio do ciclo       | ✅ Flag `apply_at_renewal` — mudanças agendadas em `pending_plan_changes` e aplicadas em `current_period_end`                                                                                           |
 
 **Fora do escopo inicial (pós-MVP billing):**
+
 - Cobrança baseada em uso (API calls, eventos processados)
 - Multi-moeda dinâmica
 - Cupons e promoções (pode ser feito no Stripe sem código extra)
@@ -1340,7 +1419,7 @@ Dependências mínimas para implementar:
 
 ## 13. Plano de Implementação
 
-O módulo é implementado em **6 etapas sequenciais**. Cada etapa é um PR independente e deployável. Nenhuma etapa quebra funcionalidade existente.
+O módulo é implementado em **7 etapas sequenciais** (6 originais + Etapa 7: integração Stripe). Todas concluídas. Cada etapa é um PR independente e deployável. Nenhuma etapa quebra funcionalidade existente.
 
 ---
 
@@ -1352,7 +1431,7 @@ O módulo é implementado em **6 etapas sequenciais**. Cada etapa é um PR indep
 
 Criar uma nova migration com os seguintes modelos:
 
-```prisma
+````prisma
 // Adicionar ao enum PlatformRole (não quebra — additive)
 // PlatformRole já existe; platform_role é campo novo em PlatformAccount
 
@@ -1475,8 +1554,9 @@ model BillingEvent {
   @@index([occurredAt])
   @@index([providerEventId])  // índice para lookup rápido na verificação de duplicação
 }
-```
-```
+````
+
+````
 
 > **Nota de boundary:** `Subscription.tenantId` tem `@unique` — garante que cada tenant tem exatamente uma subscription ativa. Não usar FK para `Tenant` neste schema para manter isolamento de módulo; a integridade é verificada na camada de serviço.
 
@@ -1505,7 +1585,7 @@ app.decorate('requirePlatformRole', (...allowedRoles: string[]) => {
     }
   };
 });
-```
+````
 
 #### 1.3 Alterar `modules/auth/service.ts`
 
@@ -1549,6 +1629,7 @@ await prisma.subscriptionHistory.create({
 ```
 
 **Arquivos alterados nesta etapa:**
+
 - `prisma/schema.prisma` — novos modelos + `platformRole` em `PlatformAccount`
 - `src/plugins/auth.ts` — `JwtUser` type + `requirePlatformRole` decorator
 - `src/modules/auth/service.ts` — JWT payload + criação de Subscription on register
@@ -1563,9 +1644,9 @@ await prisma.subscriptionHistory.create({
 
 ```typescript
 // src/modules/billing/entitlement.ts
-import { prisma } from '../../lib/prisma.js';
-import { fail } from '../../lib/http.js';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import { prisma } from "../../lib/prisma.js";
+import { fail } from "../../lib/http.js";
+import type { FastifyReply, FastifyRequest } from "fastify";
 
 type EntitlementCache = {
   modules: string[];
@@ -1587,7 +1668,7 @@ async function loadEntitlement(tenantId: string): Promise<EntitlementCache> {
 
   const sub = await prisma.subscription.findUnique({
     where: { tenantId },
-    include: { plan: true }
+    include: { plan: true },
   });
 
   // Fallback: sem subscription = Free hardcoded (não deve ocorrer em produção)
@@ -1603,13 +1684,13 @@ async function loadEntitlement(tenantId: string): Promise<EntitlementCache> {
         expiresAt: Date.now() + CACHE_TTL_MS,
       }
     : {
-        modules: ['core'],
+        modules: ["core"],
         features: {},
         maxSeats: 2,
         maxIntegrations: 1,
         historyDays: 30,
         trialEndsAt: null,
-        status: 'active',
+        status: "active",
         expiresAt: Date.now() + CACHE_TTL_MS,
       };
 
@@ -1628,14 +1709,22 @@ export function requireModule(moduleName: string) {
     const ent = await loadEntitlement(tenantId);
 
     // Subscriptions downgraded ou expired bloqueiam módulos premium
-    const blockedStatuses = ['expired'];
-    if (blockedStatuses.includes(ent.status) || !ent.modules.includes(moduleName)) {
+    const blockedStatuses = ["expired"];
+    if (
+      blockedStatuses.includes(ent.status) ||
+      !ent.modules.includes(moduleName)
+    ) {
       return reply.status(402).send(
-        fail(request, 'UPGRADE_REQUIRED', `Module "${moduleName}" requires a higher plan.`, {
-          module_required: moduleName,
-          current_plan_modules: ent.modules,
-          upgrade_url: 'https://moasy.tech/billing/upgrade'
-        })
+        fail(
+          request,
+          "UPGRADE_REQUIRED",
+          `Module "${moduleName}" requires a higher plan.`,
+          {
+            module_required: moduleName,
+            current_plan_modules: ent.modules,
+            upgrade_url: "https://moasy.tech/billing/upgrade",
+          },
+        ),
       );
     }
   };
@@ -1647,9 +1736,15 @@ export function requireFeature(featureName: string) {
     const ent = await loadEntitlement(tenantId);
 
     if (!ent.features[featureName]) {
-      return reply.status(402).send(
-        fail(request, 'UPGRADE_REQUIRED', `Feature "${featureName}" requires a higher plan.`)
-      );
+      return reply
+        .status(402)
+        .send(
+          fail(
+            request,
+            "UPGRADE_REQUIRED",
+            `Feature "${featureName}" requires a higher plan.`,
+          ),
+        );
     }
   };
 }
@@ -1663,30 +1758,33 @@ Em `src/app.ts`, adicionar um `onSend` hook para injetar o header:
 
 ```typescript
 // src/app.ts — adicionar no topo do arquivo:
-import { loadEntitlement } from './modules/billing/entitlement.js';
+import { loadEntitlement } from "./modules/billing/entitlement.js";
 
 // Adicionar ao registrar os plugins:
-app.addHook('onSend', async (request, reply) => {
+app.addHook("onSend", async (request, reply) => {
   const user = request.user as { tenant_id?: string } | undefined;
   if (!user?.tenant_id) return;
 
   const ent = await loadEntitlement(user.tenant_id).catch(() => null);
   if (!ent) return;
 
-  if (ent.status === 'past_due') {
-    reply.header('X-Billing-Warning', 'past_due');
-  } else if (ent.status === 'downgraded') {
-    reply.header('X-Billing-Warning', 'downgraded');
-  } else if (ent.status === 'trialing' && ent.trialEndsAt) {
-    const daysLeft = Math.ceil((ent.trialEndsAt.getTime() - Date.now()) / 86_400_000);
-    if (daysLeft <= 3) reply.header('X-Billing-Warning', 'trial_ending');
-  } else if (ent.status === 'cancelled') {
-    reply.header('X-Billing-Warning', 'cancellation_scheduled');
+  if (ent.status === "past_due") {
+    reply.header("X-Billing-Warning", "past_due");
+  } else if (ent.status === "downgraded") {
+    reply.header("X-Billing-Warning", "downgraded");
+  } else if (ent.status === "trialing" && ent.trialEndsAt) {
+    const daysLeft = Math.ceil(
+      (ent.trialEndsAt.getTime() - Date.now()) / 86_400_000,
+    );
+    if (daysLeft <= 3) reply.header("X-Billing-Warning", "trial_ending");
+  } else if (ent.status === "cancelled") {
+    reply.header("X-Billing-Warning", "cancellation_scheduled");
   }
 });
 ```
 
 **Arquivos alterados nesta etapa:**
+
 - `src/modules/billing/entitlement.ts` — novo arquivo
 - `src/app.ts` — hook `onSend` para `X-Billing-Warning`
 
@@ -1702,27 +1800,32 @@ Cada módulo adiciona o guard como `preHandler` nas rotas relevantes:
 
 ```typescript
 // Exemplo em src/modules/sla/routes.ts
-import { requireModule } from '../billing/entitlement.js';
+import { requireModule } from "../billing/entitlement.js";
 
 // Nas rotas que exigem o módulo SLA:
-app.get('/sla/templates', {
-  preHandler: [app.authenticate, requireModule('sla')]
-}, handler);
+app.get(
+  "/sla/templates",
+  {
+    preHandler: [app.authenticate, requireModule("sla")],
+  },
+  handler,
+);
 ```
 
 #### 3.2 Mapeamento de módulos × rotas
 
-| Módulo | Rota protegida | Guard | Motivo |
-|---|---|---|---|
-| `sla` | `/sla/*` | `requireModule('sla')` | Free não tem SLA |
-| `cogs` | `/cogs/*` | `requireModule('cogs')` | Free e Starter não têm COGS |
-| `intel` | `/intel/*` | `requireModule('intel')` | Somente Enterprise |
-| `dora` | `/dora/scorecard` e rotas de MTTR/CFR | `requireFeature('dora_full_scorecard')` | Free tem `dora` em `modules[]` mas `dora_full_scorecard: false` |
-| `comms` | `/comms/*` (alertas) | `requireFeature('alerts')` | Free não tem alertas |
+| Módulo  | Rota protegida                        | Guard                                   | Motivo                                                          |
+| ------- | ------------------------------------- | --------------------------------------- | --------------------------------------------------------------- |
+| `sla`   | `/sla/*`                              | `requireModule('sla')`                  | Free não tem SLA                                                |
+| `cogs`  | `/cogs/*`                             | `requireModule('cogs')`                 | Free e Starter não têm COGS                                     |
+| `intel` | `/intel/*`                            | `requireModule('intel')`                | Somente Enterprise                                              |
+| `dora`  | `/dora/scorecard` e rotas de MTTR/CFR | `requireFeature('dora_full_scorecard')` | Free tem `dora` em `modules[]` mas `dora_full_scorecard: false` |
+| `comms` | `/comms/*` (alertas)                  | `requireFeature('alerts')`              | Free não tem alertas                                            |
 
 > `/dora/deploys`, `/dora/lead-time` e `/dora/history/*` ficam **sem guard de 402** — ingestão e histórico funcionam no Free. O limite `historyDays` é aplicado filtrando o intervalo de datas na query (não via 402).
 
 **Arquivos alterados nesta etapa:**
+
 - `src/modules/sla/routes.ts`
 - `src/modules/cogs/routes.ts`
 - `src/modules/intel/routes.ts`
@@ -1751,86 +1854,91 @@ src/modules/billing/
 
 ```typescript
 // src/modules/billing/stripe.ts
-import Stripe from 'stripe';
+import Stripe from "stripe";
 
 const stripeKey = process.env.STRIPE_SECRET_KEY;
-if (!stripeKey) throw new Error('STRIPE_SECRET_KEY env var is required');
+if (!stripeKey) throw new Error("STRIPE_SECRET_KEY env var is required");
 
-if (!process.env.STRIPE_WEBHOOK_SECRET) throw new Error('STRIPE_WEBHOOK_SECRET env var is required');
+if (!process.env.STRIPE_WEBHOOK_SECRET)
+  throw new Error("STRIPE_WEBHOOK_SECRET env var is required");
 export const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
 
-export const stripe = new Stripe(stripeKey, { apiVersion: '2024-06-20' });
+export const stripe = new Stripe(stripeKey, { apiVersion: "2024-06-20" });
 ```
 
 > **Variáveis de ambiente novas:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
 
 #### 4.2 `billing/service.ts` — funções principais
 
-| Função | Descrição |
-|---|---|
-| `listPlansForTenant(tenantId)` | Planos `is_public + is_active` + exclusivos do tenant |
-| `listAllPlans(filters)` | Todos os planos (super_admin) |
-| `createPlan(input)` | Cria plano, valida módulos e stripe_price_id |
-| `updatePlan(planId, input)` | Atualiza, retorna `affected_subscriptions` |
-| `deletePlan(planId)` | Valida `is_system` e sem subscribers |
-| `createAssignment(planId, tenantId)` | Vincula plano exclusivo |
-| `deleteAssignment(planId, tenantId)` | Remove vínculo |
-| `getSubscription(tenantId)` | Busca subscription com plano |
-| `createCheckoutSession(tenantId, planId, urls)` | Cria Stripe Checkout Session |
-| `createPortalSession(tenantId, returnUrl)` | Cria Stripe Customer Portal |
-| `cancelSubscription(tenantId)` | Agenda cancelamento via Stripe |
-| `getUsage(tenantId)` | Calcula seats e integrações usados |
-| `listBillingEvents(tenantId, query)` | Lista eventos paginados |
-| `handleStripeWebhook(rawBody, signature)` | Processa eventos Stripe, cria SubscriptionHistory em upgrades/downgrades |
+| Função                                          | Descrição                                                                |
+| ----------------------------------------------- | ------------------------------------------------------------------------ |
+| `listPlansForTenant(tenantId)`                  | Planos `is_public + is_active` + exclusivos do tenant                    |
+| `listAllPlans(filters)`                         | Todos os planos (super_admin)                                            |
+| `createPlan(input)`                             | Cria plano, valida módulos e stripe_price_id                             |
+| `updatePlan(planId, input)`                     | Atualiza, retorna `affected_subscriptions`                               |
+| `deletePlan(planId)`                            | Valida `is_system` e sem subscribers                                     |
+| `createAssignment(planId, tenantId)`            | Vincula plano exclusivo                                                  |
+| `deleteAssignment(planId, tenantId)`            | Remove vínculo                                                           |
+| `getSubscription(tenantId)`                     | Busca subscription com plano                                             |
+| `createCheckoutSession(tenantId, planId, urls)` | Cria Stripe Checkout Session                                             |
+| `createPortalSession(tenantId, returnUrl)`      | Cria Stripe Customer Portal                                              |
+| `cancelSubscription(tenantId)`                  | Agenda cancelamento via Stripe                                           |
+| `getUsage(tenantId)`                            | Calcula seats e integrações usados                                       |
+| `listBillingEvents(tenantId, query)`            | Lista eventos paginados                                                  |
+| `handleStripeWebhook(rawBody, signature)`       | Processa eventos Stripe, cria SubscriptionHistory em upgrades/downgrades |
 
 **Implementação da idempotência do webhook handler:**
 
 ```typescript
 // Em handleStripeWebhook()
 export async function handleStripeWebhook(rawBody: string, signature: string) {
-  const event = stripe.webhooks.constructEvent(rawBody, signature, WEBHOOK_SECRET);
-  
+  const event = stripe.webhooks.constructEvent(
+    rawBody,
+    signature,
+    WEBHOOK_SECRET,
+  );
+
   // ✅ IDEMPOTÊNCIA: Verificar se evento já foi processado
   const existing = await prisma.billingEvent.findUnique({
-    where: { providerEventId: event.id }
+    where: { providerEventId: event.id },
   });
-  
+
   if (existing) {
     // Evento duplicado — retornar sucesso sem reprocessar
-    return { processed: false, reason: 'duplicate' };
+    return { processed: false, reason: "duplicate" };
   }
-  
+
   // Processar evento conforme tipo
   switch (event.type) {
-    case 'checkout.session.completed':
+    case "checkout.session.completed":
       await handleCheckoutCompleted(event.data.object);
       break;
-    case 'invoice.paid':
+    case "invoice.paid":
       await handleInvoicePaid(event.data.object);
       break;
-    case 'invoice.payment_failed':
+    case "invoice.payment_failed":
       await handlePaymentFailed(event.data.object);
       break;
-    case 'customer.subscription.updated':
+    case "customer.subscription.updated":
       await handleSubscriptionUpdated(event.data.object);
       break;
-    case 'customer.subscription.deleted':
+    case "customer.subscription.deleted":
       await handleSubscriptionDeleted(event.data.object);
       break;
   }
-  
+
   // Registrar evento como processado
   await prisma.billingEvent.create({
     data: {
       tenantId: extractTenantId(event),
       eventType: event.type,
-      provider: 'stripe',
-      providerEventId: event.id,  // ✅ Garante idempotência
+      provider: "stripe",
+      providerEventId: event.id, // ✅ Garante idempotência
       rawPayload: event,
-      occurredAt: new Date(event.created * 1000)
-    }
+      occurredAt: new Date(event.created * 1000),
+    },
   });
-  
+
   return { processed: true };
 }
 ```
@@ -1840,11 +1948,11 @@ export async function handleStripeWebhook(rawBody: string, signature: string) {
 ```typescript
 // Validar que planos pagos têm stripe_price_id
 if (input.price_cents > 0 && !input.stripe_price_id) {
-  throw new Error('stripe_price_id is required for paid plans');
+  throw new Error("stripe_price_id is required for paid plans");
 }
 
 // Validar core obrigatório
-if (!input.modules?.includes('core')) {
+if (!input.modules?.includes("core")) {
   throw new Error('Module "core" is required in all plans');
 }
 ```
@@ -1854,27 +1962,55 @@ if (!input.modules?.includes('core')) {
 ```typescript
 export async function billingRoutes(app: FastifyInstance) {
   // GET /billing/plans — público, mas tenant_id opcional via JWT
-  app.get('/billing/plans', handler);
+  app.get("/billing/plans", handler);
 
   // Rotas autenticadas
-  app.get('/billing/subscription', { preHandler: [app.authenticate, app.requirePermission('billing.read')] }, handler);
-  app.get('/billing/usage',        { preHandler: [app.authenticate, app.requirePermission('billing.read')] }, handler);
-  app.get('/billing/events',       { preHandler: [app.authenticate, app.requirePermission('billing.manage')] }, handler);
-  app.post('/billing/checkout',    { preHandler: [app.authenticate, app.requirePermission('billing.manage')] }, handler);
-  app.post('/billing/portal',      { preHandler: [app.authenticate, app.requirePermission('billing.manage')] }, handler);
-  app.post('/billing/cancel',      { preHandler: [app.authenticate, app.requirePermission('billing.manage')] }, handler);
+  app.get(
+    "/billing/subscription",
+    { preHandler: [app.authenticate, app.requirePermission("billing.read")] },
+    handler,
+  );
+  app.get(
+    "/billing/usage",
+    { preHandler: [app.authenticate, app.requirePermission("billing.read")] },
+    handler,
+  );
+  app.get(
+    "/billing/events",
+    { preHandler: [app.authenticate, app.requirePermission("billing.manage")] },
+    handler,
+  );
+  app.post(
+    "/billing/checkout",
+    { preHandler: [app.authenticate, app.requirePermission("billing.manage")] },
+    handler,
+  );
+  app.post(
+    "/billing/portal",
+    { preHandler: [app.authenticate, app.requirePermission("billing.manage")] },
+    handler,
+  );
+  app.post(
+    "/billing/cancel",
+    { preHandler: [app.authenticate, app.requirePermission("billing.manage")] },
+    handler,
+  );
 
   // Webhook Stripe — sem JWT, com HMAC + rate limit
-  app.post('/billing/webhooks/stripe', {
-    config: {
-      rawBody: true,
-      rateLimit: {
-        max: 100,
-        timeWindow: '1 minute',
-        keyGenerator: (req) => req.ip // rate limit por IP
-      }
-    }
-  }, handler);
+  app.post(
+    "/billing/webhooks/stripe",
+    {
+      config: {
+        rawBody: true,
+        rateLimit: {
+          max: 100,
+          timeWindow: "1 minute",
+          keyGenerator: (req) => req.ip, // rate limit por IP
+        },
+      },
+    },
+    handler,
+  );
 }
 ```
 
@@ -1882,15 +2018,30 @@ export async function billingRoutes(app: FastifyInstance) {
 
 ```typescript
 export async function platformBillingRoutes(app: FastifyInstance) {
-  const guard = [app.authenticate, app.requirePlatformRole('super_admin', 'platform_admin')];
+  const guard = [
+    app.authenticate,
+    app.requirePlatformRole("super_admin", "platform_admin"),
+  ];
 
-  app.get('/platform/billing/plans',                              { preHandler: guard }, handler);
-  app.post('/platform/billing/plans',                             { preHandler: guard }, handler);
-  app.get('/platform/billing/plans/:plan_id',                     { preHandler: guard }, handler);
-  app.patch('/platform/billing/plans/:plan_id',                   { preHandler: guard }, handler);
-  app.delete('/platform/billing/plans/:plan_id',                  { preHandler: guard }, handler);
-  app.post('/platform/billing/plans/:plan_id/assignments',        { preHandler: guard }, handler);
-  app.delete('/platform/billing/plans/:plan_id/assignments/:tenant_id', { preHandler: guard }, handler);
+  app.get("/platform/billing/plans", { preHandler: guard }, handler);
+  app.post("/platform/billing/plans", { preHandler: guard }, handler);
+  app.get("/platform/billing/plans/:plan_id", { preHandler: guard }, handler);
+  app.patch("/platform/billing/plans/:plan_id", { preHandler: guard }, handler);
+  app.delete(
+    "/platform/billing/plans/:plan_id",
+    { preHandler: guard },
+    handler,
+  );
+  app.post(
+    "/platform/billing/plans/:plan_id/assignments",
+    { preHandler: guard },
+    handler,
+  );
+  app.delete(
+    "/platform/billing/plans/:plan_id/assignments/:tenant_id",
+    { preHandler: guard },
+    handler,
+  );
 }
 ```
 
@@ -1900,7 +2051,7 @@ export async function platformBillingRoutes(app: FastifyInstance) {
 
 ```typescript
 // Em createPlan() e updatePlan()
-if (!input.modules?.includes('core')) {
+if (!input.modules?.includes("core")) {
   throw new Error('Module "core" is required in all plans');
 }
 ```
@@ -1912,16 +2063,16 @@ if (!input.modules?.includes('core')) {
 if (input.apply_at_renewal && affectedSubscriptions > 0) {
   // Verificar se são mudanças que reduzem entitlements
   const isReduction = /* lógica para detectar redução em modules, max_seats, etc. */;
-  
+
   if (isReduction) {
     // Armazenar mudanças em cada subscription.pendingPlanChanges
     const changes = pick(input, ['modules', 'maxSeats', 'maxIntegrations', 'historyDays', 'features']);
-    
+
     await prisma.subscription.updateMany({
       where: { planId, status: { in: ['active', 'trialing'] } },
       data: { pendingPlanChanges: changes }
     });
-    
+
     // NÃO aplicar mudanças no Plan imediatamente
     // Serão aplicadas pelo job billing-apply-pending-changes em current_period_end
     return { /* resposta com mudanças agendadas */ };
@@ -1938,11 +2089,11 @@ await prisma.plan.update({ where: { id: planId }, data: input });
 
 ```typescript
 // src/app.ts
-import { billingRoutes } from './modules/billing/routes.js';
-import { platformBillingRoutes } from './modules/billing/platform-routes.js';
+import { billingRoutes } from "./modules/billing/routes.js";
+import { platformBillingRoutes } from "./modules/billing/platform-routes.js";
 
-app.register(billingRoutes, { prefix: '/api/v1' });
-app.register(platformBillingRoutes, { prefix: '/api/v1' });
+app.register(billingRoutes, { prefix: "/api/v1" });
+app.register(platformBillingRoutes, { prefix: "/api/v1" });
 ```
 
 #### 4.7 Adicionar permissões no `auth/service.ts`
@@ -1958,6 +2109,7 @@ manager: [
 ```
 
 **Arquivos criados/alterados:**
+
 - `src/modules/billing/schema.ts` — novo
 - `src/modules/billing/service.ts` — novo
 - `src/modules/billing/routes.ts` — novo
@@ -1981,18 +2133,18 @@ export async function applyPendingChanges() {
   const due = await prisma.subscription.findMany({
     where: {
       pendingPlanChanges: { not: null },
-      currentPeriodEnd: { lte: new Date() }
+      currentPeriodEnd: { lte: new Date() },
     },
-    include: { plan: true }
+    include: { plan: true },
   });
 
   for (const sub of due) {
     const changes = sub.pendingPlanChanges as Record<string, any>;
-    
+
     // ⚠️ IMPORTANTE: As mudanças são aplicadas RECRIANDO o Plan personalizado para este tenant,
     // NÃO alterando o Plan original que outros tenants podem estar usando.
     // Isso requer criar um novo Plan com os parâmetros ajustados.
-    
+
     // Se o plano original era público e shared, criar um plano exclusivo para este tenant
     const newPlan = await prisma.plan.create({
       data: {
@@ -2012,8 +2164,8 @@ export async function applyPendingChanges() {
         features: changes.features ?? sub.plan.features,
         isSystem: false,
         isPublic: false,
-        isActive: true
-      }
+        isActive: true,
+      },
     });
 
     await prisma.$transaction([
@@ -2022,24 +2174,24 @@ export async function applyPendingChanges() {
         where: { id: sub.id },
         data: {
           planId: newPlan.id,
-          pendingPlanChanges: null
-        }
+          pendingPlanChanges: null,
+        },
       }),
       // Criar assignment exclusivo
       prisma.planTenantAssignment.create({
         data: {
           planId: newPlan.id,
-          tenantId: sub.tenantId
-        }
+          tenantId: sub.tenantId,
+        },
       }),
       // Log
       prisma.billingEvent.create({
         data: {
           tenantId: sub.tenantId,
-          eventType: 'plan.changes_applied',
-          occurredAt: new Date()
-        }
-      })
+          eventType: "plan.changes_applied",
+          occurredAt: new Date(),
+        },
+      }),
     ]);
 
     invalidateEntitlementCache(sub.tenantId);
@@ -2048,7 +2200,8 @@ export async function applyPendingChanges() {
 ```
 
 > ⚠️ **NOTA IMPORTANTE**: Ao aplicar mudanças agendadas, o job CRIA UM NOVO PLANO EXCLUSIVO para o tenant ao invés de modificar o Plan original. Isso previne que mudanças agendadas de múltiplos tenants no mesmo plano se sobrescrevam. Planos criados dessa forma são marcados como `is_public: false` e vinculados ao tenant via `PlanTenantAssignment`.
-```
+
+````
 
 #### 5.2 Job `billing-enforce` (roda a cada hora)
 
@@ -2073,7 +2226,7 @@ export async function enforcePastDue() {
 
   for (const sub of overdue) {
     const previousPlan = sub.plan;  // Guardar referência para SubscriptionHistory
-    
+
     await prisma.$transaction([
       // Encerrar registro anterior no SubscriptionHistory
       prisma.subscriptionHistory.updateMany({
@@ -2126,7 +2279,7 @@ export async function enforcePastDue() {
     // Enfileirar email de aviso ao org_admin via comms module
   }
 }
-```
+````
 
 #### 5.3 Job `billing-purge` (roda diariamente)
 
@@ -2139,9 +2292,9 @@ const RETRY_DELAYS = [2000, 4000, 8000]; // backoff exponencial
 export async function purgeTenantData() {
   const due = await prisma.subscription.findMany({
     where: {
-      status: 'downgraded',
-      dataDeletionScheduledAt: { lte: new Date() }
-    }
+      status: "downgraded",
+      dataDeletionScheduledAt: { lte: new Date() },
+    },
   });
 
   for (const sub of due) {
@@ -2158,15 +2311,15 @@ export async function purgeTenantData() {
           // ... outros modelos de tenant
           prisma.subscription.update({
             where: { id: sub.id },
-            data: { status: 'expired', dataDeletionScheduledAt: null }
+            data: { status: "expired", dataDeletionScheduledAt: null },
           }),
           prisma.billingEvent.create({
             data: {
               tenantId: sub.tenantId,
-              eventType: 'data_purge_completed',
-              occurredAt: new Date()
-            }
-          })
+              eventType: "data_purge_completed",
+              occurredAt: new Date(),
+            },
+          }),
         ]);
         success = true;
       } catch (error) {
@@ -2179,22 +2332,24 @@ export async function purgeTenantData() {
               subscriptionId: sub.id,
               error: error.message,
               attempts: MAX_RETRIES,
-              createdAt: new Date()
-            }
+              createdAt: new Date(),
+            },
           });
           await prisma.billingEvent.create({
             data: {
               tenantId: sub.tenantId,
-              eventType: 'data_purge_failed',
+              eventType: "data_purge_failed",
               rawPayload: { error: error.message, attempts: MAX_RETRIES },
-              occurredAt: new Date()
-            }
+              occurredAt: new Date(),
+            },
           });
           // Alertar super_admin via Slack/email
           // TODO: integrar com módulo comms para enviar alerta
         } else {
           // Aguardar antes de tentar novamente
-          await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt - 1]));
+          await new Promise((resolve) =>
+            setTimeout(resolve, RETRY_DELAYS[attempt - 1]),
+          );
         }
       }
     }
@@ -2227,12 +2382,13 @@ Os jobs são registrados no scheduler interno (jobs table / worker loop que já 
 
 ```typescript
 // src/lib/scheduler.ts — adicionar
-schedule('billing-apply-pending', '0 */6 * * *', applyPendingChanges); // a cada 6h
-schedule('billing-enforce', '0 * * * *', enforcePastDue);              // a cada hora
-schedule('billing-purge', '0 3 * * *', purgeTenantData);               // 3h da manhã
+schedule("billing-apply-pending", "0 */6 * * *", applyPendingChanges); // a cada 6h
+schedule("billing-enforce", "0 * * * *", enforcePastDue); // a cada hora
+schedule("billing-purge", "0 3 * * *", purgeTenantData); // 3h da manhã
 ```
 
 **Arquivos criados/alterados:**
+
 - `src/modules/billing/jobs/apply-pending-changes.ts` — novo
 - `src/modules/billing/jobs/enforce-past-due.ts` — novo
 - `src/modules/billing/jobs/purge-tenant-data.ts` — novo (com retry + DLQ)
@@ -2252,47 +2408,83 @@ schedule('billing-purge', '0 3 * * *', purgeTenantData);               // 3h da 
 
 const PLANS = [
   {
-    name: 'free', displayName: 'Free', priceCents: 0, billingPeriod: 'monthly',
-    modules: ['core', 'integrations', 'dora'],
-    maxSeats: 2, maxIntegrations: 1, historyDays: 30, trialDays: 0,
-    features: { alerts: false, api_webhooks: false, dora_full_scorecard: false },
-    isSystem: true, isPublic: true, isActive: true
+    name: "free",
+    displayName: "Free",
+    priceCents: 0,
+    billingPeriod: "monthly",
+    modules: ["core", "integrations", "dora"],
+    maxSeats: 2,
+    maxIntegrations: 1,
+    historyDays: 30,
+    trialDays: 0,
+    features: {
+      alerts: false,
+      api_webhooks: false,
+      dora_full_scorecard: false,
+    },
+    isSystem: true,
+    isPublic: true,
+    isActive: true,
   },
   {
-    name: 'starter', displayName: 'Starter', priceCents: 4900, billingPeriod: 'monthly',
+    name: "starter",
+    displayName: "Starter",
+    priceCents: 4900,
+    billingPeriod: "monthly",
     stripePriceId: null, // preencher com price_xxx após criar no Stripe Dashboard
-    modules: ['core', 'integrations', 'dora', 'sla', 'comms'],
-    maxSeats: 5, maxIntegrations: 2, historyDays: 90, trialDays: 0,
+    modules: ["core", "integrations", "dora", "sla", "comms"],
+    maxSeats: 5,
+    maxIntegrations: 2,
+    historyDays: 90,
+    trialDays: 0,
     features: { alerts: true, api_webhooks: false, dora_full_scorecard: true },
-    isSystem: true, isPublic: true, isActive: true
+    isSystem: true,
+    isPublic: true,
+    isActive: true,
   },
   {
-    name: 'pro', displayName: 'Pro', priceCents: 14900, billingPeriod: 'monthly',
+    name: "pro",
+    displayName: "Pro",
+    priceCents: 14900,
+    billingPeriod: "monthly",
     stripePriceId: null, // preencher com price_xxx após criar no Stripe Dashboard
-    modules: ['core', 'integrations', 'dora', 'sla', 'cogs', 'comms'],
-    maxSeats: 15, maxIntegrations: null, historyDays: 365, trialDays: 14,
+    modules: ["core", "integrations", "dora", "sla", "cogs", "comms"],
+    maxSeats: 15,
+    maxIntegrations: null,
+    historyDays: 365,
+    trialDays: 14,
     features: { alerts: true, api_webhooks: true, dora_full_scorecard: true },
-    isSystem: true, isPublic: true, isActive: true
+    isSystem: true,
+    isPublic: true,
+    isActive: true,
   },
   {
-    name: 'enterprise', displayName: 'Enterprise', priceCents: 0, billingPeriod: 'monthly',
-    modules: ['core', 'integrations', 'dora', 'sla', 'cogs', 'intel', 'comms'],
-    maxSeats: null, maxIntegrations: null, historyDays: null, trialDays: 0,
+    name: "enterprise",
+    displayName: "Enterprise",
+    priceCents: 0,
+    billingPeriod: "monthly",
+    modules: ["core", "integrations", "dora", "sla", "cogs", "intel", "comms"],
+    maxSeats: null,
+    maxIntegrations: null,
+    historyDays: null,
+    trialDays: 0,
     features: { alerts: true, api_webhooks: true, dora_full_scorecard: true },
-    isSystem: true, isPublic: false, isActive: true  // exclusivo por assignment
-  }
+    isSystem: true,
+    isPublic: false,
+    isActive: true, // exclusivo por assignment
+  },
 ];
 
 for (const plan of PLANS) {
   await prisma.plan.upsert({
     where: { name: plan.name },
     update: plan,
-    create: plan
+    create: plan,
   });
 }
 
 // ⚠️ IMPORTANTE: Criar Subscriptions para tenants pré-existentes (se houver)
-const freePlan = await prisma.plan.findFirst({ where: { name: 'free' } });
+const freePlan = await prisma.plan.findFirst({ where: { name: "free" } });
 if (freePlan) {
   // Buscar tenants sem subscription
   const tenantsWithoutSub = await prisma.$queryRaw`
@@ -2301,31 +2493,33 @@ if (freePlan) {
     LEFT JOIN "Subscription" s ON s."tenantId" = t.id
     WHERE s.id IS NULL
   `;
-  
+
   const now = new Date();
   for (const tenant of tenantsWithoutSub) {
     const sub = await prisma.subscription.create({
       data: {
         tenantId: tenant.tenant_id,
         planId: freePlan.id,
-        status: 'active',
+        status: "active",
         currentPeriodStart: now,
-        currentPeriodEnd: new Date(now.getTime() + 30 * 86400000)
-      }
+        currentPeriodEnd: new Date(now.getTime() + 30 * 86400000),
+      },
     });
-    
+
     await prisma.subscriptionHistory.create({
       data: {
         tenantId: tenant.tenant_id,
         planId: freePlan.id,
         startedAt: now,
         endedAt: null,
-        status: 'active'
-      }
+        status: "active",
+      },
     });
   }
-  
-  console.log(`Created ${tenantsWithoutSub.length} subscriptions for pre-existing tenants`);
+
+  console.log(
+    `Created ${tenantsWithoutSub.length} subscriptions for pre-existing tenants`,
+  );
 }
 ```
 
@@ -2340,6 +2534,7 @@ Criar `docs/openapi/billing-v1.yaml` com todos os endpoints da seção 7, seguin
 #### 6.3 Atualizar `docs/architecture.md`
 
 Adicionar:
+
 - `Billing` à tabela de módulos com prefixo `/api/v1/billing/*` e `/api/v1/platform/billing/*`
 - `platform_role` na descrição do `PlatformAccount`
 - funções de entitlement (`requireModule`/`requireFeature` de `entitlement.ts`) como dependência interna dos módulos
@@ -2355,31 +2550,36 @@ Etapa 1 (Schema + platform_role)
         └─▶ Etapa 4 (Módulo Billing)
               └─▶ Etapa 5 (Jobs)
                     └─▶ Etapa 6 (Seed + Docs)
+                          └─▶ Etapa 7 (Integração Stripe + sandbox)
 ```
+
+✅ Todas as etapas concluídas (2026-04-20).
 
 ---
 
 ### Variáveis de ambiente necessárias
 
-| Variável | Obrigatória | Descrição |
-|---|---|---|
-| `STRIPE_SECRET_KEY` | ✅ | Chave secreta da API Stripe (`sk_live_*` ou `sk_test_*`) |
-| `STRIPE_WEBHOOK_SECRET` | ✅ | Secret do endpoint webhook registrado no Stripe Dashboard |
+| Variável                | Obrigatória | Status em Sandbox | Descrição                                                                     |
+| ----------------------- | ----------- | ----------------- | ----------------------------------------------------------------------------- |
+| `STRIPE_SECRET_KEY`     | ✅          | ✅ configurada    | Chave secreta da API Stripe (`sk_live_*` ou `sk_test_*`)                      |
+| `STRIPE_WEBHOOK_SECRET` | ✅          | ✅ configurada    | Secret do endpoint webhook registrado no Stripe / gerado pelo `stripe listen` |
 
 Adicionar ao `.env.example`, `fly.toml` (como secrets) e à documentação de deploy.
+
+> **Sandbox (2026-04-20):** Stripe CLI v1.40.6 instalado (Manjaro/AUR), login feito, listener ativo. `stripe_price_id` configurado nos planos pagos via `PATCH /platform/billing/plans/:id`.
 
 ---
 
 ### Testes por etapa
 
-| Etapa | O que testar |
-|---|---|
-| 1 | Migration não-destrutiva; `platform_role` no JWT; Subscription + SubscriptionHistory criados no register |
-| 2 | Cache hit/miss do EntitlementService; guard 402 para módulo não habilitado; header `X-Billing-Warning` |
-| 3 | Rotas SLA/COGS/Intel retornam 402 sem módulo; retornam 200 com módulo; IAM bloqueia adição de user ao atingir max_seats |
-| 4 | CRUD de planos (happy path + erros); validação de `core` obrigatório; checkout session criada; webhook idempotente; rate limit 100 req/min |
-| 4 | PATCH com `apply_at_renewal: true` armazena em `pending_plan_changes`; não aplica imediatamente |
-| 5 | Job apply-pending: mudanças aplicadas em `current_period_end`; cache invalidado |
-| 5 | Job enforce: subscription `past_due` vira `downgraded` após 10d; cache invalidado; SubscriptionHistory criado |
-| 5 | Job purge: retry 3x com backoff; sucesso deleta dados e marca `expired`; falha enfileira em DLQ |
-| 6 | Seed idempotente (`upsert`); planos seed existem após migration |
+| Etapa | O que testar                                                                                                                               |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1     | Migration não-destrutiva; `platform_role` no JWT; Subscription + SubscriptionHistory criados no register                                   |
+| 2     | Cache hit/miss do EntitlementService; guard 402 para módulo não habilitado; header `X-Billing-Warning`                                     |
+| 3     | Rotas SLA/COGS/Intel retornam 402 sem módulo; retornam 200 com módulo; IAM bloqueia adição de user ao atingir max_seats                    |
+| 4     | CRUD de planos (happy path + erros); validação de `core` obrigatório; checkout session criada; webhook idempotente; rate limit 100 req/min |
+| 4     | PATCH com `apply_at_renewal: true` armazena em `pending_plan_changes`; não aplica imediatamente                                            |
+| 5     | Job apply-pending: mudanças aplicadas em `current_period_end`; cache invalidado                                                            |
+| 5     | Job enforce: subscription `past_due` vira `downgraded` após 10d; cache invalidado; SubscriptionHistory criado                              |
+| 5     | Job purge: retry 3x com backoff; sucesso deleta dados e marca `expired`; falha enfileira em DLQ                                            |
+| 6     | Seed idempotente (`upsert`); planos seed existem após migration                                                                            |

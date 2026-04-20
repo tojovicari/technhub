@@ -10,13 +10,16 @@
 #### 1. Schema Prisma (Migration `20260417165458_add_billing_module`)
 
 **Novos Enums:**
+
 - `PlatformSuperRole`: `super_admin | platform_admin`
 - `SubscriptionStatus`: `trialing | active | past_due | downgraded | cancelled | expired`
 
 **Campo adicionado:**
+
 - `PlatformAccount.platformRole` (nullable) — diferencia super_admins de usuários de tenant
 
 **Novos Modelos:**
+
 - `Plan` — catálogo de planos com pricing e entitlements
 - `Subscription` — subscription ativa do tenant (1:1 com Tenant)
 - `SubscriptionHistory` — histórico temporal de mudanças de plano (rastreia por subscriptionId)
@@ -25,58 +28,64 @@
 - `PurgeFailureQueue` — DLQ para falhas no job de purge com retry exponencial
 
 **Estrutura de SubscriptionHistory (implementada):**
+
 ```typescript
 {
-  id: string;              // UUID
-  subscriptionId: string;  // FK → Subscription (mais preciso que tenantId)
-  planId: string;          // FK → Plan
-  status: string;          // status da subscription neste momento
-  effectiveFrom: Date;     // quando esta mudança entrou em vigor
-  reason: string | null;   // motivo: 'initial_registration', 'pending_changes_applied', 'past_due_grace_expired', etc.
+  id: string; // UUID
+  subscriptionId: string; // FK → Subscription (mais preciso que tenantId)
+  planId: string; // FK → Plan
+  status: string; // status da subscription neste momento
+  effectiveFrom: Date; // quando esta mudança entrou em vigor
+  reason: string | null; // motivo: 'initial_registration', 'pending_changes_applied', 'past_due_grace_expired', etc.
   createdAt: Date;
 }
 ```
 
 **Estrutura de PurgeFailureQueue:**
+
 ```typescript
 {
   id: string;
   tenantId: string;
   subscriptionId: string;
-  error: string;           // mensagem de erro
-  retryCount: number;      // número de tentativas (default 0)
+  error: string; // mensagem de erro
+  retryCount: number; // número de tentativas (default 0)
   nextRetryAt: Date | null; // próxima tentativa agendada
   createdAt: Date;
   resolvedAt: Date | null; // quando foi resolvido ou abandonado
 }
 ```
+
 **Retry exponencial:** 1h → 2h → 4h → 8h → 24h (max 10 tentativas).
 
 **Campos importantes para o Frontend:**
 
-| Campo | Modelo | Tipo | Descrição |
-|---|---|---|---|
-| `pendingPlanChanges` | Subscription | JSONB | Mudanças agendadas para aplicar na renovação |
-| `trialEndsAt` | Subscription | DateTime? | Fim do trial (se aplicável) |
-| `currentPeriodEnd` | Subscription | DateTime | Fim do ciclo de cobrança atual |
-| `pastDueSince` | Subscription | DateTime? | Quando entrou em past_due (grace de 10 dias) |
+| Campo                     | Modelo       | Tipo      | Descrição                                              |
+| ------------------------- | ------------ | --------- | ------------------------------------------------------ |
+| `pendingPlanChanges`      | Subscription | JSONB     | Mudanças agendadas para aplicar na renovação           |
+| `trialEndsAt`             | Subscription | DateTime? | Fim do trial (se aplicável)                            |
+| `currentPeriodEnd`        | Subscription | DateTime  | Fim do ciclo de cobrança atual                         |
+| `pastDueSince`            | Subscription | DateTime? | Quando entrou em past_due (grace de 10 dias)           |
 | `dataDeletionScheduledAt` | Subscription | DateTime? | Quando os dados serão expurgados (D+30 após downgrade) |
-| `cancelledAt` | Subscription | DateTime? | Quando o cancelamento foi agendado |
-| `providerEventId` | BillingEvent | String? | ID do evento do Stripe (para idempotência) |
+| `cancelledAt`             | Subscription | DateTime? | Quando o cancelamento foi agendado                     |
+| `providerEventId`         | BillingEvent | String?   | ID do evento do Stripe (para idempotência)             |
 
 #### 2. Auth Plugin (`src/plugins/auth.ts`)
 
 **Mudanças no JWT:**
+
 - Tipo `JwtUser` agora inclui `platform_role?: string | null`
 - Payload do JWT sempre inclui `platform_role` (mesmo que null)
 
 **Novo Decorator:**
+
 ```typescript
-app.requirePlatformRole('super_admin', 'platform_admin')
+app.requirePlatformRole("super_admin", "platform_admin");
 // Uso: em rotas da plataforma (/platform/*)
 ```
 
 **Response de erro (403):**
+
 ```json
 {
   "error": {
@@ -94,8 +103,10 @@ app.requirePlatformRole('super_admin', 'platform_admin')
 #### 3. Auth Service (`src/modules/auth/service.ts`)
 
 **Login e Refresh:**
+
 - Token JWT agora inclui `platform_role` do `PlatformAccount`
 - Exemplo de payload:
+
 ```json
 {
   "sub": "acc_123",
@@ -107,6 +118,7 @@ app.requirePlatformRole('super_admin', 'platform_admin')
 ```
 
 **Register:**
+
 - Ao criar um novo tenant, **automaticamente cria**:
   - `Subscription` no plano `free` (status: `active`)
   - `SubscriptionHistory` inicial (registro do plano Free)
@@ -123,21 +135,21 @@ O frontend deve decodificar o JWT e verificar:
 interface JWTPayload {
   sub: string;
   tenant_id: string;
-  roles: string[];  // roles dentro do tenant
+  roles: string[]; // roles dentro do tenant
   permissions: string[];
-  platform_role?: 'super_admin' | 'platform_admin' | null;
+  platform_role?: "super_admin" | "platform_admin" | null;
 }
 
 // Exemplo de uso:
 const decoded = jwt_decode<JWTPayload>(accessToken);
 
 // Usuário é super_admin da plataforma?
-if (decoded.platform_role === 'super_admin') {
+if (decoded.platform_role === "super_admin") {
   // Exibir menu "Platform Admin"
 }
 
 // Usuário é org_admin do tenant?
-if (decoded.roles.includes('org_admin')) {
+if (decoded.roles.includes("org_admin")) {
   // Exibir menu "Billing"
 }
 ```
@@ -151,16 +163,19 @@ if (decoded.roles.includes('org_admin')) {
 ### Validação de Consistência
 
 ✅ **Schema vs Planejado:**
+
 - Todos os modelos do plano estão implementados
 - Todos os campos obrigatórios estão presentes
 - Índices otimizam queries dos jobs
 
 ✅ **Auth vs Planejado:**
+
 - `platform_role` no JWT funciona
 - Decorator `requirePlatformRole` implementado
 - Tipos TypeScript atualizados
 
 ✅ **Register vs Planejado:**
+
 - Subscription criada automaticamente
 - SubscriptionHistory inicializado
 - Validação do plano Free
@@ -168,11 +183,13 @@ if (decoded.roles.includes('org_admin')) {
 ### Próximos Passos
 
 **✅ Seed de Planos executado:**
+
 - 4 planos criados: `free`, `starter`, `pro`, `enterprise`
 - Tenants existentes migraram para Free plan automaticamente
 - Register agora funciona corretamente
 
 **Próxima etapa:**
+
 - Etapa 2: Implementar `BillingEntitlementService` com cache
 
 ---
@@ -187,6 +204,7 @@ if (decoded.roles.includes('org_admin')) {
 #### 1. Entitlement Service (`src/modules/billing/entitlement.ts`)
 
 **Funções exportadas:**
+
 ```typescript
 loadEntitlement(tenantId: string): Promise<EntitlementEntry>
 invalidateEntitlementCache(tenantId: string): void
@@ -195,11 +213,13 @@ requireFeature(featureName: string): PreHandler
 ```
 
 **Cache em memória:**
+
 - TTL: 60 segundos
 - Estrutura: `Map<tenantId, EntitlementEntry>`
 - Invalidação: chamada após updates de subscription
 
 **Estrutura de EntitlementEntry:**
+
 ```typescript
 {
   tenantId: string;
@@ -219,11 +239,13 @@ requireFeature(featureName: string): PreHandler
 #### 2. Guards para Módulos
 
 **`requireModule(moduleName)`**
+
 - Valida se tenant tem o módulo habilitado
 - Bloqueia se `status === 'expired'`
 - Retorna `402 UPGRADE_REQUIRED` se não tem acesso
 
 **Exemplo de response (402):**
+
 ```json
 {
   "error": {
@@ -239,6 +261,7 @@ requireFeature(featureName: string): PreHandler
 ```
 
 **`requireFeature(featureName)`**
+
 - Valida features booleanas (ex: `alerts`, `api_webhooks`)
 - Retorna `402` se feature não habilitada
 
@@ -248,14 +271,15 @@ requireFeature(featureName: string): PreHandler
 
 Automaticamente adicionado em **todas as respostas autenticadas**:
 
-| Valor | Condição | O que o Frontend deve fazer |
-|---|---|---|
-| `past_due` | `status === 'past_due'` | Banner amarelo: "Pagamento pendente. Regularize até [data]" |
-| `downgraded` | `status === 'downgraded'` | Banner vermelho: "Conta rebaixada. Dados serão excluídos em [data]" |
-| `trial_ending` | Trial encerra em ≤ 3 dias | Banner azul: "Trial encerra em X dias" |
-| `cancellation_scheduled` | `status === 'cancelled'` | Banner informativo: "Acesso encerra em [data]" |
+| Valor                    | Condição                  | O que o Frontend deve fazer                                         |
+| ------------------------ | ------------------------- | ------------------------------------------------------------------- |
+| `past_due`               | `status === 'past_due'`   | Banner amarelo: "Pagamento pendente. Regularize até [data]"         |
+| `downgraded`             | `status === 'downgraded'` | Banner vermelho: "Conta rebaixada. Dados serão excluídos em [data]" |
+| `trial_ending`           | Trial encerra em ≤ 3 dias | Banner azul: "Trial encerra em X dias"                              |
+| `cancellation_scheduled` | `status === 'cancelled'`  | Banner informativo: "Acesso encerra em [data]"                      |
 
 **Exemplo de request/response:**
+
 ```http
 GET /api/v1/projects
 Authorization: Bearer <token>
@@ -276,13 +300,13 @@ O frontend deve adicionar um interceptor para detectar o header:
 ```typescript
 // Exemplo com axios
 axios.interceptors.response.use((response) => {
-  const warning = response.headers['x-billing-warning'];
-  
+  const warning = response.headers["x-billing-warning"];
+
   if (warning) {
     // Disparar evento global ou atualizar store
     billingStore.setWarning(warning);
   }
-  
+
   return response;
 });
 ```
@@ -296,19 +320,19 @@ Sugestão de implementação:
 function BillingWarningBanner() {
   const warning = useBillingWarning();
   const subscription = useBillingSubscription();
-  
+
   if (!warning) return null;
-  
+
   switch (warning) {
     case 'past_due':
       return (
         <Banner variant="warning">
-          Pagamento pendente. Regularize até {formatDate(subscription.gracePeriodEnd)} 
+          Pagamento pendente. Regularize até {formatDate(subscription.gracePeriodEnd)}
           para evitar rebaixamento do plano.
           <Button onClick={openBillingPortal}>Atualizar pagamento</Button>
         </Banner>
       );
-      
+
     case 'downgraded':
       return (
         <Banner variant="error">
@@ -316,16 +340,16 @@ function BillingWarningBanner() {
           <Button onClick={goToUpgrade}>Reativar agora</Button>
         </Banner>
       );
-      
+
     case 'trial_ending':
       const daysLeft = calculateDaysLeft(subscription.trialEndsAt);
       return (
         <Banner variant="info">
-          Seu trial encerra em {daysLeft} {daysLeft === 1 ? 'dia' : 'dias'}. 
+          Seu trial encerra em {daysLeft} {daysLeft === 1 ? 'dia' : 'dias'}.
           <Button onClick={goToUpgrade}>Adicionar cartão</Button>
         </Banner>
       );
-      
+
     case 'cancellation_scheduled':
       return (
         <Banner variant="info">
@@ -344,13 +368,13 @@ Quando qualquer endpoint retornar `402`:
 ```typescript
 if (error.response?.status === 402) {
   const details = error.response.data.error.details;
-  
+
   // Modal de upgrade
   showUpgradeModal({
     message: error.response.data.error.message,
     requiredModule: details.module_required,
     currentModules: details.current_plan_modules,
-    upgradeUrl: details.upgrade_url
+    upgradeUrl: details.upgrade_url,
   });
 }
 ```
@@ -358,16 +382,19 @@ if (error.response?.status === 402) {
 ### Validação de Consistência
 
 ✅ **Cache vs Planejado:**
+
 - TTL de 60s implementado
 - Invalidação funcional
 - Query otimizada com `include`
 
 ✅ **Guards vs Planejado:**
+
 - `requireModule` bloqueia módulos premium
 - `requireFeature` valida features booleanas
 - Responses 402 com detalhes para UI
 
 ✅ **Hook vs Planejado:**
+
 - Executa em todas as respostas autenticadas
 - Não quebra se entitlement falhar
 - Headers corretos para cada status
@@ -375,6 +402,7 @@ if (error.response?.status === 402) {
 ### Próximos Passos
 
 **Próxima etapa:**
+
 - Etapa 3: Adicionar guards nos módulos existentes (SLA, COGS, Intel, DORA)
 
 ---
@@ -389,10 +417,12 @@ if (error.response?.status === 402) {
 #### 1. Módulo SLA (`src/modules/sla/routes.ts`)
 
 **Guards adicionados:**
+
 - Todas as 9 rotas agora requerem `requireModule('sla')`
 - Ordem de guards: `[app.authenticate, slaGuard, app.requirePermission('sla.*')]`
 
 **Rotas protegidas:**
+
 - `POST /sla/templates` → criar template
 - `GET /sla/templates` → listar templates
 - `GET /sla/templates/:id` → obter template
@@ -406,9 +436,11 @@ if (error.response?.status === 402) {
 #### 2. Módulo COGS (`src/modules/cogs/routes.ts`)
 
 **Guards adicionados:**
+
 - Todas as 12 rotas agora requerem `requireModule('cogs')`
 
 **Rotas protegidas:**
+
 - `POST /cogs/entries` → criar entrada de custo
 - `POST /cogs/entries/from-story-points` → criar a partir de story points
 - `GET /cogs/entries` → listar entradas
@@ -425,9 +457,11 @@ if (error.response?.status === 402) {
 #### 3. Módulo DORA (`src/modules/dora/routes.ts`)
 
 **Guards adicionados:**
+
 - Todas as 5 rotas agora requerem `requireModule('dora')`
 
 **Rotas protegidas:**
+
 - `POST /dora/deploys` → ingerir evento de deploy
 - `POST /dora/lead-time` → ingerir lead time
 - `GET /dora/metrics` → métricas DORA
@@ -437,9 +471,11 @@ if (error.response?.status === 402) {
 #### 4. Módulo Intel (`src/modules/intel/routes.ts`)
 
 **Guards adicionados:**
+
 - Todas as 9 rotas agora requerem `requireModule('intel')`
 
 **Rotas protegidas:**
+
 - `GET /intel/velocity/forecast` → previsão de velocidade
 - `GET /intel/epics/:id/forecast` → previsão de épico
 - `GET /intel/sla-risk` → risco de SLA
@@ -487,7 +523,7 @@ httpClient.interceptors.response.use(
   (error) => {
     if (error.response?.status === 402) {
       const { message, details } = error.response.data.error;
-      
+
       showUpgradeModal({
         title: "Upgrade Necessário",
         message,
@@ -495,12 +531,12 @@ httpClient.interceptors.response.use(
         requiredModule: details.module_required,
         onUpgrade: () => {
           window.location.href = details.upgrade_url;
-        }
+        },
       });
     }
-    
+
     return Promise.reject(error);
-  }
+  },
 );
 ```
 
@@ -513,7 +549,7 @@ Sugestão para sidebar/navigation:
 function ModuleNavItem({ module, label, icon, href }) {
   const entitlement = useEntitlement();
   const hasAccess = entitlement.modules.includes(module);
-  
+
   if (!hasAccess) {
     return (
       <div className="nav-item locked" onClick={showUpgradeModal}>
@@ -524,7 +560,7 @@ function ModuleNavItem({ module, label, icon, href }) {
       </div>
     );
   }
-  
+
   return (
     <Link to={href} className="nav-item">
       <Icon name={icon} />
@@ -537,31 +573,35 @@ function ModuleNavItem({ module, label, icon, href }) {
 ### Validação de Consistência
 
 ✅ **Guards vs Planejado:**
+
 - Todos os 4 módulos premium protegidos
 - Total de 35 rotas com guards implementados
 - Ordem correta: authenticate → moduleGuard → permission
 
 ✅ **Compilação:**
+
 - Build TypeScript sem erros
 - Imports corretos de `requireModule`
 - Todas as constantes declaradas
 
 ✅ **Mapeamento de Módulos:**
 
-| Plano | Módulos Habilitados |
-|---|---|
-| Free | `core`, `integrations`, `dora` |
-| Starter | `core`, `integrations`, `dora`, `sla`, `comms` |
-| Pro | `core`, `integrations`, `dora`, `sla`, `cogs`, `comms` |
+| Plano      | Módulos Habilitados                                             |
+| ---------- | --------------------------------------------------------------- |
+| Free       | `core`, `integrations`, `dora`                                  |
+| Starter    | `core`, `integrations`, `dora`, `sla`, `comms`                  |
+| Pro        | `core`, `integrations`, `dora`, `sla`, `cogs`, `comms`          |
 | Enterprise | `core`, `integrations`, `dora`, `sla`, `cogs`, `intel`, `comms` |
 
 **Módulos protegidos:**
+
 - ✅ SLA → disponível a partir do Starter
 - ✅ COGS → disponível a partir do Pro
 - ✅ Intel → disponível apenas no Enterprise
 - ✅ DORA → disponível em todos (incluindo Free)
 
 **Módulos não protegidos (sempre acessíveis):**
+
 - Core → disponível em todos
 - Integrations → disponível em todos
 - Comms → módulo interno (não tem rotas públicas diretas)
@@ -569,6 +609,7 @@ function ModuleNavItem({ module, label, icon, href }) {
 ### Próximos Passos
 
 **Próxima etapa:**
+
 - Etapa 4: Implementar rotas e service do módulo billing
   - Rotas do tenant (`/billing/*`)
   - Rotas do platform admin (`/platform/billing/*`)
@@ -587,29 +628,33 @@ function ModuleNavItem({ module, label, icon, href }) {
 #### 1. Schema de Validação (`src/modules/billing/schema.ts`)
 
 **Schemas Zod para Platform Admin:**
+
 ```typescript
-createPlanSchema      // POST /platform/billing/plans
-updatePlanSchema      // PATCH /platform/billing/plans/:id (com apply_at_renewal)
-listPlansQuerySchema  // GET /platform/billing/plans (com filtros)
-createAssignmentSchema // POST /platform/billing/plans/:id/assignments
+createPlanSchema; // POST /platform/billing/plans
+updatePlanSchema; // PATCH /platform/billing/plans/:id (com apply_at_renewal)
+listPlansQuerySchema; // GET /platform/billing/plans (com filtros)
+createAssignmentSchema; // POST /platform/billing/plans/:id/assignments
 ```
 
 **Schemas Zod para Tenant:**
+
 ```typescript
-checkoutSchema        // POST /billing/checkout
-portalSchema          // POST /billing/portal
-listEventsQuerySchema // GET /billing/events (com filtros de data/tipo)
+checkoutSchema; // POST /billing/checkout
+portalSchema; // POST /billing/portal
+listEventsQuerySchema; // GET /billing/events (com filtros de data/tipo)
 ```
 
 #### 2. Service Layer (`src/modules/billing/service.ts`)
 
 **Funções para Tenant:**
+
 - `listPlansForTenant(tenantId)` — lista planos públicos + exclusivos
 - `getSubscription(tenantId)` — retorna subscription com plan e scheduledDowngradePlan
 - `getUsage(tenantId)` — conta seats e integrações usadas
 - `listBillingEvents(tenantId, filters)` — histórico de eventos com paginação
 
 **Funções para Platform Admin:**
+
 - `listAllPlans(filters)` — lista todos os planos com contagem de subscriptions
 - `createPlan(input)` — cria novo plano (valida stripe_price_id se paid)
 - `updatePlan(planId, input)` — atualiza plano (com suporte a apply_at_renewal)
@@ -617,12 +662,14 @@ listEventsQuerySchema // GET /billing/events (com filtros de data/tipo)
 - `createAssignment(planId, tenantId)` — vincula plano exclusivo a tenant
 - `deleteAssignment(planId, tenantId)` — remove vinculação
 
-**Funções Stripe (TODO - stubs):**
-- `createCheckoutSession()` — retorna 501 NOT_IMPLEMENTED
-- `createPortalSession()` — retorna 501 NOT_IMPLEMENTED
-- `cancelSubscription()` — retorna 501 NOT_IMPLEMENTED
+**Funções Stripe (implementado — ver Etapa 7):**
+
+- `createCheckoutSession()` — retorna `{ url, session_id }` via Stripe Checkout API
+- `createPortalSession()` — retorna `{ url }` via Stripe Customer Portal API
+- `cancelSubscription()` — cancela via `stripe.subscriptions.update({ cancel_at_period_end: true })`; retorna `{ cancelled_at, access_until }`
 
 **Validações importantes:**
+
 - Plans pagos (price_cents > 0) requerem stripe_price_id
 - Módulo "core" é obrigatório em todos os planos
 - Plans de sistema não podem ser deletados
@@ -631,41 +678,42 @@ listEventsQuerySchema // GET /billing/events (com filtros de data/tipo)
 
 #### 3. Rotas do Tenant (`src/modules/billing/routes.ts`)
 
-| Método | Endpoint | Auth | Permissão | Descrição |
-|---|---|---|---|---|
-| GET | `/billing/plans` | Opcional | — | Lista planos disponíveis (público + exclusivos) |
-| GET | `/billing/subscription` | ✅ | `billing.read` | Subscription atual do tenant |
-| GET | `/billing/usage` | ✅ | `billing.read` | Uso de seats e integrações |
-| GET | `/billing/events` | ✅ | `billing.manage` | Histórico de eventos de billing |
-| POST | `/billing/checkout` | ✅ | `billing.manage` | Cria sessão de checkout Stripe (TODO) |
-| POST | `/billing/portal` | ✅ | `billing.manage` | Cria sessão do Customer Portal (TODO) |
-| POST | `/billing/cancel` | ✅ | `billing.manage` | Agenda cancelamento (TODO) |
+| Método | Endpoint                | Auth     | Permissão        | Descrição                                       |
+| ------ | ----------------------- | -------- | ---------------- | ----------------------------------------------- |
+| GET    | `/billing/plans`        | Opcional | —                | Lista planos disponíveis (público + exclusivos) |
+| GET    | `/billing/subscription` | ✅       | `billing.read`   | Subscription atual do tenant                    |
+| GET    | `/billing/usage`        | ✅       | `billing.read`   | Uso de seats e integrações                      |
+| GET    | `/billing/events`       | ✅       | `billing.manage` | Histórico de eventos de billing                 |
+| POST   | `/billing/checkout`     | ✅       | `billing.manage` | Cria sessão de checkout Stripe                  |
+| POST   | `/billing/portal`       | ✅       | `billing.manage` | Cria sessão do Customer Portal                  |
+| POST   | `/billing/cancel`       | ✅       | `billing.manage` | Cancela assinatura via Stripe                   |
 
 #### 4. Rotas Platform Admin (`src/modules/billing/platform-routes.ts`)
 
-| Método | Endpoint | Auth | Role | Descrição |
-|---|---|---|---|---|
-| GET | `/platform/billing/plans` | ✅ | super_admin/platform_admin | Lista todos os planos |
-| POST | `/platform/billing/plans` | ✅ | super_admin/platform_admin | Cria novo plano |
-| GET | `/platform/billing/plans/:id` | ✅ | super_admin/platform_admin | Detalhes do plano |
-| PATCH | `/platform/billing/plans/:id` | ✅ | super_admin/platform_admin | Atualiza plano |
-| DELETE | `/platform/billing/plans/:id` | ✅ | super_admin/platform_admin | Deleta plano |
-| POST | `/platform/billing/plans/:id/assignments` | ✅ | super_admin/platform_admin | Vincula plano a tenant |
-| DELETE | `/platform/billing/plans/:id/assignments/:tenant_id` | ✅ | super_admin/platform_admin | Remove vinculação |
+| Método | Endpoint                                             | Auth | Role                       | Descrição              |
+| ------ | ---------------------------------------------------- | ---- | -------------------------- | ---------------------- |
+| GET    | `/platform/billing/plans`                            | ✅   | super_admin/platform_admin | Lista todos os planos  |
+| POST   | `/platform/billing/plans`                            | ✅   | super_admin/platform_admin | Cria novo plano        |
+| GET    | `/platform/billing/plans/:id`                        | ✅   | super_admin/platform_admin | Detalhes do plano      |
+| PATCH  | `/platform/billing/plans/:id`                        | ✅   | super_admin/platform_admin | Atualiza plano         |
+| DELETE | `/platform/billing/plans/:id`                        | ✅   | super_admin/platform_admin | Deleta plano           |
+| POST   | `/platform/billing/plans/:id/assignments`            | ✅   | super_admin/platform_admin | Vincula plano a tenant |
+| DELETE | `/platform/billing/plans/:id/assignments/:tenant_id` | ✅   | super_admin/platform_admin | Remove vinculação      |
 
 #### 5. Registro de Rotas (`src/app.ts`)
 
 ```typescript
-import { billingRoutes } from './modules/billing/routes.js';
-import { platformBillingRoutes } from './modules/billing/platform-routes.js';
+import { billingRoutes } from "./modules/billing/routes.js";
+import { platformBillingRoutes } from "./modules/billing/platform-routes.js";
 
-app.register(billingRoutes, { prefix: '/api/v1' });
-app.register(platformBillingRoutes, { prefix: '/api/v1' });
+app.register(billingRoutes, { prefix: "/api/v1" });
+app.register(platformBillingRoutes, { prefix: "/api/v1" });
 ```
 
 #### 6. Permissões (`src/modules/auth/service.ts`)
 
 **ROLE_PERMISSIONS atualizado:**
+
 ```typescript
 {
   org_admin: ['*'],  // inclui billing.read e billing.manage
@@ -679,6 +727,7 @@ app.register(platformBillingRoutes, { prefix: '/api/v1' });
 #### Rotas Disponíveis para Tenant
 
 **1. GET /billing/plans**
+
 ```typescript
 // Request (opcional autenticação)
 GET /api/v1/billing/plans
@@ -710,6 +759,7 @@ GET /api/v1/billing/plans
 ```
 
 **2. GET /billing/subscription**
+
 ```typescript
 // Request (requer billing.read)
 GET /api/v1/billing/subscription
@@ -741,6 +791,7 @@ Authorization: Bearer <token>
 ```
 
 **3. GET /billing/usage**
+
 ```typescript
 // Request (requer billing.read)
 GET /api/v1/billing/usage
@@ -756,6 +807,7 @@ Authorization: Bearer <token>
 ```
 
 **4. GET /billing/events**
+
 ```typescript
 // Request (requer billing.manage)
 GET /api/v1/billing/events?event_type=subscription_updated&from=2026-04-01T00:00:00.000Z&limit=20
@@ -763,20 +815,25 @@ Authorization: Bearer <token>
 
 // Response 200
 {
-  "data": [
-    {
-      "id": "evt_123",
-      "event_type": "subscription_updated",
-      "provider": "stripe",
-      "occurred_at": "2026-04-17T10:00:00.000Z",
-      "created_at": "2026-04-17T10:00:05.000Z"
-    }
-  ],
-  "next_cursor": "evt_100"  // ou null se não há mais
+  "data": {
+    "data": [
+      {
+        "id": "evt_123",
+        "event_type": "subscription_updated",
+        "provider": "stripe",
+        "occurred_at": "2026-04-17T10:00:00.000Z",
+        "created_at": "2026-04-17T10:00:05.000Z"
+      }
+    ],
+    "next_cursor": "evt_100"  // ou null se não há mais
+  },
+  "meta": { "request_id": "req_...", "version": "v1", "timestamp": "..." },
+  "error": null
 }
 ```
 
-**5. POST /billing/checkout** (TODO - Stripe)
+**5. POST /billing/checkout** (ver Etapa 7 para doc completa)
+
 ```typescript
 // Request (requer billing.manage)
 POST /api/v1/billing/checkout
@@ -789,23 +846,22 @@ Content-Type: application/json
   "cancel_url": "https://app.moasy.tech/billing"
 }
 
-// Response 501 (por enquanto)
-{
-  "error": {
-    "code": "NOT_IMPLEMENTED",
-    "message": "Stripe integration not yet available"
-  }
-}
-
-// Response futura 201
+// Response 201
 {
   "data": {
-    "url": "https://checkout.stripe.com/c/pay/cs_test_..."
-  }
+    "url": "https://checkout.stripe.com/c/pay/cs_test_...",
+    "session_id": "cs_test_..."
+  },
+  "error": null
 }
+
+// Erros possíveis:
+// 400 — stripe_price_id não configurado no plano
+// 404 — plano não encontrado ou inativo
 ```
 
-**6. POST /billing/portal** (TODO - Stripe)
+**6. POST /billing/portal** (ver Etapa 7 para doc completa)
+
 ```typescript
 // Request (requer billing.manage)
 POST /api/v1/billing/portal
@@ -816,25 +872,21 @@ Content-Type: application/json
   "return_url": "https://app.moasy.tech/billing"
 }
 
-// Response 501 (por enquanto)
-{
-  "error": {
-    "code": "NOT_IMPLEMENTED",
-    "message": "Stripe integration not yet available"
-  }
-}
-
-// Response futura 201
+// Response 201
 {
   "data": {
     "url": "https://billing.stripe.com/p/session/test_..."
-  }
+  },
+  "error": null
 }
+
+// Erro 422 — tenant nunca fez checkout (sem providerCustomerId)
 ```
 
 #### Rotas Disponíveis para Platform Admin
 
 **1. GET /platform/billing/plans**
+
 ```typescript
 // Request (requer super_admin ou platform_admin)
 GET /api/v1/platform/billing/plans?is_active=true&limit=20
@@ -842,35 +894,40 @@ Authorization: Bearer <token>
 
 // Response 200
 {
-  "data": [
-    {
-      "id": "plan_123",
-      "name": "starter",
-      "display_name": "Starter",
-      "description": "Para times pequenos",
-      "price_cents": 4900,
-      "currency": "USD",
-      "billing_period": "monthly",
-      "stripe_price_id": "price_stripe_abc",
-      "modules": ["core", "integrations", "dora", "sla", "comms"],
-      "max_seats": 10,
-      "max_integrations": 3,
-      "history_days": 90,
-      "trial_days": 14,
-      "features": { "alerts": true },
-      "is_system": false,
-      "is_public": true,
-      "is_active": true,
-      "active_subscriptions_count": 42,
-      "created_at": "2026-04-17T00:00:00.000Z",
-      "updated_at": "2026-04-17T00:00:00.000Z"
-    }
-  ],
-  "next_cursor": "plan_100"  // ou null
+  "data": {
+    "data": [
+      {
+        "id": "plan_123",
+        "name": "starter",
+        "display_name": "Starter",
+        "description": "Para times pequenos",
+        "price_cents": 4900,
+        "currency": "USD",
+        "billing_period": "monthly",
+        "stripe_price_id": "price_stripe_abc",
+        "modules": ["core", "integrations", "dora", "sla", "comms"],
+        "max_seats": 10,
+        "max_integrations": 3,
+        "history_days": 90,
+        "trial_days": 14,
+        "features": { "alerts": true },
+        "is_system": false,
+        "is_public": true,
+        "is_active": true,
+        "active_subscriptions_count": 42,
+        "created_at": "2026-04-17T00:00:00.000Z",
+        "updated_at": "2026-04-17T00:00:00.000Z"
+      }
+    ],
+    "next_cursor": "plan_100"  // ou null
+  },
+  "meta": { "request_id": "req_...", "version": "v1", "timestamp": "..." },
+  "error": null
 }
 ```
 
 **2. POST /platform/billing/plans**
+
 ```typescript
 // Request
 POST /api/v1/platform/billing/plans
@@ -918,6 +975,7 @@ Content-Type: application/json
 ```
 
 **3. PATCH /platform/billing/plans/:id**
+
 ```typescript
 // Request
 PATCH /api/v1/platform/billing/plans/plan_123
@@ -946,6 +1004,7 @@ Content-Type: application/json
 ```
 
 **4. DELETE /platform/billing/plans/:id**
+
 ```typescript
 // Request
 DELETE /api/v1/platform/billing/plans/plan_123
@@ -974,6 +1033,7 @@ Authorization: Bearer <token>
 ```
 
 **5. POST /platform/billing/plans/:id/assignments**
+
 ```typescript
 // Request
 POST /api/v1/platform/billing/plans/plan_123/assignments
@@ -1006,50 +1066,51 @@ Content-Type: application/json
 #### UI Sugerida para Tenant
 
 **Página /billing:**
+
 ```typescript
 function BillingPage() {
   const subscription = useBillingSubscription();
   const plans = useBillingPlans();
   const usage = useBillingUsage();
-  
+
   return (
     <div>
       <h1>Billing & Plans</h1>
-      
+
       {/* Subscription atual */}
       <Card>
         <h2>Plano Atual: {subscription.plan.display_name}</h2>
         <p>Status: {subscription.status}</p>
         <p>Renovação: {formatDate(subscription.current_period_end)}</p>
-        
+
         {subscription.trial_ends_at && (
           <Alert>Trial encerra em {formatDate(subscription.trial_ends_at)}</Alert>
         )}
-        
+
         {subscription.scheduled_downgrade_plan && (
           <Alert variant="warning">
-            Downgrade agendado para {subscription.scheduled_downgrade_plan.display_name} 
+            Downgrade agendado para {subscription.scheduled_downgrade_plan.display_name}
             em {formatDate(subscription.current_period_end)}
           </Alert>
         )}
-        
+
         <Button onClick={openBillingPortal}>Gerenciar Pagamento</Button>
       </Card>
-      
+
       {/* Uso atual */}
       <Card>
         <h2>Uso Atual</h2>
         <p>Seats: {usage.seats_used} / {subscription.plan.max_seats ?? '∞'}</p>
         <p>Integrações: {usage.integrations_used} / {subscription.plan.max_integrations ?? '∞'}</p>
       </Card>
-      
+
       {/* Planos disponíveis */}
       <div className="plans-grid">
         {plans.map(plan => (
-          <PlanCard 
-            key={plan.id} 
-            plan={plan} 
-            current={plan.id === subscription.plan_id}
+          <PlanCard
+            key={plan.id}
+            plan={plan}
+            current={plan.id === subscription.plan.id}
             onSelect={() => startCheckout(plan.id)}
           />
         ))}
@@ -1062,45 +1123,43 @@ function BillingPage() {
 ### Validação de Consistência
 
 ✅ **Schemas vs Planejado:**
+
 - Todos os schemas Zod implementados
 - Validações corretas (UUID, datetime, enums)
 - Filtros opcionais com defaults apropriados
 
 ✅ **Service vs Planejado:**
+
 - Todas as funções de tenant implementadas
 - Todas as funções de platform admin implementadas
 - Validações de negócio corretas
 - Cache invalidation após updates
 
 ✅ **Rotas vs Planejado:**
+
 - Todas as rotas tenant registradas
 - Todas as rotas platform admin registradas
 - Guards corretos (authenticate, platform_role, permissions)
 - Responses padronizados (ok/fail)
 
 ✅ **Permissões vs Planejado:**
+
 - billing.read para todos os roles
 - billing.manage apenas para org_admin
 
 ### Limitações Conhecidas
 
-⚠️ **Stripe Integration:**
-- `POST /billing/checkout` → retorna 501
-- `POST /billing/portal` → retorna 501
-- `POST /billing/cancel` → retorna 501
+✅ **Stripe Integration (implementado — ver Etapa 7):**
 
-**Será implementado em etapas futuras:**
-- Webhook handler (`/webhooks/billing/stripe`)
-- Integração com Stripe SDK
-- Testes de idempotência
+- `POST /billing/checkout` → retorna `{ url, session_id }` via Stripe Checkout
+- `POST /billing/portal` → retorna `{ url }` via Stripe Customer Portal
+- `POST /billing/cancel` → retorna `{ cancelled_at, access_until }`
 
 ### Próximos Passos
 
 **Próxima etapa:**
+
 - Etapa 5: Implementar jobs agendados
-  - `apply-pending-changes.ts` (a cada 6h)
-  - `enforce-past-due.ts` (horário)
-  - `purge-tenant-data.ts` (diário 3am)
 
 ---
 
@@ -1116,6 +1175,7 @@ function BillingPage() {
 **Frequência:** A cada 6 horas
 
 **Objetivo:**
+
 - Buscar subscriptions com `pendingPlanChanges` não-nulo
 - Verificar se `currentPeriodEnd` já passou
 - Para cada subscription:
@@ -1128,6 +1188,7 @@ function BillingPage() {
   7. Invalidar cache de entitlement
 
 **Exemplo de Plan criado:**
+
 ```typescript
 {
   name: "starter_custom_abc12345",
@@ -1141,6 +1202,7 @@ function BillingPage() {
 ```
 
 **Log de exemplo:**
+
 ```
 INFO: Starting apply-pending-changes job
 INFO: Found subscriptions with pending changes (count=3)
@@ -1153,6 +1215,7 @@ INFO: Completed apply-pending-changes job (processed=3)
 **Frequência:** A cada hora
 
 **Objetivo:**
+
 - Buscar subscriptions com status `past_due`
 - Verificar se `pastDueSince` >= 10 dias atrás
 - Para cada subscription:
@@ -1168,6 +1231,7 @@ INFO: Completed apply-pending-changes job (processed=3)
   5. Invalidar cache de entitlement
 
 **Timeline de exemplo:**
+
 ```
 D+0  : Pagamento falha → status: past_due, pastDueSince: D+0
 D+10 : Job detecta e faz downgrade → status: downgraded
@@ -1175,6 +1239,7 @@ D+40 : Job de purge expurga dados → status: expired
 ```
 
 **Log de exemplo:**
+
 ```
 INFO: Starting enforce-past-due job
 INFO: Found subscriptions to downgrade (count=2)
@@ -1187,21 +1252,23 @@ INFO: Completed enforce-past-due job (processed=2)
 **Frequência:** Diariamente às 3am UTC
 
 **Objetivo:**
+
 - Buscar subscriptions com status `downgraded`
 - Verificar se `dataDeletionScheduledAt` <= now
 - Para cada subscription:
   1. Expurgar dados não-core:
-     - **SLA:** templates, task snapshots
+     - **SLA:** templates
      - **COGS:** entries, budgets
      - **DORA:** deploys
      - **Integrations:** connections, webhook events
-     - **Comms:** templates, sent messages
+     - **Comms:** _(sem purge implementado — módulo sem tabelas próprias)_
   2. Atualizar subscription → status: `expired`
   3. Criar SubscriptionHistory (reason: `data_deletion_executed`)
   4. Criar BillingEvent (type: `data_purged`)
   5. Invalidar cache de entitlement
 
 **Dead Letter Queue (DLQ):**
+
 - Se purge falhar, adiciona à `PurgeFailureQueue`
 - Retry automático com backoff exponencial:
   - Retry 1: +1h
@@ -1212,6 +1279,7 @@ INFO: Completed enforce-past-due job (processed=2)
 - Máximo de 10 tentativas
 
 **Dados preservados (core):**
+
 - Tenant
 - PlatformAccount (usuários)
 - Subscription
@@ -1220,6 +1288,7 @@ INFO: Completed enforce-past-due job (processed=2)
 - Projects, Epics, Tasks (core domain)
 
 **Log de exemplo:**
+
 ```
 INFO: Starting purge-tenant-data job
 INFO: Found tenants to purge (count=1)
@@ -1236,6 +1305,7 @@ INFO: Added to purge failure queue (subscriptionId=sub_123, nextRetry=2026-04-17
 #### 4. Worker Principal (`src/modules/billing/worker.ts`)
 
 **Configuração:**
+
 ```typescript
 startBillingWorker(app: FastifyInstance)
 
@@ -1246,14 +1316,16 @@ startBillingWorker(app: FastifyInstance)
 ```
 
 **Registro no app.ts:**
+
 ```typescript
-import { startBillingWorker } from './modules/billing/worker.js';
+import { startBillingWorker } from "./modules/billing/worker.js";
 
 // Em buildApp()
 startBillingWorker(app);
 ```
 
 **Lifecycle:**
+
 - Jobs iniciam automaticamente quando servidor sobe
 - Cleanup registrado no `onClose` hook
 - Logs estruturados com contexto `{ worker: 'billing' }`
@@ -1263,6 +1335,7 @@ startBillingWorker(app);
 #### Timeline de Degradação Visível ao Usuário
 
 **Fase 1: Past Due (D+0 a D+10)**
+
 ```typescript
 // Header retornado em todas as requests
 X-Billing-Warning: past_due
@@ -1284,6 +1357,7 @@ X-Billing-Warning: past_due
 ```
 
 **Fase 2: Downgraded (D+10 a D+40)**
+
 ```typescript
 // Header retornado
 X-Billing-Warning: downgraded
@@ -1307,6 +1381,7 @@ X-Billing-Warning: downgraded
 ```
 
 **Fase 3: Expired (D+40+)**
+
 ```typescript
 // GET /billing/subscription
 {
@@ -1365,10 +1440,11 @@ Platform admins podem criar planos exclusivos ou aplicar mudanças com `apply_at
 O frontend deve implementar notificações para:
 
 1. **D-3 antes de past_due → downgrade:**
+
 ```typescript
 if (subscription.status === 'past_due') {
   const daysLeft = daysBetween(now, subscription.past_due_since + 10d);
-  
+
   if (daysLeft <= 3) {
     showNotification({
       type: 'warning',
@@ -1380,15 +1456,16 @@ if (subscription.status === 'past_due') {
 ```
 
 2. **D-7 antes de downgraded → expired:**
+
 ```typescript
-if (subscription.status === 'downgraded') {
+if (subscription.status === "downgraded") {
   const daysLeft = daysBetween(now, subscription.data_deletion_scheduled_at);
-  
+
   if (daysLeft <= 7) {
     showNotification({
-      type: 'error',
-      title: 'Deleção de Dados Iminente',
-      message: `Seus dados serão excluídos em ${daysLeft} dias. Reative agora.`
+      type: "error",
+      title: "Deleção de Dados Iminente",
+      message: `Seus dados serão excluídos em ${daysLeft} dias. Reative agora.`,
     });
   }
 }
@@ -1397,22 +1474,26 @@ if (subscription.status === 'downgraded') {
 ### Validação de Consistência
 
 ✅ **Jobs vs Planejado:**
+
 - apply-pending-changes implementado (6h)
 - enforce-past-due implementado (1h)
 - purge-tenant-data implementado (diário 3am)
 
 ✅ **DLQ vs Planejado:**
+
 - PurgeFailureQueue utilizado
 - Retry com backoff exponencial
 - Máximo de 10 tentativas
 
 ✅ **Worker vs Planejado:**
+
 - Todos os jobs registrados
 - Intervalos corretos
 - Cleanup no onClose
 - Logs estruturados
 
 ✅ **Segurança de Dados:**
+
 - Apenas dados não-core são expurgados
 - Core domain (Projects, Tasks) preservado
 - Subscriptions e histórico mantidos
@@ -1420,10 +1501,258 @@ if (subscription.status === 'downgraded') {
 ### Próximos Passos
 
 **Próxima etapa:**
+
 - Etapa 6: Documentação OpenAPI e revisão final
   - Criar `docs/openapi/billing-v1.yaml`
   - Revisar consistência de toda implementação
   - Validar contra especificação original
+
+---
+
+## Etapa 7 — Integração Stripe ✅ COMPLETO
+
+**Data:** 2026-04-20  
+**Status:** ✅ Implementado e sandbox 100% configurado
+
+### O que foi feito
+
+#### 1. Stripe SDK (`src/modules/billing/stripe.ts`)
+
+Singleton com lazy init — instancia o cliente apenas na primeira chamada:
+
+```typescript
+import Stripe from "stripe";
+
+let _stripe: Stripe | null = null;
+
+export function getStripe(): Stripe {
+  if (!_stripe) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) throw new Error("STRIPE_SECRET_KEY is not set");
+    _stripe = new Stripe(key);
+  }
+  return _stripe;
+}
+```
+
+**Variáveis de ambiente:**
+
+```
+STRIPE_SECRET_KEY=sk_test_...     # Secret Key da conta sandbox
+STRIPE_WEBHOOK_SECRET=whsec_...   # Gerado pelo `stripe listen` (CLI) ou Dashboard
+```
+
+#### 2. Checkout, Portal e Cancel (`src/modules/billing/service.ts`)
+
+**`createCheckoutSession(tenantId, planId, successUrl, cancelUrl)`**
+
+- Busca `stripe_price_id` do plano — lança `VALIDATION_ERROR` se ausente
+- Reusa `providerCustomerId` existente ou deixa Stripe criar um novo
+- Aplica `trial_period_days` do plano se > 0
+- Retorna `{ url: string, session_id: string }`
+
+**`createPortalSession(tenantId, returnUrl)`**
+
+- Requer `providerCustomerId` — lança `PRECONDITION_FAILED` se ausente (tenant nunca fez checkout)
+- Retorna `{ url: string }`
+
+**`cancelSubscription(tenantId)`**
+
+- Chama `stripe.subscriptions.update(providerSubscriptionId, { cancel_at_period_end: true })`
+- Atualiza status local → `cancelled`, preenche `cancelledAt`
+- Cria `SubscriptionHistory` (reason: `cancellation_requested`) e `BillingEvent`
+- Invalida cache de entitlement
+
+#### 3. Webhook Handler (`src/modules/billing/webhook-routes.ts`)
+
+**URL:** `POST /api/v1/webhooks/billing/stripe`  
+**Auth:** HMAC via `stripe.webhooks.constructEvent()` — **não usa JWT**
+
+**Idempotência:** verifica `BillingEvent.providerEventId` antes de processar
+
+**Nota Stripe SDK v22 (breaking changes):**
+
+```typescript
+// current_period_* movidos de Subscription para SubscriptionItem
+function extractPeriod(sub: Stripe.Subscription) {
+  const item = sub.items.data[0];
+  return {
+    periodStart: new Date(item.current_period_start * 1000),
+    periodEnd: new Date(item.current_period_end * 1000),
+  };
+}
+
+// invoice.subscription removido — agora em invoice.parent
+function extractSubscriptionId(invoice: Stripe.Invoice): string | null {
+  const sub = invoice.parent?.subscription_details?.subscription;
+  return typeof sub === "string" ? sub : (sub?.id ?? null);
+}
+```
+
+**Eventos tratados:**
+
+| Evento Stripe                   | Ação no Sistema                                                                                      |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `checkout.session.completed`    | Salva `providerCustomerId` e `providerSubscriptionId`; status → `active`; cria `SubscriptionHistory` |
+| `invoice.paid`                  | Limpa `pastDueSince`; status → `active`                                                              |
+| `invoice.payment_failed`        | Preenche `pastDueSince` (apenas primeira falha); status → `past_due`                                 |
+| `customer.subscription.updated` | Sincroniza `currentPeriodStart/End`; detecta `cancel_at_period_end`                                  |
+| `customer.subscription.deleted` | Status → `expired` (se não estava `downgraded`)                                                      |
+
+**Registro em `src/app.ts`:**
+
+```typescript
+import { billingWebhookRoutes } from "./modules/billing/webhook-routes.js";
+app.register(billingWebhookRoutes, { prefix: "/api/v1" });
+```
+
+**Importante:** o webhook usa `addContentTypeParser` para ler o body como `Buffer` raw — necessário para validação da assinatura HMAC do Stripe.
+
+#### 4. Fix: GET /platform/billing/plans/:plan_id
+
+Corrigido bug em que o endpoint retornava 404 para planos que não eram o mais recente:
+
+- **Antes:** `listAllPlans({ limit: 1 }).find(p => p.id === plan_id)` — retornava apenas o último plano
+- **Depois:** `getPlanById(planId)` — `findUnique` direto no banco
+
+### Impacto no Frontend
+
+#### POST /billing/checkout
+
+```typescript
+// Request (requer billing.manage)
+POST /api/v1/billing/checkout
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "plan_id": "uuid-do-plano",
+  "success_url": "https://app.moasy.tech/billing/success",
+  "cancel_url": "https://app.moasy.tech/billing"
+}
+
+// Response 201
+{
+  "data": {
+    "url": "https://checkout.stripe.com/c/pay/cs_test_...",
+    "session_id": "cs_test_..."
+  },
+  "error": null
+}
+
+// Erros possíveis:
+// 400 — stripe_price_id não configurado no plano
+// 404 — plano não encontrado ou inativo
+```
+
+**UI:** redirecionar para `data.url` após receber o response.
+
+#### POST /billing/portal
+
+```typescript
+// Request (requer billing.manage)
+POST /api/v1/billing/portal
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "return_url": "https://app.moasy.tech/billing"
+}
+
+// Response 201
+{
+  "data": {
+    "url": "https://billing.stripe.com/p/session/test_..."
+  },
+  "error": null
+}
+
+// Erro 422 — tenant nunca fez checkout (sem providerCustomerId)
+// Exibir mensagem: "Adicione um plano pago para gerenciar pagamento"
+```
+
+#### POST /billing/cancel
+
+```typescript
+// Request (requer billing.manage)
+POST /api/v1/billing/cancel
+Authorization: Bearer <token>
+
+// Response 200
+{
+  "data": {
+    "cancelled_at": "2026-04-20T14:00:00.000Z",
+    "access_until": "2026-05-01T00:00:00.000Z"
+  },
+  "error": null
+}
+```
+
+**UI:** após cancelar, mostrar banner "Assinatura cancelada. Acesso mantido até [currentPeriodEnd]."  
+O status da subscription passará para `cancelled` e o header `X-Billing-Warning: cancellation_scheduled` será emitido.
+
+### Status do Sandbox (2026-04-20)
+
+✅ **Tudo configurado e pronto para testar.**
+
+1. ✅ **Price IDs criados no Stripe Dashboard** e vinculados aos planos via `PATCH /platform/billing/plans/:id`
+
+2. ✅ **Stripe CLI instalado** (Manjaro Linux via AUR/yay):
+
+   ```bash
+   yay -S stripe-cli
+   # Alias adicionado ao ~/.zshrc para evitar autocorrect do zsh:
+   alias stripe="/usr/bin/stripe"
+   ```
+
+3. ✅ **Login realizado** na conta sandbox `acct_1TOJ4mRxm8mbbMoH`:
+
+   ```bash
+   stripe login
+   # Autenticado — chave válida por 90 dias
+   ```
+
+4. ✅ **Stripe listener em execução** em background:
+
+   ```bash
+   stripe listen --forward-to localhost:3000/api/v1/webhooks/billing/stripe
+   # → whsec_0f45cc8a8ae88eca3954b2b8aecddff7c3c48e245b2e258d46101a7adda8c318
+   ```
+
+5. ✅ **`STRIPE_WEBHOOK_SECRET` configurado** no `.env`
+
+6. **Subir o servidor e testar:**
+
+   ```bash
+   cd apps/api && npm run dev
+   ```
+
+7. **Testar checkout:**
+   ```http
+   POST /api/v1/billing/checkout
+   { "plan_id": "...", "success_url": "http://localhost:3000/ok", "cancel_url": "http://localhost:3000/billing" }
+   ```
+
+### Validação de Consistência
+
+✅ **Stripe SDK v22 breaking changes tratados:**
+
+- `current_period_*` em `SubscriptionItem`, não em `Subscription`
+- `invoice.subscription` removido → `invoice.parent.subscription_details.subscription`
+
+✅ **Idempotência:**
+
+- `BillingEvent.providerEventId` verificado antes de processar qualquer webhook
+
+✅ **Segurança:**
+
+- Assinatura HMAC verificada via `stripe.webhooks.constructEvent()`
+- Body lido como `Buffer` raw (sem parsing intermediário)
+- `STRIPE_SECRET_KEY` nunca exposto em rotas ou logs
+
+✅ **Fix aplicado:**
+
+- `GET /platform/billing/plans/:plan_id` corrigido — usava `listAllPlans().find()`, agora usa `getPlanById()`
 
 ---
 
@@ -1439,6 +1768,7 @@ if (subscription.status === 'downgraded') {
 **Arquivo criado:** `docs/openapi/billing-v1.yaml`
 
 **Conteúdo:**
+
 - Todos os 7 endpoints tenant documentados
 - Todos os 7 endpoints platform admin documentados
 - Schemas completos para request/response
@@ -1447,10 +1777,12 @@ if (subscription.status === 'downgraded') {
 - Exemplos de uso
 
 **Tags:**
+
 - `Billing (Tenant)` - Endpoints para tenants
 - `Billing (Platform Admin)` - Endpoints para super_admin/platform_admin
 
 **Schemas principais:**
+
 - `Plan` - Plano básico (visão tenant)
 - `PlanWithCounts` - Plano com contadores (visão admin)
 - `PlanWithPendingChanges` - Plano com mudanças agendadas
@@ -1464,6 +1796,7 @@ if (subscription.status === 'downgraded') {
 #### ✅ Etapa 1: Schema e platform_role
 
 **Implementado:**
+
 - [x] Migration `20260417165458_add_billing_module` aplicada
 - [x] 6 modelos criados: Plan, Subscription, SubscriptionHistory, PlanTenantAssignment, BillingEvent, PurgeFailureQueue
 - [x] 2 enums criados: PlatformSuperRole, SubscriptionStatus
@@ -1473,6 +1806,7 @@ if (subscription.status === 'downgraded') {
 - [x] Register cria Subscription automaticamente
 
 **Validado vs Planejado:**
+
 - ✅ Todos os campos do schema planejado presentes
 - ✅ Índices otimizam queries dos jobs
 - ✅ Todos os relacionamentos corretos
@@ -1480,6 +1814,7 @@ if (subscription.status === 'downgraded') {
 #### ✅ Etapa 2: Entitlement Service
 
 **Implementado:**
+
 - [x] `loadEntitlement()` com cache de 60s
 - [x] `invalidateEntitlementCache()` após updates
 - [x] `requireModule()` guard retorna 402
@@ -1487,6 +1822,7 @@ if (subscription.status === 'downgraded') {
 - [x] Hook global `X-Billing-Warning` header
 
 **Validado vs Planejado:**
+
 - ✅ Cache TTL correto (60s)
 - ✅ Estrutura de EntitlementEntry completa
 - ✅ Guards retornam responses padronizados
@@ -1495,12 +1831,14 @@ if (subscription.status === 'downgraded') {
 #### ✅ Etapa 3: Module Guards
 
 **Implementado:**
+
 - [x] SLA protegido (9 rotas)
 - [x] COGS protegido (12 rotas)
 - [x] DORA protegido (5 rotas)
 - [x] Intel protegido (9 rotas)
 
 **Validado vs Planejado:**
+
 - ✅ Total de 35 rotas protegidas
 - ✅ Ordem de guards correta: authenticate → moduleGuard → permission
 - ✅ Mapeamento de módulos por plano correto:
@@ -1512,6 +1850,7 @@ if (subscription.status === 'downgraded') {
 #### ✅ Etapa 4: Billing Routes e Service
 
 **Implementado:**
+
 - [x] Schema de validação Zod (9 schemas)
 - [x] Service layer (15 funções)
 - [x] 7 rotas tenant (`/billing/*`)
@@ -1519,6 +1858,7 @@ if (subscription.status === 'downgraded') {
 - [x] Permissões billing.read e billing.manage configuradas
 
 **Validado vs Planejado:**
+
 - ✅ Todas as rotas documentadas no plano implementadas
 - ✅ Validações de negócio corretas (stripe_price_id, core obrigatório, etc)
 - ✅ Responses padronizados (ok/fail)
@@ -1526,6 +1866,7 @@ if (subscription.status === 'downgraded') {
 - ✅ Cache invalidation após updates
 
 **Funcionalidades completas:**
+
 - ✅ Listagem de planos (público + exclusivos)
 - ✅ CRUD de planos com validações
 - ✅ Sistema de planos exclusivos
@@ -1533,14 +1874,16 @@ if (subscription.status === 'downgraded') {
 - ✅ Histórico de eventos com paginação
 - ✅ Uso de seats/integrações
 
-**Stubs para Stripe (futuro):**
-- ⚠️ `POST /billing/checkout` → 501
-- ⚠️ `POST /billing/portal` → 501
-- ⚠️ `POST /billing/cancel` → 501
+**Stripe implementado (Etapa 7):**
+
+- ✅ `POST /billing/checkout` → retorna URL do Stripe Checkout
+- ✅ `POST /billing/portal` → retorna URL do Customer Portal
+- ✅ `POST /billing/cancel` → cancela assinatura via Stripe
 
 #### ✅ Etapa 5: Jobs Agendados
 
 **Implementado:**
+
 - [x] Job `apply-pending-changes` (6h)
 - [x] Job `enforce-past-due` (1h)
 - [x] Job `purge-tenant-data` (diário 3am)
@@ -1548,6 +1891,7 @@ if (subscription.status === 'downgraded') {
 - [x] DLQ com retry exponencial
 
 **Validado vs Planejado:**
+
 - ✅ Intervalos corretos
 - ✅ Lógica de cada job implementada conforme spec
 - ✅ PurgeFailureQueue com backoff exponencial (1h, 2h, 4h, 8h, 24h)
@@ -1556,25 +1900,29 @@ if (subscription.status === 'downgraded') {
 - ✅ Cleanup no `onClose` hook
 
 **Timeline de degradação:**
+
 - ✅ D+0: Payment falha → status: past_due
 - ✅ D+10: Grace period expira → status: downgraded, data_deletion_scheduled_at: D+40
 - ✅ D+40: Purge executa → status: expired, dados não-core deletados
 
 **Dados preservados (core):**
+
 - ✅ Tenant, PlatformAccount
 - ✅ Subscription, SubscriptionHistory, BillingEvent
 - ✅ Projects, Epics, Tasks
 
 **Dados expurgados (não-core):**
-- ✅ SLA: templates, task snapshots
+
+- ✅ SLA: templates
 - ✅ COGS: entries, budgets
 - ✅ DORA: deploys
 - ✅ Integrations: connections, webhook events
-- ✅ Comms: templates, sent messages
+- ⚠️ Comms: sem purge implementado (módulo sem persistência própria)
 
 #### ✅ Etapa 6: Documentação OpenAPI
 
 **Implementado:**
+
 - [x] `docs/openapi/billing-v1.yaml` completo
 - [x] Todos os endpoints documentados
 - [x] Schemas de request/response
@@ -1583,6 +1931,7 @@ if (subscription.status === 'downgraded') {
 - [x] Descrições detalhadas
 
 **Validado vs Planejado:**
+
 - ✅ Segue padrão dos outros módulos (core, sla, dora)
 - ✅ Todos os endpoints implementados documentados
 - ✅ Schemas coerentes com implementação
@@ -1614,6 +1963,17 @@ if (subscription.status === 'downgraded') {
 - [x] Responses padronizados (ok/fail)
 - [x] Paginação com cursor
 - [x] Filtros e queries
+
+#### Stripe Integration (Etapa 7)
+
+- [x] Stripe SDK v22 instalado
+- [x] `stripe.ts` singleton com lazy init
+- [x] `POST /billing/checkout` → Stripe Checkout Session
+- [x] `POST /billing/portal` → Stripe Customer Portal
+- [x] `POST /billing/cancel` → cancela via Stripe API
+- [x] Webhook `POST /api/v1/webhooks/billing/stripe` com HMAC
+- [x] Idempotência via `BillingEvent.providerEventId`
+- [x] 5 eventos Stripe tratados (checkout, invoice.paid, invoice.payment_failed, subscription.updated, subscription.deleted)
 
 #### Cache e Performance
 
@@ -1655,23 +2015,25 @@ if (subscription.status === 'downgraded') {
 
 ### Limitações Conhecidas e Trabalho Futuro
 
-#### ⚠️ Stripe Integration (Não Implementado)
+#### ✅ Stripe Integration (Implementado — ver Etapa 7)
 
-**Endpoints que retornam 501:**
-- `POST /billing/checkout` - Stripe Checkout
-- `POST /billing/portal` - Stripe Customer Portal
-- `POST /billing/cancel` - Cancelamento via Stripe
+**Endpoints implementados:**
 
-**Implementação futura:**
-- [ ] Webhook handler `/webhooks/billing/stripe`
-- [ ] Stripe SDK initialization (`src/modules/billing/stripe.ts`)
-- [ ] Idempotência com `providerEventId`
-- [ ] Tratamento de eventos: `invoice.payment_failed`, `customer.subscription.updated`, etc
-- [ ] Sincronização bidirecional Stripe ↔ Banco
+- `POST /billing/checkout` → retorna `{ url, session_id }`
+- `POST /billing/portal` → retorna `{ url }`
+- `POST /billing/cancel` → cancela via Stripe + atualiza BD
+
+**Status do sandbox:**
+
+- ✅ `stripe_price_id` configurado nos planos pagos
+- ✅ `STRIPE_WEBHOOK_SECRET` configurado no `.env`
+- ✅ Stripe CLI instalado e listener em execução
+- ✅ Login realizado na conta `acct_1TOJ4mRxm8mbbMoH`
 
 #### 🔮 Melhorias Futuras
 
 **Recursos planejados mas não implementados:**
+
 - [ ] Notificações automáticas (email/in-app) para warnings
 - [ ] Dashboard de métricas de billing para platform admins
 - [ ] Webhooks para tenants (notificação de mudanças)
@@ -1681,6 +2043,7 @@ if (subscription.status === 'downgraded') {
 - [ ] Metering para features pay-per-use
 
 **Otimizações técnicas:**
+
 - [ ] Redis para cache de entitlement (atualmente in-memory)
 - [ ] Filas com Bull/BullMQ para jobs (atualmente setInterval)
 - [ ] Observabilidade com métricas de billing (Prometheus/Grafana)
@@ -1689,6 +2052,7 @@ if (subscription.status === 'downgraded') {
 ### Arquivos Criados/Modificados
 
 **Novos arquivos:**
+
 ```
 src/modules/billing/
 ├── entitlement.ts              # Cache e guards
@@ -1696,6 +2060,8 @@ src/modules/billing/
 ├── service.ts                  # Business logic
 ├── routes.ts                   # Endpoints tenant
 ├── platform-routes.ts          # Endpoints admin
+├── stripe.ts                   # Singleton do Stripe SDK
+├── webhook-routes.ts           # Handler de webhooks Stripe
 ├── worker.ts                   # Worker principal
 └── jobs/
     ├── apply-pending-changes.ts
@@ -1716,33 +2082,44 @@ docs/
 ```
 
 **Arquivos modificados:**
+
 ```
 prisma/schema.prisma           # Billing models
 src/plugins/auth.ts            # platform_role support
 src/types/fastify.d.ts         # JWT types
 src/modules/auth/service.ts    # Permissions, register
-src/app.ts                     # Routes, hook, worker
+src/modules/billing/service.ts # Stripe stubs → implementação real; getPlanById
+src/modules/billing/platform-routes.ts # Fix GET /plans/:id
+src/modules/billing/routes.ts  # Error handling (remover NOT_IMPLEMENTED)
+src/app.ts                     # Routes, hook, worker, billingWebhookRoutes
 src/modules/sla/routes.ts      # Module guard
 src/modules/cogs/routes.ts     # Module guard
 src/modules/dora/routes.ts     # Module guard
 src/modules/intel/routes.ts    # Module guard
+apps/api/.env                  # STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
 ```
 
 ### Conclusão
 
-✅ **Implementação completa** de todas as 6 etapas planejadas  
+✅ **Implementação completa** de todas as 7 etapas (incluindo integração Stripe)  
 ✅ **Zero erros de compilação** TypeScript  
-✅ **Consistente** com especificação original de 2500 linhas  
-✅ **Documentado** para frontend team  
-✅ **Pronto para integração** com Stripe em etapa futura  
+✅ **Consistente** com especificação original  
+✅ **Documentado** para frontend team
 
-**Total de arquivos criados:** 13  
-**Total de arquivos modificados:** 11  
-**Total de rotas implementadas:** 14 (7 tenant + 7 admin)  
-**Total de rotas protegidas:** 35 (SLA, COGS, DORA, Intel)  
+**Total de arquivos criados:** 15  
+**Total de arquivos modificados:** 13  
+**Total de rotas implementadas:** 15 (7 tenant + 7 admin + 1 webhook)  
+**Total de rotas protegidas:** 35 (SLA, COGS, DORA, Intel)
+
+**Sandbox 100% configurado (2026-04-20):**
+
+- ✅ Price IDs criados no Stripe Dashboard e vinculados aos planos via `PATCH /platform/billing/plans/:id`
+- ✅ Stripe CLI v1.40.6 instalado (Manjaro Linux via `yay -S stripe-cli`) com alias no `~/.zshrc`
+- ✅ Login realizado na conta sandbox `acct_1TOJ4mRxm8mbbMoH` (chave válida por 90 dias)
+- ✅ `stripe listen` executado — `STRIPE_WEBHOOK_SECRET` configurado no `.env`
 
 **Próximos passos recomendados:**
-1. Implementar integração com Stripe (webhooks, checkout, portal)
+
+1. Subir o servidor (`npm run dev`) e testar fluxo completo de checkout → webhook → subscription ativada
 2. Adicionar testes automatizados
-3. Deploy em ambiente de staging para validação
-4. Documentar para time de frontend começar integração
+3. Deploy em staging para validação
