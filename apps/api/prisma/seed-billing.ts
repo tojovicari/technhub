@@ -1,6 +1,43 @@
 import { PrismaClient } from '@prisma/client';
+import Stripe from 'stripe';
 
 const prisma = new PrismaClient();
+
+function getStripe(): Stripe {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) throw new Error('STRIPE_SECRET_KEY is not configured');
+  return new Stripe(key);
+}
+
+async function resolveStripePriceId(
+  stripe: Stripe,
+  existing: string | null,
+  plan: { name: string; displayName: string; description: string; priceCents: number; currency: string; billingPeriod: string }
+): Promise<string | null> {
+  // Planos gratuitos não têm price no Stripe
+  if (plan.priceCents === 0) return null;
+
+  // Se já existe um price_xxx válido no banco, reutilizar
+  if (existing && existing.startsWith('price_')) return existing;
+
+  // Criar product + price automaticamente
+  const interval = plan.billingPeriod === 'annual' ? 'year' : 'month';
+
+  const product = await stripe.products.create({
+    name: plan.displayName,
+    description: plan.description,
+    metadata: { plan_name: plan.name }
+  });
+
+  const price = await stripe.prices.create({
+    product: product.id,
+    unit_amount: plan.priceCents,
+    currency: plan.currency.toLowerCase(),
+    recurring: { interval }
+  });
+
+  return price.id;
+}
 
 const PLANS = [
   {
@@ -32,7 +69,7 @@ const PLANS = [
     priceCents: 4900,
     currency: 'USD',
     billingPeriod: 'monthly',
-    stripePriceId: null, // TODO: preencher após criar no Stripe Dashboard
+    stripePriceId: null,
     modules: ['core', 'integrations', 'dora', 'sla', 'comms'],
     maxSeats: 5,
     maxIntegrations: 2,
@@ -54,7 +91,7 @@ const PLANS = [
     priceCents: 14900,
     currency: 'USD',
     billingPeriod: 'monthly',
-    stripePriceId: null, // TODO: preencher após criar no Stripe Dashboard
+    stripePriceId: null,
     modules: ['core', 'integrations', 'dora', 'sla', 'cogs', 'comms'],
     maxSeats: 15,
     maxIntegrations: null,
@@ -73,7 +110,7 @@ const PLANS = [
     name: 'enterprise',
     displayName: 'Enterprise',
     description: 'For large organizations with custom needs.',
-    priceCents: 0, // Preço negociado, configurado no Stripe
+    priceCents: 0,
     currency: 'USD',
     billingPeriod: 'monthly',
     stripePriceId: null,
@@ -96,13 +133,27 @@ const PLANS = [
 async function seedBillingPlans() {
   console.log('🌱 Seeding billing plans...');
 
+  const stripe = getStripe();
+
   for (const plan of PLANS) {
+    // Verificar se já existe para reutilizar o stripePriceId existente
+    const existing = await prisma.plan.findUnique({
+      where: { name: plan.name },
+      select: { stripePriceId: true }
+    });
+
+    const stripePriceId = await resolveStripePriceId(stripe, existing?.stripePriceId ?? null, plan);
+
+    const data = { ...plan, stripePriceId };
+
     await prisma.plan.upsert({
       where: { name: plan.name },
-      update: plan,
-      create: plan
+      update: data,
+      create: data
     });
-    console.log(`  ✓ Plan "${plan.name}" created/updated`);
+
+    const priceInfo = stripePriceId ? ` (${stripePriceId})` : '';
+    console.log(`  ✓ Plan "${plan.name}" created/updated${priceInfo}`);
   }
 
   // Criar Subscriptions para tenants pré-existentes (se houver)
@@ -133,11 +184,11 @@ async function seedBillingPlans() {
 
         await prisma.subscriptionHistory.create({
           data: {
-            tenantId: tenant.tenant_id,
+            subscriptionId: sub.id,
             planId: freePlan.id,
-            startedAt: now,
-            endedAt: null,
-            status: 'active'
+            status: 'active',
+            effectiveFrom: now,
+            reason: 'seed'
           }
         });
 

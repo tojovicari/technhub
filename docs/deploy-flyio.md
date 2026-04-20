@@ -5,6 +5,7 @@
 O moasy.tech roda como **monolito modular** no Fly.io: um único app Node.js + Fastify com todos os módulos no mesmo processo, banco Postgres gerenciado pelo Fly.
 
 Essa estratégia cobre:
+
 - Infraestrutura mínima (Fase 1)
 - Configuração de secrets
 - Migrations no deploy
@@ -15,11 +16,11 @@ Essa estratégia cobre:
 
 ## Recursos Fly.io
 
-| Recurso | Tipo | Nome sugerido |
-|---|---|---|
-| App | `fly apps` | `cto-ai-api` |
-| Postgres | `fly postgres` (managed) | `cto-ai-db` |
-| Secrets | `fly secrets` | — |
+| Recurso  | Tipo                     | Nome sugerido |
+| -------- | ------------------------ | ------------- |
+| App      | `fly apps`               | `cto-ai-api`  |
+| Postgres | `fly postgres` (managed) | `cto-ai-db`   |
+| Secrets  | `fly secrets`            | —             |
 
 > Em Fase 1 usa **1 machine** (shared-cpu-1x, 512MB RAM). Escalar para 2+ machines quando necessário.
 
@@ -72,11 +73,15 @@ primary_region = "gru"           # São Paulo — ajuste conforme necessidade
   dockerfile = "apps/api/Dockerfile"
 
 [env]
-  PORT            = "3000"
-  HOST            = "0.0.0.0"
-  NODE_ENV        = "production"
-  AUTH_BYPASS     = "false"
+  PORT                       = "3000"
+  HOST                       = "0.0.0.0"
+  NODE_ENV                   = "production"
+  AUTH_BYPASS                = "false"
   WEBHOOK_WORKER_INTERVAL_MS = "5000"
+  COMMS_WORKER_INTERVAL_MS   = "5000"
+  APP_BASE_URL               = "https://app.moasy.tech"
+  COMMS_FROM_EMAIL           = "no-reply@moasy.tech"
+  COMMS_FROM_NAME            = "moasy.tech"
 
 [http_service]
   internal_port       = 3000
@@ -124,17 +129,58 @@ Adicionar ao `fly.toml`:
 E criar `apps/api/src/migrate.ts`:
 
 ```ts
-import { execSync } from 'node:child_process';
+import { execSync } from "node:child_process";
 
-console.log('[migrate] Running prisma migrate deploy...');
-execSync('npx prisma migrate deploy', {
-  stdio: 'inherit',
-  cwd: new URL('.', import.meta.url).pathname,
+console.log("[migrate] Running prisma migrate deploy...");
+execSync("npx prisma migrate deploy", {
+  stdio: "inherit",
+  cwd: new URL(".", import.meta.url).pathname,
 });
-console.log('[migrate] Done.');
+console.log("[migrate] Done.");
 ```
 
 > **Alternativa mais simples:** configurar `release_command = "npx prisma migrate deploy"` passando `DATABASE_URL` via secret. Confirmar qual abordagem funciona melhor com o runtime do Fly (o release command roda em um container separado).
+
+---
+
+## Desenvolvimento Local com Stripe
+
+Em ambiente local, os webhooks do Stripe precisam ser encaminhados via **Stripe CLI**. Sem isso, eventos como `checkout.session.completed` nunca chegam ao servidor e o plano do tenant não é atualizado após o pagamento.
+
+### Pré-requisito: Stripe CLI autenticado
+
+```sh
+stripe login
+# Abre browser → autorizar na conta Stripe
+```
+
+### Iniciar dev com webhooks
+
+Use o script `dev:full` que sobe o servidor e o listener em paralelo:
+
+```sh
+cd apps/api
+npm run dev:full
+```
+
+Isso executa:
+
+- `tsx watch src/server.ts` — servidor API com hot reload
+- `stripe listen --forward-to localhost:3000/api/v1/webhooks/billing/stripe` — listener de webhooks
+
+O `STRIPE_WEBHOOK_SECRET` do `.env` deve corresponder ao `whsec_...` exibido pelo `stripe listen`. Se mudar de máquina ou conta, atualize o `.env`.
+
+### Reenviar evento perdido
+
+Se o listener não estava rodando quando um pagamento ocorreu no sandbox:
+
+```sh
+# Listar eventos recentes
+stripe events list --type checkout.session.completed --limit 3
+
+# Reenviar pelo ID do evento
+stripe events resend evt_xxxxxxxxxxxxx
+```
 
 ---
 
@@ -146,8 +192,16 @@ Nunca colocar secrets no `fly.toml`. Sempre setar via CLI:
 fly secrets set \
   DATABASE_URL="postgresql://..." \
   JWT_SECRET="..." \
+  STRIPE_SECRET_KEY="..." \
+  STRIPE_WEBHOOK_SECRET="..." \
   GITHUB_WEBHOOK_TOKEN="..." \
   JIRA_WEBHOOK_TOKEN="..." \
+  INCIDENT_IO_WEBHOOK_TOKEN="..." \
+  OPSGENIE_WEBHOOK_TOKEN="..." \
+  SMTP_HOST="..." \
+  SMTP_PORT="587" \
+  SMTP_USER="..." \
+  SMTP_PASS="..." \
   --app cto-ai-api
 ```
 
@@ -161,12 +215,20 @@ O Fly redeploya automaticamente após `fly secrets set`.
 
 ### Referência de secrets obrigatórios
 
-| Secret | Descrição |
-|---|---|
-| `DATABASE_URL` | Connection string do Postgres (preenchida automaticamente via `fly postgres attach`) |
-| `JWT_SECRET` | Chave de assinatura dos JWTs (mínimo 32 chars, aleatório) |
-| `GITHUB_WEBHOOK_TOKEN` | Token compartilhado para validar webhooks do GitHub |
-| `JIRA_WEBHOOK_TOKEN` | Token compartilhado para validar webhooks do JIRA |
+| Secret                      | Obrigatório | Descrição                                                                                                                                             |
+| --------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`              | ✅          | Connection string do Postgres (preenchida automaticamente via `fly postgres attach`)                                                                  |
+| `JWT_SECRET`                | ✅          | Chave de assinatura dos JWTs (mínimo 32 chars, aleatório)                                                                                             |
+| `STRIPE_SECRET_KEY`         | ✅          | Chave secreta do Stripe (`sk_live_...` em produção, `sk_test_...` em dev)                                                                             |
+| `STRIPE_WEBHOOK_SECRET`     | ✅          | Secret de validação de webhooks do Stripe — em produção vem do Dashboard Stripe (Webhooks → endpoint → Signing secret); em dev vem do `stripe listen` |
+| `GITHUB_WEBHOOK_TOKEN`      | ✅          | Token compartilhado para validar webhooks do GitHub — deve coincidir com o secret configurado no webhook do repositório                               |
+| `JIRA_WEBHOOK_TOKEN`        | ✅          | Token compartilhado para validar webhooks do Jira — deve coincidir com o secret configurado no webhook do projeto Jira                                |
+| `INCIDENT_IO_WEBHOOK_TOKEN` | ✅          | Token compartilhado para validar webhooks do incident.io                                                                                              |
+| `OPSGENIE_WEBHOOK_TOKEN`    | ✅          | Token compartilhado para validar webhooks do OpsGenie                                                                                                 |
+| `SMTP_HOST`                 | ✅          | Hostname do servidor SMTP (ex: `smtp.sendgrid.net`)                                                                                                   |
+| `SMTP_PORT`                 | ✅          | Porta SMTP — padrão `587` (TLS). Usar `465` para SSL                                                                                                  |
+| `SMTP_USER`                 | ✅          | Usuário de autenticação SMTP                                                                                                                          |
+| `SMTP_PASS`                 | ✅          | Senha ou API key do SMTP                                                                                                                              |
 
 ---
 
@@ -210,9 +272,20 @@ fly postgres attach cto-ai-db --app cto-ai-api
 # 4. Setar secrets restantes
 fly secrets set \
   JWT_SECRET="$(openssl rand -hex 32)" \
+  STRIPE_SECRET_KEY="sk_live_..." \
+  STRIPE_WEBHOOK_SECRET="whsec_..." \
   GITHUB_WEBHOOK_TOKEN="$(openssl rand -hex 20)" \
   JIRA_WEBHOOK_TOKEN="$(openssl rand -hex 20)" \
+  INCIDENT_IO_WEBHOOK_TOKEN="$(openssl rand -hex 20)" \
+  OPSGENIE_WEBHOOK_TOKEN="$(openssl rand -hex 20)" \
+  SMTP_HOST="smtp.sendgrid.net" \
+  SMTP_PORT="587" \
+  SMTP_USER="apikey" \
+  SMTP_PASS="SG...." \
   --app cto-ai-api
+
+# Nota: STRIPE_WEBHOOK_SECRET em produção deve ser o Signing Secret do endpoint
+# registrado no Stripe Dashboard (Developers → Webhooks → seu endpoint)
 
 # 5. Deploy
 fly deploy --app cto-ai-api
@@ -239,7 +312,7 @@ jobs:
   deploy:
     name: Deploy to Fly.io
     runs-on: ubuntu-latest
-    concurrency: deploy-production   # evita deploys paralelos
+    concurrency: deploy-production # evita deploys paralelos
 
     steps:
       - uses: actions/checkout@v4
@@ -254,8 +327,8 @@ jobs:
 
 **Secrets GitHub necessários:**
 
-| Secret | Como obter |
-|---|---|
+| Secret          | Como obter                                                 |
+| --------------- | ---------------------------------------------------------- |
 | `FLY_API_TOKEN` | `fly tokens create deploy --expiry 8760h --app cto-ai-api` |
 
 ---
@@ -291,12 +364,12 @@ fly postgres connect --app cto-ai-db
 
 ## Evolução Planejada
 
-| Fase | Mudança |
-|---|---|
-| Fase 1 (atual) | 1 machine, monolito modular |
-| Fase 2 | Separar `web` e `worker` em process groups do Fly |
-| Fase 3 | Escalar machines conforme carga; adicionar Redis/BullMQ |
-| Fase 4 | Multi-region se necessário |
+| Fase           | Mudança                                                 |
+| -------------- | ------------------------------------------------------- |
+| Fase 1 (atual) | 1 machine, monolito modular                             |
+| Fase 2         | Separar `web` e `worker` em process groups do Fly       |
+| Fase 3         | Escalar machines conforme carga; adicionar Redis/BullMQ |
+| Fase 4         | Multi-region se necessário                              |
 
 Para separar web/worker em process groups (Fase 2), adicionar ao `fly.toml`:
 
@@ -312,6 +385,8 @@ Para separar web/worker em process groups (Fase 2), adicionar ao `fly.toml`:
 
 - [ ] `fly.toml` atualizado e commitado
 - [ ] Secrets setados (`fly secrets list --app cto-ai-api`)
+- [ ] `STRIPE_SECRET_KEY` e `STRIPE_WEBHOOK_SECRET` setados com valores de **produção** (`sk_live_...`, `whsec_...` do endpoint registrado no Stripe Dashboard)
+- [ ] Endpoint de webhook registrado no Stripe Dashboard apontando para `https://<app>.fly.dev/api/v1/webhooks/billing/stripe`
 - [ ] Migrations validadas em staging antes de produção
 - [ ] `/health` retornando 200
 - [ ] Dockerfile atualizado com as dependências corretas

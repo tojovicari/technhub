@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:full": "concurrently --names \"api,stripe\" --prefix-colors \"cyan,yellow\" \"npm run dev\" \"stripe listen --forward-to localhost:3000/api/v1/webhooks/billing/stripe\"",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "test": "vitest run",
@@ -33,6 +34,7 @@
     "@types/node": "^22.10.1",
     "@types/nodemailer": "^6.4.23",
     "@vitest/coverage-v8": "^3.2.0",
+    "concurrently": "^9.2.1",
     "prisma": "^5.22.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.0",

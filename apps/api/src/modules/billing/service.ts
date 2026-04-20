@@ -206,20 +206,34 @@ export async function getPlanById(planId: string) {
 }
 
 export async function createPlan(input: CreatePlanInput) {
-  // Validar que planos pagos têm stripe_price_id
-  if (input.price_cents > 0 && !input.stripe_price_id) {
-    throw Object.assign(
-      new Error('stripe_price_id is required for paid plans'),
-      { code: 'VALIDATION_ERROR' }
-    );
-  }
-
   // Validar core obrigatório
   if (!input.modules?.includes('core')) {
     throw Object.assign(
       new Error('Module "core" is required in all plans'),
       { code: 'VALIDATION_ERROR' }
     );
+  }
+
+  // Auto-criar product+price no Stripe para planos pagos sem stripe_price_id explícito
+  let stripePriceId = input.stripe_price_id ?? null;
+  if (input.price_cents > 0 && !stripePriceId) {
+    const stripe = getStripe();
+    const interval = input.billing_period === 'annual' ? 'year' : 'month';
+
+    const product = await stripe.products.create({
+      name: input.display_name,
+      description: input.description,
+      metadata: { plan_name: input.name }
+    });
+
+    const price = await stripe.prices.create({
+      product: product.id,
+      unit_amount: input.price_cents,
+      currency: input.currency.toLowerCase(),
+      recurring: { interval }
+    });
+
+    stripePriceId = price.id;
   }
 
   const plan = await prisma.plan.create({
@@ -230,7 +244,7 @@ export async function createPlan(input: CreatePlanInput) {
       priceCents: input.price_cents,
       currency: input.currency,
       billingPeriod: input.billing_period,
-      stripePriceId: input.stripe_price_id,
+      stripePriceId,
       modules: input.modules,
       maxSeats: input.max_seats,
       maxIntegrations: input.max_integrations,
