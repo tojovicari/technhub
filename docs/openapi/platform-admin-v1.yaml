@@ -1,0 +1,1245 @@
+openapi: 3.0.3
+info:
+  title: moasy.tech Platform Admin API
+  version: 1.0.0
+  description: |
+    Platform administration API for moasy.tech super_admins and platform_admins.
+
+    Covers:
+    - Tenant listing and detail (Módulo A)
+    - Subscription override — force-assign and manual actions (Módulo B)
+    - Revenue metrics — MRR, ARR, churn (Módulo C)
+    - Impersonation — act as org_admin of any tenant (Módulo D)
+
+    **Authentication:** All endpoints require `Authorization: Bearer <JWT>` with
+    `platform_role: super_admin | platform_admin` in the token payload.
+
+    **Separation of write permissions:** Módulo B and Módulo D write endpoints
+    require `platform_role: super_admin` only. `platform_admin` is blocked (403).
+
+servers:
+  - url: /api/v1
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Tenants
+    description: Tenant listing and detail (Módulo A)
+  - name: Subscription Override
+    description: Manual subscription management (Módulo B — super_admin only)
+  - name: Revenue Metrics
+    description: MRR, ARR, churn and subscription analytics (Módulo C)
+  - name: Impersonation
+    description: Act as org_admin of any tenant (Módulo D — super_admin only)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Meta:
+      type: object
+      properties:
+        request_id:
+          type: string
+          example: "req_abc123"
+        version:
+          type: string
+          example: "1"
+        timestamp:
+          type: string
+          format: date-time
+      required: [request_id, version, timestamp]
+
+    SubscriptionStatus:
+      type: string
+      enum: [trialing, active, past_due, downgraded, cancelled, expired]
+
+    PlanSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          example: "pro"
+        display_name:
+          type: string
+          example: "Pro"
+        price_cents:
+          type: integer
+          example: 14900
+        billing_period:
+          type: string
+          enum: [monthly, annual]
+      required: [id, name, display_name, price_cents, billing_period]
+
+    SubscriptionSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/SubscriptionStatus"
+        plan:
+          $ref: "#/components/schemas/PlanSummary"
+        current_period_end:
+          type: string
+          format: date-time
+        trial_ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        past_due_since:
+          type: string
+          format: date-time
+          nullable: true
+        cancelled_at:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, status, plan, current_period_end]
+
+    TenantSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "ten_abc123"
+        name:
+          type: string
+          example: "Acme Corp"
+        slug:
+          type: string
+          example: "acme"
+        created_at:
+          type: string
+          format: date-time
+        subscription:
+          $ref: "#/components/schemas/SubscriptionSummary"
+        usage:
+          type: object
+          properties:
+            seats_used:
+              type: integer
+            integrations_used:
+              type: integer
+          required: [seats_used, integrations_used]
+        accounts_count:
+          type: integer
+          description: Total active accounts in tenant
+        mrr_cents:
+          type: integer
+          description: Monthly recurring revenue contribution in cents (annual plans divided by 12)
+      required:
+        [
+          id,
+          name,
+          slug,
+          created_at,
+          subscription,
+          usage,
+          accounts_count,
+          mrr_cents,
+        ]
+
+    TenantDetail:
+      allOf:
+        - $ref: "#/components/schemas/TenantSummary"
+        - type: object
+          properties:
+            subscription:
+              allOf:
+                - $ref: "#/components/schemas/SubscriptionSummary"
+                - type: object
+                  properties:
+                    provider:
+                      type: string
+                      nullable: true
+                      example: "stripe"
+                      description: "'stripe' for Stripe-managed, null for manual assignments"
+                    provider_subscription_id:
+                      type: string
+                      nullable: true
+                    provider_customer_id:
+                      type: string
+                      nullable: true
+                    scheduled_downgrade_plan:
+                      allOf:
+                        - $ref: "#/components/schemas/PlanSummary"
+                      nullable: true
+                    pending_plan_changes:
+                      type: object
+                      nullable: true
+                    downgraded_at:
+                      type: string
+                      format: date-time
+                      nullable: true
+                    data_deletion_scheduled_at:
+                      type: string
+                      format: date-time
+                      nullable: true
+            accounts:
+              type: array
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  email:
+                    type: string
+                    format: email
+                  full_name:
+                    type: string
+                  role:
+                    type: string
+                    enum: [org_admin, manager, viewer]
+                  is_active:
+                    type: boolean
+                  last_login_at:
+                    type: string
+                    format: date-time
+                    nullable: true
+                  created_at:
+                    type: string
+                    format: date-time
+                required: [id, email, full_name, role, is_active, created_at]
+            recent_events:
+              type: array
+              maxItems: 5
+              items:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  event_type:
+                    type: string
+                  provider:
+                    type: string
+                    nullable: true
+                  occurred_at:
+                    type: string
+                    format: date-time
+
+    SubscriptionHistoryEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        subscription_id:
+          type: string
+          format: uuid
+        plan:
+          type: object
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            display_name:
+              type: string
+            price_cents:
+              type: integer
+          required: [id, name, display_name, price_cents]
+        status:
+          type: string
+        effective_from:
+          type: string
+          format: date-time
+        reason:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required: [id, subscription_id, plan, status, effective_from, created_at]
+
+    ErrorResponse:
+      type: object
+      properties:
+        data:
+          nullable: true
+          example: null
+        meta:
+          $ref: "#/components/schemas/Meta"
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+              nullable: true
+          required: [code, message]
+      required: [data, meta, error]
+
+    PaginatedResponse:
+      type: object
+      properties:
+        next_cursor:
+          type: string
+          nullable: true
+          description: UUID of last item — pass as `cursor` in next request
+        total:
+          type: integer
+          description: Total count (not paginated)
+      required: [next_cursor]
+
+paths:
+  # ── Módulo A: Tenant Listing ──────────────────────────────────────────────
+
+  /platform/tenants:
+    get:
+      tags: [Tenants]
+      summary: List all tenants
+      operationId: listTenants
+      description: |
+        Lists all tenants with subscription status and usage.
+        Supports filtering by subscription status, plan, and free-text search.
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/SubscriptionStatus"
+          description: Filter by subscription status
+        - name: plan_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter tenants on a specific plan
+        - name: search
+          in: query
+          schema:
+            type: string
+            minLength: 2
+          description: Search by tenant name, slug, or user email
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+          description: Pagination cursor (UUID of last item from previous page)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/PaginatedResponse"
+                      - type: object
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/TenantSummary"
+                        required: [data]
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  error:
+                    nullable: true
+                    example: null
+              example:
+                data:
+                  data:
+                    - id: "ten_abc123"
+                      name: "Acme Corp"
+                      slug: "acme"
+                      created_at: "2026-01-15T09:00:00.000Z"
+                      subscription:
+                        id: "sub_xyz"
+                        status: "active"
+                        plan:
+                          id: "plan_pro_id"
+                          name: "pro"
+                          display_name: "Pro"
+                          price_cents: 14900
+                          billing_period: "monthly"
+                        current_period_end: "2026-05-15T09:00:00.000Z"
+                        trial_ends_at: null
+                        past_due_since: null
+                        cancelled_at: null
+                      usage:
+                        seats_used: 8
+                        integrations_used: 3
+                      accounts_count: 8
+                      mrr_cents: 14900
+                  next_cursor: null
+                  total: 1
+                meta:
+                  request_id: "req_abc"
+                  version: "1"
+                  timestamp: "2026-04-22T14:00:00.000Z"
+                error: null
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden — insufficient platform_role
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /platform/tenants/{tenant_id}:
+    get:
+      tags: [Tenants]
+      summary: Get tenant detail
+      operationId: getTenant
+      description: Full tenant detail including subscription, accounts, and recent billing events.
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/TenantDetail"
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  error:
+                    nullable: true
+                    example: null
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /platform/tenants/{tenant_id}/subscription-history:
+    get:
+      tags: [Tenants]
+      summary: Get tenant subscription history
+      operationId: getTenantSubscriptionHistory
+      description: Chronological history of plan changes for a tenant, used for audit and support.
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/PaginatedResponse"
+                      - type: object
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/SubscriptionHistoryEntry"
+                        required: [data]
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  error:
+                    nullable: true
+                    example: null
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /platform/billing/plans/{plan_id}/tenants:
+    get:
+      tags: [Tenants]
+      summary: List tenants on a plan
+      operationId: getPlanTenants
+      description: |
+        Lists tenants currently subscribed to the specified plan.
+        Complements the `active_subscriptions_count` field in plan detail
+        by showing who the subscribers are, not just the count.
+      parameters:
+        - name: plan_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/SubscriptionStatus"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/PaginatedResponse"
+                      - type: object
+                        properties:
+                          plan:
+                            $ref: "#/components/schemas/PlanSummary"
+                          data:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                name:
+                                  type: string
+                                slug:
+                                  type: string
+                                subscription_status:
+                                  $ref: "#/components/schemas/SubscriptionStatus"
+                                current_period_end:
+                                  type: string
+                                  format: date-time
+                                mrr_cents:
+                                  type: integer
+                          total:
+                            type: integer
+                        required: [plan, data, total]
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  error:
+                    nullable: true
+                    example: null
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Plan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ── Módulo B: Subscription Override ──────────────────────────────────────
+
+  /platform/tenants/{tenant_id}/subscription:
+    put:
+      tags: [Subscription Override]
+      summary: Force-assign plan to tenant (no Stripe)
+      operationId: forceAssignSubscription
+      description: |
+        Manually assigns a plan to a tenant, bypassing Stripe.
+        Intended for Enterprise clients paying via invoice/wire transfer.
+
+        **super_admin only** — platform_admin receives 403.
+
+        Side effects:
+        - Creates/updates Subscription with `provider = null`
+        - Creates SubscriptionHistory with the provided `reason`
+        - Invalidates entitlement cache immediately
+        - Does NOT cancel existing Stripe subscription — admin must do that manually
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                plan_id:
+                  type: string
+                  format: uuid
+                status:
+                  type: string
+                  enum: [trialing, active]
+                  default: active
+                  description: Only trialing or active are valid for manual assignment
+                current_period_end:
+                  type: string
+                  format: date-time
+                  description: When the access period ends
+                reason:
+                  type: string
+                  minLength: 5
+                  description: Audit reason — permanently stored in SubscriptionHistory
+              required: [plan_id, current_period_end, reason]
+            example:
+              plan_id: "plan_enterprise_id"
+              status: "active"
+              current_period_end: "2027-04-22T00:00:00.000Z"
+              reason: "enterprise_manual_billing_invoice_INV-2026-042"
+      responses:
+        "200":
+          description: Subscription updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      tenant_id:
+                        type: string
+                      status:
+                        $ref: "#/components/schemas/SubscriptionStatus"
+                      plan:
+                        $ref: "#/components/schemas/PlanSummary"
+                      current_period_start:
+                        type: string
+                        format: date-time
+                      current_period_end:
+                        type: string
+                        format: date-time
+                      provider:
+                        type: string
+                        nullable: true
+                        example: null
+                      provider_subscription_id:
+                        type: string
+                        nullable: true
+                        example: null
+                      provider_customer_id:
+                        type: string
+                        nullable: true
+                        example: null
+                      updated_at:
+                        type: string
+                        format: date-time
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  error:
+                    nullable: true
+                    example: null
+        "400":
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden — platform_admin cannot use this endpoint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Tenant or plan not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Unprocessable — plan is inactive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      tags: [Subscription Override]
+      summary: Apply manual action on subscription
+      operationId: patchSubscription
+      description: |
+        Applies a point action on the tenant's subscription without changing the plan.
+        Available actions: `extend_grace`, `reactivate`, `cancel`.
+
+        **super_admin only** — platform_admin receives 403.
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  enum: [extend_grace, reactivate, cancel]
+                reason:
+                  type: string
+                  minLength: 5
+                  description: Audit reason — always stored
+                extension_days:
+                  type: integer
+                  minimum: 1
+                  maximum: 30
+                  description: Required when action = extend_grace
+              required: [action, reason]
+            examples:
+              extend_grace:
+                summary: Extend grace period
+                value:
+                  action: "extend_grace"
+                  extension_days: 7
+                  reason: "cliente_em_negociacao_renovacao_Q2"
+              reactivate:
+                summary: Manually reactivate
+                value:
+                  action: "reactivate"
+                  reason: "wire_transfer_confirmed_TRF-2026-0422"
+              cancel:
+                summary: Force cancel
+                value:
+                  action: "cancel"
+                  reason: "nao_pagamento_confirmado_30d"
+      responses:
+        "200":
+          description: Action applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      tenant_id:
+                        type: string
+                      action_applied:
+                        type: string
+                        enum: [extend_grace, reactivate, cancel]
+                      status:
+                        $ref: "#/components/schemas/SubscriptionStatus"
+                      past_due_since:
+                        type: string
+                        format: date-time
+                        nullable: true
+                      grace_expires_at:
+                        type: string
+                        format: date-time
+                        nullable: true
+                        description: Only present for extend_grace action
+                      updated_at:
+                        type: string
+                        format: date-time
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  error:
+                    nullable: true
+                    example: null
+        "400":
+          description: Bad request — missing extension_days or invalid action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden — platform_admin cannot use this endpoint
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Conflict — action precondition not met (wrong status)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ── Módulo C: Revenue Metrics ─────────────────────────────────────────────
+
+  /platform/billing/metrics:
+    get:
+      tags: [Revenue Metrics]
+      summary: Get platform revenue metrics
+      operationId: getRevenueMetrics
+      description: |
+        Returns aggregated financial metrics for the platform.
+        Includes MRR, ARR, subscription breakdown by status and plan,
+        period movements (new, upgrades, downgrades, churn), and churn rate.
+
+        **MRR calculation:**
+        - monthly plans: price_cents as-is
+        - annual plans: price_cents / 12 (rounded down)
+        - Includes: active, trialing, past_due
+        - Excludes: downgraded, cancelled, expired
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [last_30d, last_90d, last_12m, mtd, ytd]
+            default: last_30d
+          description: Time window for period-based metrics (movements, churn)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      period:
+                        type: string
+                        enum: [last_30d, last_90d, last_12m, mtd, ytd]
+                      period_start:
+                        type: string
+                        format: date-time
+                      period_end:
+                        type: string
+                        format: date-time
+                      calculated_at:
+                        type: string
+                        format: date-time
+                      mrr_cents:
+                        type: integer
+                        description: Monthly Recurring Revenue in cents
+                      arr_cents:
+                        type: integer
+                        description: Annual Recurring Revenue in cents (mrr × 12)
+                      subscriptions:
+                        type: object
+                        properties:
+                          total_active:
+                            type: integer
+                            description: trialing + active + past_due
+                          by_status:
+                            type: object
+                            properties:
+                              trialing:
+                                type: integer
+                              active:
+                                type: integer
+                              past_due:
+                                type: integer
+                              downgraded:
+                                type: integer
+                              cancelled:
+                                type: integer
+                              expired:
+                                type: integer
+                      period_movements:
+                        type: object
+                        properties:
+                          new_subscriptions:
+                            type: integer
+                          upgrades:
+                            type: integer
+                          downgrades:
+                            type: integer
+                          churned:
+                            type: integer
+                          reactivated:
+                            type: integer
+                      churn_rate_percent:
+                        type: number
+                        format: float
+                        description: (churned / active_at_period_start) × 100
+                      by_plan:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            plan_id:
+                              type: string
+                              format: uuid
+                            plan_name:
+                              type: string
+                            plan_display_name:
+                              type: string
+                            billing_period:
+                              type: string
+                              enum: [monthly, annual]
+                            price_cents:
+                              type: integer
+                            active_subscriptions:
+                              type: integer
+                            mrr_cents:
+                              type: integer
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  error:
+                    nullable: true
+                    example: null
+              example:
+                data:
+                  period: "last_30d"
+                  period_start: "2026-03-23T00:00:00.000Z"
+                  period_end: "2026-04-22T23:59:59.000Z"
+                  calculated_at: "2026-04-22T14:30:00.000Z"
+                  mrr_cents: 142600
+                  arr_cents: 1711200
+                  subscriptions:
+                    total_active: 31
+                    by_status:
+                      trialing: 4
+                      active: 23
+                      past_due: 2
+                      downgraded: 3
+                      cancelled: 5
+                      expired: 1
+                  period_movements:
+                    new_subscriptions: 6
+                    upgrades: 2
+                    downgrades: 1
+                    churned: 1
+                    reactivated: 0
+                  churn_rate_percent: 3.23
+                  by_plan:
+                    - plan_id: "plan_pro_id"
+                      plan_name: "pro"
+                      plan_display_name: "Pro"
+                      billing_period: "monthly"
+                      price_cents: 14900
+                      active_subscriptions: 12
+                      mrr_cents: 178800
+                meta:
+                  request_id: "req_abc"
+                  version: "1"
+                  timestamp: "2026-04-22T14:30:00.000Z"
+                error: null
+        "400":
+          description: Invalid period parameter
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ── Módulo D: Impersonation ───────────────────────────────────────────────
+
+  /platform/tenants/{tenant_id}/impersonate:
+    post:
+      tags: [Impersonation]
+      summary: Generate impersonation token
+      operationId: impersonateTenant
+      description: |
+        Generates a short-lived JWT (15 minutes) that acts as org_admin of the specified tenant.
+
+        **super_admin only** — platform_admin receives 403.
+
+        The impersonation token:
+        - Contains `is_impersonation: true` in payload
+        - Contains `impersonated_by: <admin_account_id>` in payload
+        - Is rejected by all `/platform/*` endpoints
+        - Cannot modify account credentials (password, email)
+        - Cannot be renewed
+
+        Every call is recorded in `ImpersonationAudit` with the provided reason.
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+                  minLength: 10
+                  description: Reason for impersonation — stored permanently in audit log
+              required: [reason]
+            example:
+              reason: "suporte_ticket_#SUP-2026-0422-acme-login-issue"
+      responses:
+        "201":
+          description: Impersonation token created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      access_token:
+                        type: string
+                        description: JWT valid for 15 minutes
+                      expires_at:
+                        type: string
+                        format: date-time
+                      impersonated_tenant_id:
+                        type: string
+                      impersonated_as_role:
+                        type: string
+                        example: "org_admin"
+                      audit_id:
+                        type: string
+                        format: uuid
+                        description: ID in ImpersonationAudit table
+                    required:
+                      [
+                        access_token,
+                        expires_at,
+                        impersonated_tenant_id,
+                        impersonated_as_role,
+                        audit_id,
+                      ]
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  error:
+                    nullable: true
+                    example: null
+              example:
+                data:
+                  access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                  expires_at: "2026-04-22T12:45:00.000Z"
+                  impersonated_tenant_id: "ten_abc123"
+                  impersonated_as_role: "org_admin"
+                  audit_id: "imp_xyz789"
+                meta:
+                  request_id: "req_abc"
+                  version: "1"
+                  timestamp: "2026-04-22T12:30:00.000Z"
+                error: null
+        "400":
+          description: Bad request — reason too short
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden — platform_admin cannot impersonate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Conflict — no active org_admin found for tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /platform/tenants/{tenant_id}/impersonation-audit:
+    get:
+      tags: [Impersonation]
+      summary: List impersonation audit records for tenant
+      operationId: getImpersonationAudit
+      description: Lists all impersonation sessions initiated for a specific tenant.
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/PaginatedResponse"
+                      - type: object
+                        properties:
+                          data:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                id:
+                                  type: string
+                                  format: uuid
+                                initiated_by:
+                                  type: object
+                                  properties:
+                                    id:
+                                      type: string
+                                    email:
+                                      type: string
+                                    full_name:
+                                      type: string
+                                tenant_id:
+                                  type: string
+                                reason:
+                                  type: string
+                                token_issued_at:
+                                  type: string
+                                  format: date-time
+                                token_expires_at:
+                                  type: string
+                                  format: date-time
+                                first_used_at:
+                                  type: string
+                                  format: date-time
+                                  nullable: true
+                        required: [data]
+                  meta:
+                    $ref: "#/components/schemas/Meta"
+                  error:
+                    nullable: true
+                    example: null
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
