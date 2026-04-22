@@ -1,3 +1,5 @@
+import { wrapEmailLayout } from './layout.js';
+
 export interface EmailVerificationPayload {
   email: string;
   verification_token: string;
@@ -10,16 +12,16 @@ export function renderEmailVerification(data: EmailVerificationPayload) {
 
   return {
     subject: 'Confirm your moasy.tech account',
-    body: `
+    body: wrapEmailLayout(`
       <p>Hi,</p>
       <p>Thanks for signing up for <strong>moasy.tech</strong>. Please confirm your email address to activate your account.</p>
-      <p>
-        <a href="${url}" style="background:#2563EB;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;">
+      <p style="margin-top:24px;">
+        <a href="${url}" style="background:#2563EB;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;display:inline-block;">
           Confirm email address
         </a>
       </p>
       <p>This link expires on <strong>${data.expires_at}</strong>.</p>
       <p>If you did not create an account, you can safely ignore this email.</p>
-    `,
+    `),
   };
 }

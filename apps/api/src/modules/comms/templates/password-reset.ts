@@ -1,3 +1,5 @@
+import { wrapEmailLayout } from './layout.js';
+
 export interface PasswordResetPayload {
   email: string;
   reset_token: string;
@@ -10,16 +12,16 @@ export function renderPasswordReset(data: PasswordResetPayload) {
 
   return {
     subject: 'Reset your moasy.tech password',
-    body: `
+    body: wrapEmailLayout(`
       <p>Hi,</p>
       <p>We received a request to reset the password for your <strong>moasy.tech</strong> account associated with ${data.email}.</p>
-      <p>
-        <a href="${url}" style="background:#2563EB;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;">
+      <p style="margin-top:24px;">
+        <a href="${url}" style="background:#2563EB;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;display:inline-block;">
           Reset password
         </a>
       </p>
       <p>This link expires on <strong>${data.expires_at}</strong>.</p>
       <p>If you did not request a password reset, you can safely ignore this email. Your password will not change.</p>
-    `,
+    `),
   };
 }

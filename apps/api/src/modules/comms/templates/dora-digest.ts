@@ -1,3 +1,5 @@
+import { wrapEmailLayout } from './layout.js';
+
 export interface DoraDigestPayload {
   period: string;
   team_name: string;
@@ -17,8 +19,8 @@ export function renderDoraDigest(data: DoraDigestPayload) {
 
   return {
     subject: `DORA digest — ${data.team_name} (${data.period})`,
-    body: `
-      <h2 style="color:#1E293B;">DORA Metrics Digest</h2>
+    body: wrapEmailLayout(`
+      <h2 style="color:#1E293B;margin-top:0;">DORA Metrics Digest</h2>
       <p>Team: <strong>${data.team_name}</strong> &nbsp;|&nbsp; Period: <strong>${data.period}</strong></p>
       <table style="border-collapse:collapse;width:100%;max-width:500px;">
         <thead>
@@ -34,11 +36,11 @@ export function renderDoraDigest(data: DoraDigestPayload) {
           ${row('Mean Time to Restore',   data.mean_time_to_restore)}
         </tbody>
       </table>
-      <p style="margin-top:20px;">
-        <a href="${url}" style="background:#2563EB;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;">
+      <p style="margin-top:24px;">
+        <a href="${url}" style="background:#2563EB;color:#fff;padding:10px 20px;border-radius:6px;text-decoration:none;display:inline-block;">
           View Full Dashboard
         </a>
       </p>
-    `,
+    `),
   };
 }
