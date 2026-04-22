@@ -35,7 +35,7 @@ import { buildApp } from '../../app.js';
 import * as svc from '../../modules/auth/service.js';
 import { makeToken } from '../../__tests__/helpers.js';
 import type { FastifyInstance } from 'fastify';
-import type { PlatformRole } from '@prisma/client';
+import type { PlatformRole, PlatformSuperRole } from '@prisma/client';
 
 const ACCOUNT_ID = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
 
@@ -46,6 +46,7 @@ function makeAccount() {
     email: 'glauber@example.com',
     full_name: 'Glauber Test',
     role: 'org_admin' as PlatformRole,
+    platform_role: null as PlatformSuperRole | null,
     is_active: true as const,
     core_user_id: null,
     created_at: new Date().toISOString()

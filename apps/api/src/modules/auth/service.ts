@@ -312,7 +312,8 @@ export async function login(
       tenant_id: account.tenantId,
       email: account.email,
       full_name: account.fullName,
-      role: account.role
+      role: account.role,
+      platform_role: account.platformRole ?? null
     }
   };
 }
@@ -399,6 +400,7 @@ export async function getMe(accountId: string) {
     email: account.email,
     full_name: account.fullName,
     role: account.role,
+    platform_role: account.platformRole ?? null,
     is_active: account.isActive,
     core_user_id: account.coreUserId ?? null,
     last_login_at: account.lastLoginAt?.toISOString() ?? null,
