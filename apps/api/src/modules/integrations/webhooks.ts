@@ -204,6 +204,57 @@ async function processOpsGenieWebhook(
   });
 }
 
+async function processGithubWebhook(
+  payload: Record<string, unknown>,
+  connection: IntegrationConnection,
+): Promise<void> {
+  // Only process merged pull_request events for near-real-time lead time ingestion.
+  // Uses pr.created_at as proxy for first_commit_at (documented as valid option).
+  if (payload['action'] !== 'closed') return;
+
+  const pr = payload['pull_request'] as Record<string, unknown> | undefined;
+  if (!pr || pr['merged'] !== true) return;
+
+  const mergedAt = typeof pr['merged_at'] === 'string' ? new Date(pr['merged_at']) : null;
+  const createdAt = typeof pr['created_at'] === 'string' ? new Date(pr['created_at']) : null;
+  if (!mergedAt || !createdAt) return;
+
+  const leadTimeHours = (mergedAt.getTime() - createdAt.getTime()) / 3_600_000;
+  if (leadTimeHours > 90 * 24) return; // outlier — skip silently
+
+  const repoFullName = (payload['repository'] as Record<string, unknown> | undefined)
+    ?.['full_name'] as string | undefined;
+  const prNumber = pr['number'];
+  const prIdentifier = repoFullName && prNumber != null
+    ? `${repoFullName}#${prNumber}`
+    : String(prNumber ?? '');
+
+  // Best-effort project resolution — task may not exist yet if sync hasn't run
+  let projectId: string | null = null;
+  if (repoFullName && prNumber != null) {
+    const sourceId = `${repoFullName}#pr#${prNumber}`;
+    const task = await prisma.task.findUnique({
+      where: { tenantId_source_sourceId: { tenantId: connection.tenantId, source: 'github', sourceId } },
+      select: { projectId: true },
+    });
+    projectId = task?.projectId ?? null;
+  }
+
+  await prisma.healthMetric.create({
+    data: {
+      tenantId: connection.tenantId,
+      projectId,
+      metricName: 'lead_time_hours',
+      windowDays: 1,
+      value: leadTimeHours,
+      unit: 'hours',
+      windowStart: createdAt,
+      windowEnd: mergedAt,
+      metadata: { pr_id: prIdentifier } as Prisma.InputJsonValue,
+    },
+  });
+}
+
 async function processOneEvent(eventId: string) {
   const lock = await prisma.integrationWebhookEvent.updateMany({
     where: {
@@ -247,12 +298,20 @@ async function processOneEvent(eventId: string) {
     }
 
     // Incident providers: process the webhook payload inline for near-real-time
-    // MTTR/MTTA accuracy. Non-incident providers fall through to incremental sync.
+    // MTTR/MTTA accuracy. GitHub: process lead time inline + trigger incremental
+    // sync to keep Tasks updated. Other providers fall through to incremental sync.
     const payload = (event.payload ?? {}) as Record<string, unknown>;
     if (event.provider === 'incident_io') {
       await processIncidentIoWebhook(payload, connection);
     } else if (event.provider === 'opsgenie') {
       await processOpsGenieWebhook(payload, connection);
+    } else if (event.provider === 'github') {
+      await processGithubWebhook(payload, connection);
+      await createSyncJob({
+        tenant_id: event.tenantId,
+        connection_id: connection.id,
+        mode: 'incremental'
+      });
     } else {
       await createSyncJob({
         tenant_id: event.tenantId,
