@@ -8,7 +8,7 @@ export interface InvitePayload {
 
 export function renderInvite(data: InvitePayload) {
   const base = process.env.APP_BASE_URL ?? 'https://app.moasy.tech';
-  const url  = `${base}/register?token=${encodeURIComponent(data.invite_token)}`;
+  const url  = `${base}/register/invite?token=${encodeURIComponent(data.invite_token)}`;
 
   return {
     subject: 'You have been invited to moasy.tech',
