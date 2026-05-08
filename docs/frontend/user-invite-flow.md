@@ -50,7 +50,8 @@ POST /auth/invites
     │
     ▼
 [Worker de email]
- └── Envia email com link: APP_BASE_URL/register?token=<invite_token>
+ └── Envia email com link: <APP_BASE_URL>/register/invite?token=<invite_token>
+       (APP_BASE_URL vem de variável de ambiente — ex: https://app.moasy.tech em prod)
     │
     ▼
 [Convidado clica no link]
@@ -395,7 +396,7 @@ A listagem de usuários core inclui campos que indicam o vínculo com uma conta 
 ### Página de aceite do convite (link no email)
 
 ```
-URL recebida: /register?token=<invite_token>
+URL recebida: https://<APP_BASE_URL>/register/invite?token=<invite_token>
 
 1. Extrair token da query string
 2. Exibir formulário: full_name + password
