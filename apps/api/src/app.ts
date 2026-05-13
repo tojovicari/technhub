@@ -24,8 +24,12 @@ import { loadEntitlement } from './modules/billing/entitlement.js';
 export function buildApp() {
   const app = Fastify({ logger: true });
 
+  const extraOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean)
+    : [];
+
   const allowedOrigins = process.env.NODE_ENV === 'production'
-    ? ['https://app.moasy.tech']
+    ? ['https://app.moasy.tech', 'https://moasy.tech', 'https://www.moasy.tech', ...extraOrigins]
     : true;
 
   app.register(cors, {
