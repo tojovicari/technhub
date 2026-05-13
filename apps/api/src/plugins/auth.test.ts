@@ -8,10 +8,11 @@ vi.mock('../modules/integrations/worker.js', () => ({
 // Mock Prisma to avoid requiring a real DB connection
 vi.mock('../lib/prisma.js', () => ({ prisma: {} }));
 
-import { ensureTenantScope } from './auth.js';
+import { ensureTenantScope, registerAuth } from './auth.js';
 import { buildApp } from '../app.js';
 import { makeToken } from '../__tests__/helpers.js';
 import type { TestApp } from '../__tests__/helpers.js';
+import Fastify from 'fastify';
 
 // ─── ensureTenantScope (pure function) ───────────────────────────────────────
 
@@ -133,5 +134,52 @@ describe('Auth decorators', () => {
     // With wildcard permission from DEV_USER the route should pass
     expect(res.statusCode).toBe(200);
     delete process.env.AUTH_BYPASS;
+  });
+});
+
+// ─── AUTH_BYPASS production guard ────────────────────────────────────────────
+
+describe('AUTH_BYPASS production guard', () => {
+  it('throws on startup when AUTH_BYPASS=true and NODE_ENV=production', async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.AUTH_BYPASS = 'true';
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'test-secret-do-not-use-in-production';
+
+    const app = Fastify();
+    app.register(registerAuth);
+
+    await expect(app.ready()).rejects.toThrow('AUTH_BYPASS is not allowed in production');
+
+    await app.close().catch(() => {});
+    delete process.env.AUTH_BYPASS;
+    process.env.NODE_ENV = originalEnv;
+  });
+
+  it('does not throw when AUTH_BYPASS=true and NODE_ENV=test', async () => {
+    process.env.AUTH_BYPASS = 'true';
+    process.env.NODE_ENV = 'test';
+    process.env.JWT_SECRET = 'test-secret-do-not-use-in-production';
+
+    const app = Fastify();
+    app.register(registerAuth);
+
+    await expect(app.ready()).resolves.not.toThrow();
+
+    await app.close();
+    delete process.env.AUTH_BYPASS;
+  });
+
+  it('does not throw when AUTH_BYPASS is not set and NODE_ENV=production', async () => {
+    delete process.env.AUTH_BYPASS;
+    process.env.NODE_ENV = 'production';
+    process.env.JWT_SECRET = 'test-secret-do-not-use-in-production';
+
+    const app = Fastify();
+    app.register(registerAuth);
+
+    await expect(app.ready()).resolves.not.toThrow();
+
+    await app.close();
   });
 });

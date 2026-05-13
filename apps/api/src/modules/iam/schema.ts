@@ -18,7 +18,15 @@ export const updatePermissionProfileSchema = z.object({
 export const assignPermissionProfileSchema = z.object({
   tenant_id: z.string().min(1),
   permission_profile_id: z.string().min(1),
-  expires_at: z.string().datetime().optional()
+  expires_at: z
+    .string()
+    .datetime()
+    .refine(val => new Date(val) > new Date(), { message: 'expires_at must be a future date' })
+    .optional()
+});
+
+export const listUserAssignmentsQuerySchema = z.object({
+  include_revoked: z.enum(['true', 'false']).transform(v => v === 'true').optional()
 });
 
 export const listProfilesQuerySchema = z.object({
@@ -29,4 +37,5 @@ export const listProfilesQuerySchema = z.object({
 export type CreatePermissionProfileInput = z.infer<typeof createPermissionProfileSchema>;
 export type UpdatePermissionProfileInput = z.infer<typeof updatePermissionProfileSchema>;
 export type AssignPermissionProfileInput = z.infer<typeof assignPermissionProfileSchema>;
+export type ListUserAssignmentsQueryInput = z.infer<typeof listUserAssignmentsQuerySchema>;
 export type ListProfilesQueryInput = z.infer<typeof listProfilesQuerySchema>;

@@ -58,6 +58,7 @@ describe('auth routes', () => {
   let token: string;
 
   beforeAll(async () => {
+    process.env.JWT_SECRET = 'test-secret-do-not-use-in-production';
     app = buildApp();
     await app.ready();
     token = makeToken(app, { sub: ACCOUNT_ID });
@@ -151,7 +152,7 @@ describe('auth routes', () => {
         access_token: 'tok',
         refresh_token: 'ref',
         token_type: 'Bearer',
-        expires_in: 3600,
+        expires_in: 900,
         account: makeAccount()
       });
 
@@ -190,7 +191,7 @@ describe('auth routes', () => {
         access_token: 'new-tok',
         refresh_token: 'new-ref',
         token_type: 'Bearer',
-        expires_in: 3600
+        expires_in: 900
       });
 
       const res = await app.inject({

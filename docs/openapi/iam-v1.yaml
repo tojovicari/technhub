@@ -18,14 +18,20 @@ paths:
       parameters:
         - in: query
           name: is_active
+          required: false
           schema:
-            type: boolean
+            type: string
+            enum: ["true", "false"]
+          description: Filter by active status. Send the literal string 'true' or 'false'.
         - in: query
           name: is_system
+          required: false
           schema:
-            type: boolean
+            type: string
+            enum: ["true", "false"]
+          description: "Filter by system status. 'true' = built-in profiles only; 'false' = tenant-defined only."
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
@@ -33,17 +39,23 @@ paths:
                 type: object
                 properties:
                   data:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/PermissionProfile'
+                    type: object
+                    required: [items]
+                    properties:
+                      items:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/PermissionProfile"
                   meta:
-                    $ref: '#/components/schemas/Meta'
+                    $ref: "#/components/schemas/Meta"
                   error:
                     nullable: true
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "400":
+          $ref: "#/components/responses/BadRequest"
     post:
       tags: [IAM]
       summary: Create permission profile
@@ -55,20 +67,45 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreatePermissionProfileRequest'
+              $ref: "#/components/schemas/CreatePermissionProfileRequest"
       responses:
-        '201':
+        "201":
           description: Created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PermissionProfileResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+                $ref: "#/components/schemas/PermissionProfileResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /iam/permission-profiles/{profile_id}:
+    get:
+      tags: [IAM]
+      summary: Get a single permission profile
+      operationId: getPermissionProfile
+      parameters:
+        - in: path
+          name: profile_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PermissionProfileResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
     patch:
       tags: [IAM]
       summary: Update permission profile
@@ -84,22 +121,99 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UpdatePermissionProfileRequest'
+              $ref: "#/components/schemas/UpdatePermissionProfileRequest"
       responses:
-        '200':
+        "200":
           description: Updated
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PermissionProfileResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          description: Not found
+                $ref: "#/components/schemas/PermissionProfileResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [IAM]
+      summary: Delete a permission profile
+      operationId: deletePermissionProfile
+      parameters:
+        - in: path
+          name: profile_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /iam/permission-profiles/{profile_id}/users:
+    get:
+      tags: [IAM]
+      summary: List users assigned to a permission profile
+      operationId: listProfileUsers
+      parameters:
+        - in: path
+          name: profile_id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileUsersListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /iam/users/{user_id}/permission-profiles:
+    get:
+      tags: [IAM]
+      summary: List user permission profile assignments
+      operationId: listUserAssignments
+      parameters:
+        - in: path
+          name: user_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: include_revoked
+          required: false
+          schema:
+            type: string
+            enum: ["true", "false"]
+            default: "false"
+          description: When 'true', includes revoked and expired assignments for audit history
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPermissionProfileListResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
     post:
       tags: [IAM]
       summary: Assign permission profile to user
@@ -115,20 +229,22 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AssignPermissionProfileRequest'
+              $ref: "#/components/schemas/AssignPermissionProfileRequest"
       responses:
-        '201':
+        "201":
           description: Assigned
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/UserPermissionProfileResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          description: User or profile not found
+                $ref: "#/components/schemas/UserPermissionProfileResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /iam/users/{user_id}/permission-profiles/{profile_id}:
     delete:
@@ -147,14 +263,14 @@ paths:
           schema:
             type: string
       responses:
-        '204':
+        "204":
           description: Revoked
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          description: Assignment not found
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
 components:
   securitySchemes:
@@ -169,13 +285,13 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: "#/components/schemas/ErrorResponse"
           example:
             data: null
             meta:
               request_id: req_unauth
               version: v1
-              timestamp: '2026-04-08T12:00:00Z'
+              timestamp: "2026-04-08T12:00:00Z"
             error:
               code: UNAUTHORIZED
               message: Invalid or expired token
@@ -184,18 +300,50 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: "#/components/schemas/ErrorResponse"
           example:
             data: null
             meta:
               request_id: req_forbidden
               version: v1
-              timestamp: '2026-04-08T12:00:00Z'
+              timestamp: "2026-04-08T12:00:00Z"
             error:
               code: FORBIDDEN
               message: You do not have permission for this resource
               details:
                 required_permission: iam.permission_profile.assign
+
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            data: null
+            meta:
+              request_id: req_400
+              version: v1
+              timestamp: "2026-04-08T12:00:00Z"
+            error:
+              code: BAD_REQUEST
+              message: Invalid request body
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            data: null
+            meta:
+              request_id: req_404
+              version: v1
+              timestamp: "2026-04-08T12:00:00Z"
+            error:
+              code: NOT_FOUND
+              message: Resource not found
 
   schemas:
     Meta:
@@ -230,9 +378,9 @@ components:
         data:
           nullable: true
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         error:
-          $ref: '#/components/schemas/ErrorBody'
+          $ref: "#/components/schemas/ErrorBody"
 
     CreatePermissionProfileRequest:
       type: object
@@ -242,13 +390,17 @@ components:
           type: string
         name:
           type: string
+          minLength: 1
+          maxLength: 100
         description:
           type: string
+          maxLength: 500
         permission_keys:
           type: array
           minItems: 1
           items:
             type: string
+            minLength: 1
         is_active:
           type: boolean
           default: true
@@ -258,18 +410,34 @@ components:
       properties:
         name:
           type: string
+          minLength: 1
+          maxLength: 100
         description:
           type: string
+          maxLength: 500
+          nullable: true
         permission_keys:
           type: array
+          minItems: 1
           items:
             type: string
+            minLength: 1
         is_active:
           type: boolean
 
     PermissionProfile:
       type: object
-      required: [id, tenant_id, name, permission_keys, is_active]
+      required:
+        [
+          id,
+          tenant_id,
+          name,
+          permission_keys,
+          is_system,
+          is_active,
+          created_at,
+          updated_at,
+        ]
       properties:
         id:
           type: string
@@ -279,6 +447,7 @@ components:
           type: string
         description:
           type: string
+          nullable: true
         permission_keys:
           type: array
           items:
@@ -287,15 +456,21 @@ components:
           type: boolean
         is_active:
           type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
 
     PermissionProfileResponse:
       type: object
       required: [data, meta, error]
       properties:
         data:
-          $ref: '#/components/schemas/PermissionProfile'
+          $ref: "#/components/schemas/PermissionProfile"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         error:
           nullable: true
 
@@ -305,15 +480,19 @@ components:
       properties:
         tenant_id:
           type: string
+          minLength: 1
         permission_profile_id:
           type: string
+          minLength: 1
         expires_at:
           type: string
           format: date-time
+          description: "Optional expiry; must be a valid ISO datetime and a future date. Returns 400 if invalid format or in the past."
 
     UserPermissionProfile:
       type: object
-      required: [id, tenant_id, user_id, permission_profile_id, granted_by, granted_at]
+      required:
+        [id, tenant_id, user_id, permission_profile_id, granted_by, granted_at]
       properties:
         id:
           type: string
@@ -342,8 +521,68 @@ components:
       required: [data, meta, error]
       properties:
         data:
-          $ref: '#/components/schemas/UserPermissionProfile'
+          $ref: "#/components/schemas/UserPermissionProfile"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
+        error:
+          nullable: true
+
+    UserPermissionProfileListResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                allOf:
+                  - $ref: "#/components/schemas/UserPermissionProfile"
+                  - type: object
+                    properties:
+                      profile:
+                        $ref: "#/components/schemas/PermissionProfile"
+        meta:
+          $ref: "#/components/schemas/Meta"
+        error:
+          nullable: true
+
+    ProfileUserAssignment:
+      allOf:
+        - $ref: "#/components/schemas/UserPermissionProfile"
+        - type: object
+          properties:
+            account:
+              type: object
+              required: [id, email, full_name, role, is_active]
+              properties:
+                id:
+                  type: string
+                email:
+                  type: string
+                full_name:
+                  type: string
+                role:
+                  type: string
+                  enum: [org_admin, manager, viewer]
+                is_active:
+                  type: boolean
+
+    ProfileUsersListResponse:
+      type: object
+      required: [data, meta, error]
+      properties:
+        data:
+          type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/ProfileUserAssignment"
+        meta:
+          $ref: "#/components/schemas/Meta"
         error:
           nullable: true

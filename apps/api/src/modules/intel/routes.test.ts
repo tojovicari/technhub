@@ -54,6 +54,13 @@ vi.mock('./service.js', () => ({
   getExport: vi.fn()
 }));
 
+vi.mock('../../modules/billing/entitlement.js', () => ({
+  requireModule: () => async () => {},
+  requireFeature: () => async () => {},
+  loadEntitlement: vi.fn(),
+  invalidateEntitlementCache: vi.fn()
+}));
+
 import { buildApp } from '../../app.js';
 import * as intelSvc from './service.js';
 import type { FastifyInstance } from 'fastify';
@@ -158,6 +165,7 @@ describe('Intel routes', () => {
   let token: string;
 
   beforeAll(async () => {
+    process.env.JWT_SECRET = 'test-secret-do-not-use-in-production';
     process.env['AUTH_BYPASS'] = 'false';
     app = buildApp();
     await app.ready();

@@ -12,6 +12,7 @@ import { doraRoutes } from './modules/dora/routes.js';
 import { cogsRoutes } from './modules/cogs/routes.js';
 import { intelRoutes } from './modules/intel/routes.js';
 import { iamRoutes } from './modules/iam/routes.js';
+import { authorizationRoutes } from './modules/authorization/routes.js';
 import { commsRoutes } from './modules/comms/routes.js';
 import { startCommsWorker } from './modules/comms/worker.js';
 import { billingRoutes } from './modules/billing/routes.js';
@@ -85,6 +86,7 @@ export function buildApp() {
   app.register(cogsRoutes, { prefix: '/api/v1' });
   app.register(intelRoutes, { prefix: '/api/v1' });
   app.register(iamRoutes, { prefix: '/api/v1' });
+  app.register(authorizationRoutes, { prefix: '/api/v1' });
   app.register(commsRoutes, { prefix: '/api/v1' });
   app.register(billingRoutes, { prefix: '/api/v1' });
   app.register(platformBillingRoutes, { prefix: '/api/v1' });

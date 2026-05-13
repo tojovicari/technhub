@@ -18,6 +18,10 @@ const DEV_USER: JwtUser = {
 };
 
 export async function registerAuth(app: FastifyInstance) {
+  if (process.env.AUTH_BYPASS === 'true' && process.env.NODE_ENV === 'production') {
+    throw new Error('AUTH_BYPASS is not allowed in production');
+  }
+
   const secret = process.env.JWT_SECRET;
   if (!secret) throw new Error('JWT_SECRET env var is required');
 

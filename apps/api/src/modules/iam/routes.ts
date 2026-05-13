@@ -5,6 +5,7 @@ import {
   assignPermissionProfileSchema,
   createPermissionProfileSchema,
   listProfilesQuerySchema,
+  listUserAssignmentsQuerySchema,
   updatePermissionProfileSchema
 } from './schema.js';
 import {
@@ -113,7 +114,11 @@ export async function iamRoutes(app: FastifyInstance) {
   }, async (request, reply) => {
     const { user_id: userId } = request.params as { user_id: string };
     const tenantId = (request.user as { tenant_id: string }).tenant_id;
-    const result = await listUserAssignments(userId, tenantId);
+    const parsedQuery = listUserAssignmentsQuerySchema.safeParse(request.query);
+    if (!parsedQuery.success) {
+      return reply.status(400).send(fail(request, 'BAD_REQUEST', 'Invalid query parameters', { issues: parsedQuery.error.issues }));
+    }
+    const result = await listUserAssignments(userId, tenantId, parsedQuery.data.include_revoked ?? false);
 
     if (!result) {
       return reply.status(404).send(fail(request, 'NOT_FOUND', 'User not found'));

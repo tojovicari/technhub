@@ -10,7 +10,8 @@ const mockPrisma = vi.hoisted(() => ({
   epic: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
   task: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), update: vi.fn() },
   user: { upsert: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
-  teamMember: { upsert: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), delete: vi.fn() }
+  teamMember: { upsert: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), delete: vi.fn() },
+  platformAccount: { updateMany: vi.fn() }
 }));
 
 vi.mock('../../lib/prisma.js', () => ({ prisma: mockPrisma }));

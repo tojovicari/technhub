@@ -13,7 +13,8 @@ function parsePreferences(raw: unknown): AccountPreferences | null {
 }
 import { enqueueNotification } from '../comms/service.js';
 
-const ACCESS_TOKEN_TTL = '1h';
+const ACCESS_TOKEN_TTL = '15m';
+const ACCESS_TOKEN_TTL_SECONDS = 900; // deve ser coerente com ACCESS_TOKEN_TTL
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const INVITE_TTL_MS = 48 * 60 * 60 * 1000; // 48 hours
 const VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -223,8 +224,8 @@ export async function registerByInvite(input: RegisterByInviteInput) {
     where: { email: invite.email, tenantId: invite.tenantId }
   });
 
-  const [account] = await prisma.$transaction([
-    prisma.platformAccount.create({
+  const account = await prisma.$transaction(async (tx) => {
+    const acc = await tx.platformAccount.create({
       data: {
         tenantId: invite.tenantId,
         email: invite.email,
@@ -233,12 +234,39 @@ export async function registerByInvite(input: RegisterByInviteInput) {
         role: invite.role,
         coreUserId: coreUser?.id ?? null
       }
-    }),
-    prisma.invite.update({
+    });
+
+    await tx.invite.update({
       where: { id: invite.id },
       data: { usedAt: new Date() }
-    })
-  ]);
+    });
+
+    // Auto-assign default system profile for non-admin roles
+    if (acc.role !== 'org_admin') {
+      const roleName = acc.role.charAt(0).toUpperCase() + acc.role.slice(1);
+      const defaultProfile = await tx.permissionProfile.findFirst({
+        where: {
+          tenantId: invite.tenantId,
+          isSystem: true,
+          isActive: true,
+          name: `${roleName} Default`
+        }
+      });
+
+      if (defaultProfile) {
+        await tx.userPermissionProfile.create({
+          data: {
+            tenantId: invite.tenantId,
+            accountId: acc.id,
+            permissionProfileId: defaultProfile.id,
+            grantedBy: acc.id
+          }
+        });
+      }
+    }
+
+    return acc;
+  });
 
   return {
     id: account.id,
@@ -306,7 +334,7 @@ export async function login(
     access_token: accessToken,
     refresh_token: rawRefresh,
     token_type: 'Bearer',
-    expires_in: 3600,
+    expires_in: ACCESS_TOKEN_TTL_SECONDS,
     account: {
       id: account.id,
       tenant_id: account.tenantId,
@@ -373,7 +401,7 @@ export async function refresh(
     access_token: accessToken,
     refresh_token: rawRefresh,
     token_type: 'Bearer',
-    expires_in: 3600
+    expires_in: ACCESS_TOKEN_TTL_SECONDS
   };
 }
 

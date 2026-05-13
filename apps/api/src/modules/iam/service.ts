@@ -166,14 +166,22 @@ export async function deletePermissionProfile(profileId: string, tenantId: strin
   return true;
 }
 
-export async function listUserAssignments(userId: string, tenantId: string) {
+export async function listUserAssignments(userId: string, tenantId: string, includeRevoked = false) {
   const account = await prisma.platformAccount.findFirst({
     where: { id: userId, tenantId }
   });
   if (!account) return null;
 
+  const now = new Date();
   const assignments = await prisma.userPermissionProfile.findMany({
-    where: { accountId: userId, tenantId },
+    where: {
+      accountId: userId,
+      tenantId,
+      ...(includeRevoked ? {} : {
+        revokedAt: null,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
+      })
+    },
     include: { permissionProfile: true },
     orderBy: { grantedAt: 'desc' }
   });
@@ -190,8 +198,14 @@ export async function listProfileUsers(profileId: string, tenantId: string) {
   });
   if (!profile) return null;
 
+  const now = new Date();
   const assignments = await prisma.userPermissionProfile.findMany({
-    where: { permissionProfileId: profileId, tenantId },
+    where: {
+      permissionProfileId: profileId,
+      tenantId,
+      revokedAt: null,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: now } }]
+    },
     include: {
       account: {
         select: { id: true, email: true, fullName: true, role: true, isActive: true }
@@ -228,8 +242,9 @@ export async function revokePermissionProfile(
 
   if (!assignment) return null;
 
-  await prisma.userPermissionProfile.delete({
-    where: { id: assignment.id }
+  await prisma.userPermissionProfile.update({
+    where: { id: assignment.id },
+    data: { revokedAt: new Date() }
   });
 
   return true;
