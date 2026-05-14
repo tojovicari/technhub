@@ -1,13 +1,16 @@
 import jwt from '@fastify/jwt';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { fail } from '../lib/http.js';
+import { prisma } from '../lib/prisma.js';
 
 type JwtUser = {
   sub: string;
   tenant_id: string;
   roles: string[];
   permissions: string[];
-  platform_role?: string | null;  // 'super_admin' | 'platform_admin' | null
+  platform_role?: string | null;
+  is_impersonation?: boolean;
+  impersonation_audit_id?: string;
 };
 
 const DEV_USER: JwtUser = {
@@ -39,6 +42,25 @@ export async function registerAuth(app: FastifyInstance) {
       return reply
         .status(401)
         .send(fail(request, 'UNAUTHORIZED', 'Invalid or missing token'));
+    }
+
+    const user = request.user as JwtUser;
+
+    // Block impersonation tokens on /platform/* routes
+    if (user?.is_impersonation && request.url.startsWith('/api/v1/platform/')) {
+      return reply.status(403).send(
+        fail(request, 'FORBIDDEN', 'Impersonation tokens cannot access platform admin routes')
+      );
+    }
+
+    // Fire-and-forget: register first use of impersonation token
+    if (user?.is_impersonation && user?.impersonation_audit_id) {
+      prisma.impersonationAudit
+        .updateMany({
+          where: { id: user.impersonation_audit_id, firstUsedAt: null },
+          data: { firstUsedAt: new Date() },
+        })
+        .catch(() => {});
     }
   });
 

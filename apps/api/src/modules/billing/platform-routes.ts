@@ -13,7 +13,8 @@ import {
   updatePlan,
   deletePlan,
   createAssignment,
-  deleteAssignment
+  deleteAssignment,
+  getRevenueMetrics,
 } from './service.js';
 
 function mapPlan(p: any) {
@@ -232,6 +233,25 @@ export async function platformBillingRoutes(app: FastifyInstance) {
       }
 
       return reply.status(204).send();
+    }
+  );
+
+  // ── GET /platform/billing/metrics ─────────────────────────────────────────
+  app.get(
+    '/platform/billing/metrics',
+    { preHandler: guard },
+    async (req, reply) => {
+      const { period } = req.query as { period?: string };
+      const VALID_PERIODS = ['last_30d', 'last_90d', 'last_12m', 'mtd', 'ytd'];
+
+      if (period && !VALID_PERIODS.includes(period)) {
+        return reply.status(400).send(
+          fail(req, 'BAD_REQUEST', `Invalid period. Valid values: ${VALID_PERIODS.join(', ')}`)
+        );
+      }
+
+      const result = await getRevenueMetrics((period as any) ?? 'last_30d');
+      return reply.status(200).send(ok(req, result));
     }
   );
 }

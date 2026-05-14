@@ -404,6 +404,163 @@ export async function deleteAssignment(planId: string, tenantId: string) {
   return true;
 }
 
+// ── Revenue Metrics ───────────────────────────────────────────────────────────
+
+type MetricsPeriod = 'last_30d' | 'last_90d' | 'last_12m' | 'mtd' | 'ytd';
+
+function resolvePeriod(period: MetricsPeriod): { start: Date; end: Date } {
+  const end = new Date();
+  let start: Date;
+
+  if (period === 'last_30d') {
+    start = new Date(end.getTime() - 30 * 86_400_000);
+  } else if (period === 'last_90d') {
+    start = new Date(end.getTime() - 90 * 86_400_000);
+  } else if (period === 'last_12m') {
+    start = new Date(end);
+    start.setFullYear(start.getFullYear() - 1);
+  } else if (period === 'mtd') {
+    start = new Date(end.getFullYear(), end.getMonth(), 1);
+  } else {
+    // ytd
+    start = new Date(end.getFullYear(), 0, 1);
+  }
+
+  return { start, end };
+}
+
+export async function getRevenueMetrics(period: MetricsPeriod = 'last_30d') {
+  const { start: periodStart, end: periodEnd } = resolvePeriod(period);
+  const ACTIVE_STATUSES = ['active', 'trialing', 'past_due'] as const;
+
+  // All currently active subscriptions with plan data
+  const activeSubscriptions = await prisma.subscription.findMany({
+    where: { status: { in: [...ACTIVE_STATUSES] } },
+    include: { plan: true },
+  });
+
+  // MRR: sum per subscription
+  let mrrCents = 0;
+  const byPlanMap = new Map<string, { plan: any; active_subscriptions: number; mrr_cents: number }>();
+
+  for (const sub of activeSubscriptions) {
+    const contribution =
+      sub.plan.billingPeriod === 'annual'
+        ? Math.round(sub.plan.priceCents / 12)
+        : sub.plan.priceCents;
+    mrrCents += contribution;
+
+    if (!byPlanMap.has(sub.planId)) {
+      byPlanMap.set(sub.planId, { plan: sub.plan, active_subscriptions: 0, mrr_cents: 0 });
+    }
+    const entry = byPlanMap.get(sub.planId)!;
+    entry.active_subscriptions++;
+    entry.mrr_cents += contribution;
+  }
+
+  // Status breakdown
+  const statusCounts = await prisma.subscription.groupBy({
+    by: ['status'],
+    _count: { id: true },
+  });
+  const byStatus: Record<string, number> = {
+    trialing: 0, active: 0, past_due: 0, downgraded: 0, cancelled: 0, expired: 0,
+  };
+  for (const row of statusCounts) {
+    byStatus[row.status] = row._count.id;
+  }
+
+  // Period movements
+  const [newCount, churnedCount, reactivatedCount, allHistoryInPeriod] = await Promise.all([
+    prisma.subscription.count({
+      where: { createdAt: { gte: periodStart, lte: periodEnd } },
+    }),
+    prisma.subscriptionHistory.count({
+      where: { status: { in: ['cancelled', 'expired'] }, effectiveFrom: { gte: periodStart, lte: periodEnd } },
+    }),
+    prisma.billingEvent.count({
+      where: { eventType: 'subscription.admin_reactivate', occurredAt: { gte: periodStart, lte: periodEnd } },
+    }),
+    prisma.subscriptionHistory.findMany({
+      where: { effectiveFrom: { gte: periodStart, lte: periodEnd } },
+      include: { plan: true },
+      orderBy: { effectiveFrom: 'asc' },
+    }),
+  ]);
+
+  // Upgrades / downgrades: compare plan price against previous entry
+  let upgrades = 0;
+  let downgrades = 0;
+
+  // Group history entries by subscriptionId
+  const historyBySubId = new Map<string, typeof allHistoryInPeriod>();
+  for (const h of allHistoryInPeriod) {
+    if (!historyBySubId.has(h.subscriptionId)) historyBySubId.set(h.subscriptionId, []);
+    historyBySubId.get(h.subscriptionId)!.push(h);
+  }
+
+  for (const [subId, entries] of historyBySubId) {
+    // Find baseline: most recent entry before periodStart
+    const baseline = await prisma.subscriptionHistory.findFirst({
+      where: { subscriptionId: subId, effectiveFrom: { lt: periodStart } },
+      include: { plan: true },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    if (!baseline) continue;
+
+    const latestInPeriod = entries[entries.length - 1];
+    if (!latestInPeriod.plan) continue;
+
+    const newPrice = latestInPeriod.plan.priceCents;
+    const oldPrice = baseline.plan.priceCents;
+
+    if (newPrice > oldPrice) upgrades++;
+    else if (newPrice < oldPrice) downgrades++;
+  }
+
+  // Churn rate: churned / total_active_at_period_start
+  const totalAtStart = await prisma.subscription.count({
+    where: { createdAt: { lte: periodStart } },
+  });
+  const churnRate =
+    totalAtStart > 0 ? Math.round((churnedCount / totalAtStart) * 10000) / 100 : 0;
+
+  const byPlan = Array.from(byPlanMap.values()).map((entry) => ({
+    plan_id: entry.plan.id,
+    plan_name: entry.plan.name,
+    plan_display_name: entry.plan.displayName,
+    price_cents: entry.plan.priceCents,
+    billing_period: entry.plan.billingPeriod,
+    active_subscriptions: entry.active_subscriptions,
+    mrr_cents: entry.mrr_cents,
+  }));
+
+  // Sort by mrr desc
+  byPlan.sort((a, b) => b.mrr_cents - a.mrr_cents);
+
+  return {
+    period,
+    period_start: periodStart.toISOString(),
+    period_end: periodEnd.toISOString(),
+    calculated_at: new Date().toISOString(),
+    mrr_cents: mrrCents,
+    arr_cents: mrrCents * 12,
+    subscriptions: {
+      total_active: activeSubscriptions.length,
+      by_status: byStatus,
+    },
+    period_movements: {
+      new_subscriptions: newCount,
+      upgrades,
+      downgrades,
+      churned: churnedCount,
+      reactivated: reactivatedCount,
+    },
+    churn_rate_percent: churnRate,
+    by_plan: byPlan,
+  };
+}
+
 // ── Stripe Integration ────────────────────────────────────────────────────────
 
 export async function createCheckoutSession(

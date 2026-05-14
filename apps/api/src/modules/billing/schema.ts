@@ -48,6 +48,45 @@ export const createAssignmentSchema = z.object({
   tenant_id: z.string().uuid()
 });
 
+// ── Platform Admin — Tenant & Subscription Override Schemas ──────────────────
+
+const SUBSCRIPTION_STATUSES = ['trialing', 'active', 'past_due', 'downgraded', 'cancelled', 'expired'] as const;
+
+export const listTenantsQuerySchema = z.object({
+  status: z.enum(SUBSCRIPTION_STATUSES).optional(),
+  plan_id: z.string().uuid().optional(),
+  search: z.string().min(2).optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const listSubscriptionHistoryQuerySchema = z.object({
+  cursor: z.string().datetime().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const listPlanTenantsQuerySchema = z.object({
+  status: z.enum(SUBSCRIPTION_STATUSES).optional(),
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const patchSubscriptionSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('extend_grace'),
+    extension_days: z.number().int().min(1).max(30),
+    reason: z.string().min(1).max(500),
+  }),
+  z.object({
+    action: z.literal('reactivate'),
+    reason: z.string().min(1).max(500),
+  }),
+  z.object({
+    action: z.literal('cancel'),
+    reason: z.string().min(1).max(500),
+  }),
+]);
+
 // ── Tenant Schemas ───────────────────────────────────────────────────────────
 
 export const checkoutSchema = z.object({

@@ -812,6 +812,7 @@ model Subscription {
   downgradedAt              DateTime?
   dataDeletionScheduledAt   DateTime?
   cancelledAt               DateTime?
+  graceExtensionDays        Int                @default(0)
   provider                  String?
   providerSubscriptionId    String?
   providerCustomerId        String?
@@ -879,4 +880,20 @@ model PurgeFailureQueue {
 
   @@index([tenantId])
   @@index([nextRetryAt])
+}
+
+model ImpersonationAudit {
+  id               String    @id @default(uuid())
+  initiatedBy      String    // platform account id (super_admin)
+  tenantId         String    // tenant impersonado
+  impersonatedAs   String    // account id do org_admin usado como subject
+  reason           String    // motivo fornecido pelo admin
+  tokenIssuedAt    DateTime  @default(now())
+  tokenExpiresAt   DateTime  // tokenIssuedAt + 15min
+  firstUsedAt      DateTime? // quando o token foi usado pela primeira vez
+  createdAt        DateTime  @default(now())
+
+  @@index([initiatedBy])
+  @@index([tenantId])
+  @@index([tokenIssuedAt])
 }
