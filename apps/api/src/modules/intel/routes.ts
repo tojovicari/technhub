@@ -11,7 +11,17 @@ import {
   capacityQuerySchema,
   roadmapQuerySchema,
   dependencyQuerySchema,
-  exportQuerySchema
+  exportQuerySchema,
+  onTimeDeliveryQuerySchema,
+  workMixQuerySchema,
+  reworkRateQuerySchema,
+  estimationAccuracyQuerySchema,
+  keyPersonRiskQuerySchema,
+  teamHealthQuerySchema,
+  incidentPatternsQuerySchema,
+  deployQualityQuerySchema,
+  slaSuggestionsQuerySchema,
+  trendDegradationQuerySchema
 } from './schema.js';
 import {
   getVelocityForecast,
@@ -22,7 +32,17 @@ import {
   getCapacity,
   getRoadmap,
   getDependencies,
-  getExport
+  getExport,
+  getOnTimeDelivery,
+  getWorkMix,
+  getReworkRate,
+  getEstimationAccuracy,
+  getKeyPersonRisk,
+  getTeamHealth,
+  getIncidentPatterns,
+  getDeployQuality,
+  getSlaSuggestions,
+  getTrendDegradation
 } from './service.js';
 
 export async function intelRoutes(app: FastifyInstance) {
@@ -209,6 +229,166 @@ export async function intelRoutes(app: FastifyInstance) {
         const message = err instanceof Error ? err.message : 'Export failed';
         return reply.status(400).send(fail(req, 'BAD_REQUEST', message));
       }
+    }
+  );
+
+  // ── v2.1: On-time delivery ─────────────────────────────────────────────────
+
+  app.get(
+    '/intel/on-time-delivery',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = onTimeDeliveryQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getOnTimeDelivery(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── v2.2: Work mix ─────────────────────────────────────────────────────────
+
+  app.get(
+    '/intel/work-mix',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = workMixQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getWorkMix(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── v2.3: Rework rate ──────────────────────────────────────────────────────
+
+  app.get(
+    '/intel/rework-rate',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = reworkRateQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getReworkRate(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── v2.4: Estimation accuracy ──────────────────────────────────────────────
+
+  app.get(
+    '/intel/estimation-accuracy',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = estimationAccuracyQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getEstimationAccuracy(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── v2.5: Key person risk ──────────────────────────────────────────────────
+
+  app.get(
+    '/intel/key-person-risk',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = keyPersonRiskQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getKeyPersonRisk(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── v2.6: Team health ──────────────────────────────────────────────────────
+
+  app.get(
+    '/intel/team-health',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = teamHealthQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getTeamHealth(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── v2.7: Incident patterns ────────────────────────────────────────────────
+
+  app.get(
+    '/intel/incident-patterns',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = incidentPatternsQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getIncidentPatterns(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── v2.8: Deploy quality ───────────────────────────────────────────────────
+
+  app.get(
+    '/intel/deploy-quality',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = deployQualityQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getDeployQuality(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── v2.9: SLA suggestions ──────────────────────────────────────────────────
+
+  app.get(
+    '/intel/sla-suggestions',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = slaSuggestionsQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getSlaSuggestions(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── v2.10: Trend degradation ───────────────────────────────────────────────
+
+  app.get(
+    '/intel/trend-degradation',
+    { preHandler: [app.authenticate, intelGuard, app.requirePermission('intel.read')] },
+    async (req, reply) => {
+      const parsed = trendDegradationQuerySchema.safeParse(req.query);
+      if (!parsed.success) return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsed.error.issues }));
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+      const result = await getTrendDegradation(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
     }
   );
 }

@@ -1,10 +1,34 @@
-# Intel API — Expansão v2 — Plano de Novos Endpoints
+# Intel API — Expansão v2 — Novos Endpoints
 
-> **Status:** Planejamento — ainda não implementado  
+> **Status:** ✅ Implementado — todos os 10 endpoints disponíveis em produção a partir de `v0.2.0`
 > **Versão base:** v1 (adiciona endpoints ao módulo `/intel` existente)  
-> **Audiência:** Engenheiros frontend + backend que implementarão os novos endpoints  
+> **Audiência:** Engenheiros frontend + backend  
 > **Base URL:** `/api/v1`  
 > **Referência atual:** [intel-api.md](./intel-api.md)
+
+---
+
+## Status de implementação
+
+| Endpoint                         | Status          | Versão |
+| -------------------------------- | --------------- | ------ |
+| `GET /intel/on-time-delivery`    | ✅ Implementado | v0.2.0 |
+| `GET /intel/work-mix`            | ✅ Implementado | v0.2.0 |
+| `GET /intel/rework-rate`         | ✅ Implementado | v0.2.0 |
+| `GET /intel/estimation-accuracy` | ✅ Implementado | v0.2.0 |
+| `GET /intel/key-person-risk`     | ✅ Implementado | v0.2.0 |
+| `GET /intel/team-health`         | ✅ Implementado | v0.2.0 |
+| `GET /intel/incident-patterns`   | ✅ Implementado | v0.2.0 |
+| `GET /intel/deploy-quality`      | ✅ Implementado | v0.2.0 |
+| `GET /intel/sla-suggestions`     | ✅ Implementado | v0.2.0 |
+| `GET /intel/trend-degradation`   | ✅ Implementado | v0.2.0 |
+
+### Notas de implementação (backend)
+
+- **Engine** (`engine.ts`): `computeWorkMixSignal`, `computeEstimationBias`, `computeKeyPersonRiskLevel`, `computeTeamHealthDimensionLevel`, `computeTeamOverallLevel`, `computeLinearRegression` (t-test com `normalCdfApprox`), `computePercentile`
+- **Testes**: +33 testes unitários de engine — suite total: 400 testes passando
+- **Auth**: todos os endpoints exigem `[authenticate, requireModule('intel'), requirePermission('intel.read')]`
+- **Módulos opcionais** (`cogs`, `dora`): endpoints retornam `200` parcial com `warnings[]` quando módulo não está ativo no tenant; nunca `503`
 
 ---
 

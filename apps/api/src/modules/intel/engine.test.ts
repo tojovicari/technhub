@@ -7,7 +7,14 @@ import {
   generateRecommendations,
   computeCapacityUtilization,
   buildGanttEpicItem,
-  computeDependencyStatuses
+  computeDependencyStatuses,
+  computeWorkMixSignal,
+  computeEstimationBias,
+  computeKeyPersonRiskLevel,
+  computeTeamHealthDimensionLevel,
+  computeTeamOverallLevel,
+  computeLinearRegression,
+  computePercentile
 } from './engine.js';
 
 // ── forecastVelocity ──────────────────────────────────────────────────────────
@@ -437,5 +444,217 @@ describe('computeDependencyStatuses', () => {
     const tasks = [{ taskId: 't2', status: 'todo' }];
     const map = computeDependencyStatuses(tasks, [{ blocker_id: 't1', blocked_id: 't2' }]);
     expect(map.get('t2')).toBe('blocked');
+  });
+});
+
+// ── computeWorkMixSignal ──────────────────────────────────────────────────────
+
+describe('computeWorkMixSignal', () => {
+  it('returns stable for null delta', () => {
+    expect(computeWorkMixSignal('bug', null)).toBe('stable');
+  });
+
+  it('alerts when bug grows > 10pp', () => {
+    expect(computeWorkMixSignal('bug', 10.1)).toBe('alert');
+    expect(computeWorkMixSignal('tech_debt', 15)).toBe('alert');
+  });
+
+  it('watches when bug grows 5–10pp', () => {
+    expect(computeWorkMixSignal('bug', 7)).toBe('watch');
+    expect(computeWorkMixSignal('tech_debt', 5.1)).toBe('watch');
+  });
+
+  it('returns stable when bug grows ≤ 5pp', () => {
+    expect(computeWorkMixSignal('bug', 5)).toBe('stable');
+    expect(computeWorkMixSignal('bug', -3)).toBe('stable');
+  });
+
+  it('declines when feature shrinks > 10pp', () => {
+    expect(computeWorkMixSignal('feature', -10.1)).toBe('decline');
+    expect(computeWorkMixSignal('feature', -20)).toBe('decline');
+  });
+
+  it('watches when feature shrinks 5–10pp', () => {
+    expect(computeWorkMixSignal('feature', -7)).toBe('watch');
+    expect(computeWorkMixSignal('feature', -5.1)).toBe('watch');
+  });
+
+  it('returns stable for feature with small delta', () => {
+    expect(computeWorkMixSignal('feature', -5)).toBe('stable');
+    expect(computeWorkMixSignal('feature', 3)).toBe('stable');
+  });
+
+  it('returns stable for chore regardless of delta', () => {
+    expect(computeWorkMixSignal('chore', 20)).toBe('stable');
+  });
+});
+
+// ── computeEstimationBias ─────────────────────────────────────────────────────
+
+describe('computeEstimationBias', () => {
+  it('returns overrun when avg > 15%', () => {
+    expect(computeEstimationBias(15.1)).toBe('overrun');
+    expect(computeEstimationBias(50)).toBe('overrun');
+  });
+
+  it('returns underrun when avg < -15%', () => {
+    expect(computeEstimationBias(-15.1)).toBe('underrun');
+    expect(computeEstimationBias(-100)).toBe('underrun');
+  });
+
+  it('returns accurate within ±15%', () => {
+    expect(computeEstimationBias(0)).toBe('accurate');
+    expect(computeEstimationBias(15)).toBe('accurate');
+    expect(computeEstimationBias(-15)).toBe('accurate');
+  });
+});
+
+// ── computeKeyPersonRiskLevel ─────────────────────────────────────────────────
+
+describe('computeKeyPersonRiskLevel', () => {
+  it('high when pct >= threshold', () => {
+    expect(computeKeyPersonRiskLevel(30, 30)).toBe('high');
+    expect(computeKeyPersonRiskLevel(50, 30)).toBe('high');
+  });
+
+  it('medium when pct >= threshold/2', () => {
+    expect(computeKeyPersonRiskLevel(15, 30)).toBe('medium');
+    expect(computeKeyPersonRiskLevel(20, 30)).toBe('medium');
+  });
+
+  it('low when pct < threshold/2', () => {
+    expect(computeKeyPersonRiskLevel(14, 30)).toBe('low');
+    expect(computeKeyPersonRiskLevel(0, 30)).toBe('low');
+  });
+});
+
+// ── computeTeamHealthDimensionLevel ──────────────────────────────────────────
+
+describe('computeTeamHealthDimensionLevel', () => {
+  it('on_time_delivery: good ≥75%, watch 50–74%, alert <50%', () => {
+    expect(computeTeamHealthDimensionLevel('on_time_delivery', 80)).toBe('good');
+    expect(computeTeamHealthDimensionLevel('on_time_delivery', 75)).toBe('good');
+    expect(computeTeamHealthDimensionLevel('on_time_delivery', 60)).toBe('watch');
+    expect(computeTeamHealthDimensionLevel('on_time_delivery', 49)).toBe('alert');
+  });
+
+  it('work_quality: good <15%, watch 15–25%, alert >25%', () => {
+    expect(computeTeamHealthDimensionLevel('work_quality', 10)).toBe('good');
+    expect(computeTeamHealthDimensionLevel('work_quality', 20)).toBe('watch');
+    expect(computeTeamHealthDimensionLevel('work_quality', 26)).toBe('alert');
+  });
+
+  it('capacity: good 70–110%, watch 111–130%, alert >130%', () => {
+    expect(computeTeamHealthDimensionLevel('capacity', 90)).toBe('good');
+    expect(computeTeamHealthDimensionLevel('capacity', 120)).toBe('watch');
+    expect(computeTeamHealthDimensionLevel('capacity', 140)).toBe('alert');
+    expect(computeTeamHealthDimensionLevel('capacity', 65)).toBe('watch');
+  });
+
+  it('dora: good for elite/high, watch for medium, alert for low', () => {
+    expect(computeTeamHealthDimensionLevel('dora', 0, { doraLevel: 'elite' })).toBe('good');
+    expect(computeTeamHealthDimensionLevel('dora', 0, { doraLevel: 'high' })).toBe('good');
+    expect(computeTeamHealthDimensionLevel('dora', 0, { doraLevel: 'medium' })).toBe('watch');
+    expect(computeTeamHealthDimensionLevel('dora', 0, { doraLevel: 'low' })).toBe('alert');
+  });
+
+  it('budget_burn: good <85%, watch 85–100%, alert >100%', () => {
+    expect(computeTeamHealthDimensionLevel('budget_burn', 80)).toBe('good');
+    expect(computeTeamHealthDimensionLevel('budget_burn', 95)).toBe('watch');
+    expect(computeTeamHealthDimensionLevel('budget_burn', 101)).toBe('alert');
+  });
+});
+
+// ── computeTeamOverallLevel ───────────────────────────────────────────────────
+
+describe('computeTeamOverallLevel', () => {
+  it('returns good when all good', () => {
+    expect(computeTeamOverallLevel(['good', 'good'])).toBe('good');
+  });
+
+  it('returns watch when any watch', () => {
+    expect(computeTeamOverallLevel(['good', 'watch', 'good'])).toBe('watch');
+  });
+
+  it('returns alert when any alert', () => {
+    expect(computeTeamOverallLevel(['good', 'watch', 'alert'])).toBe('alert');
+  });
+
+  it('returns good for empty array', () => {
+    expect(computeTeamOverallLevel([])).toBe('good');
+  });
+});
+
+// ── computeLinearRegression ───────────────────────────────────────────────────
+
+describe('computeLinearRegression', () => {
+  it('returns zero slope and pValue=1 for fewer than 3 points', () => {
+    const r = computeLinearRegression([0, 1], [10, 20]);
+    expect(r.slope).toBe(0);
+    expect(r.pValue).toBe(1);
+  });
+
+  it('fits a perfect positive slope', () => {
+    // y = 2x + 1
+    const xs = [0, 1, 2, 3, 4];
+    const ys = [1, 3, 5, 7, 9];
+    const r = computeLinearRegression(xs, ys);
+    expect(r.slope).toBe(2);
+    expect(r.rSquared).toBe(1);
+    expect(r.intercept).toBe(1);
+    expect(r.pValue).toBeLessThan(0.01);
+  });
+
+  it('fits a perfect negative slope', () => {
+    const xs = [0, 1, 2, 3, 4];
+    const ys = [10, 8, 6, 4, 2];
+    const r = computeLinearRegression(xs, ys);
+    expect(r.slope).toBe(-2);
+    expect(r.rSquared).toBe(1);
+  });
+
+  it('returns zero slope and rSquared=0 for constant y', () => {
+    const xs = [0, 1, 2, 3, 4];
+    const ys = [5, 5, 5, 5, 5];
+    const r = computeLinearRegression(xs, ys);
+    expect(r.slope).toBe(0);
+    expect(r.rSquared).toBe(0);
+  });
+
+  it('returns non-significant pValue for random noise', () => {
+    const xs = [0, 1, 2, 3, 4];
+    const ys = [5, 3, 7, 2, 6]; // no clear trend
+    const r = computeLinearRegression(xs, ys);
+    expect(r.pValue).toBeGreaterThan(0.1);
+  });
+});
+
+// ── computePercentile ─────────────────────────────────────────────────────────
+
+describe('computePercentile', () => {
+  it('returns 0 for empty array', () => {
+    expect(computePercentile([], 50)).toBe(0);
+  });
+
+  it('returns sole element for single-element array', () => {
+    expect(computePercentile([42], 50)).toBe(42);
+  });
+
+  it('returns median correctly', () => {
+    expect(computePercentile([1, 2, 3, 4, 5], 50)).toBe(3);
+  });
+
+  it('returns min for p0 and max for p100', () => {
+    const arr = [10, 20, 30, 40, 50];
+    expect(computePercentile(arr, 0)).toBe(10);
+    expect(computePercentile(arr, 100)).toBe(50);
+  });
+
+  it('interpolates for non-integer index', () => {
+    const arr = [0, 10, 20, 30, 40];
+    // p25: idx = 0.25 * 4 = 1 → exactly arr[1] = 10
+    expect(computePercentile(arr, 25)).toBe(10);
+    // p75: idx = 0.75 * 4 = 3 → exactly arr[3] = 30
+    expect(computePercentile(arr, 75)).toBe(30);
   });
 });

@@ -52,7 +52,15 @@ export type RecommendationType =
   | 'investigate_velocity_decline'
   | 'epic_at_risk'
   | 'team_overloaded'
-  | 'team_underutilized';
+  | 'team_underutilized'
+  | 'low_on_time_delivery'
+  | 'on_time_delivery_declining'
+  | 'bug_rate_spike'
+  | 'rework_rate_high'
+  | 'key_person_dependency'
+  | 'deploy_quality_degrading'
+  | 'suggest_sla_configuration'
+  | 'silent_metric_degradation';
 
 export interface Recommendation {
   type: RecommendationType;
@@ -69,6 +77,16 @@ export interface RecommendationSignals {
   velocityTrend?: 'up' | 'down' | 'stable' | null;
   overloadedUserIds?: string[];
   delayedEpics?: Array<{ epicId: string; epicName: string; weeksOverdue: number }>;
+  // v2 signals
+  onTimeRatePercent?: number | null;
+  onTimeTrend?: 'improving' | 'declining' | 'stable' | null;
+  bugRateDeltaPp?: number | null;
+  reworkRatePercent?: number | null;
+  keyPersonHighRisk?: Array<{ userId: string; concentrationPercent: number }> | null;
+  hotfixRatePercent?: number | null;
+  rollbackRatePercent?: number | null;
+  slaSuggestionsAvailable?: number | null;
+  silentDegradations?: Array<{ metricName: string; slopePctPerDay: number; pValue: number }> | null;
 }
 
 export interface CapacityEntry {
@@ -351,6 +369,218 @@ export function generateRecommendations(signals: RecommendationSignals): Recomme
   // Sort: high → medium → low
   const order = { high: 0, medium: 1, low: 2 };
   return recs.sort((a, b) => order[a.priority] - order[b.priority]);
+}
+
+// ── v2: Work Mix Signal ───────────────────────────────────────────────────────
+
+/**
+ * Classify a task-type entry's delta as alert / decline / watch / stable.
+ *
+ * Alert:   bug or tech_debt grew > +10pp
+ * Decline: feature shrank  > -10pp
+ * Watch:   bug/tech_debt +5pp to +10pp  OR  feature -5pp to -10pp
+ * Stable:  |delta| ≤ 5pp  (or null)
+ */
+export function computeWorkMixSignal(
+  taskType: string,
+  deltaPp: number | null
+): 'alert' | 'decline' | 'watch' | 'stable' {
+  if (deltaPp === null) return 'stable';
+  const negative = taskType === 'bug' || taskType === 'tech_debt';
+  if (negative) {
+    if (deltaPp > 10) return 'alert';
+    if (deltaPp > 5)  return 'watch';
+    return 'stable';
+  }
+  if (taskType === 'feature') {
+    if (deltaPp < -10) return 'decline';
+    if (deltaPp < -5)  return 'watch';
+  }
+  return 'stable';
+}
+
+// ── v2: Estimation Bias ───────────────────────────────────────────────────────
+
+/**
+ * Classify average overrun percentage into a bias label.
+ *
+ * overrun  > +15%
+ * underrun < -15%
+ * accurate  otherwise
+ */
+export function computeEstimationBias(overrunPct: number): 'overrun' | 'underrun' | 'accurate' {
+  if (overrunPct > 15)  return 'overrun';
+  if (overrunPct < -15) return 'underrun';
+  return 'accurate';
+}
+
+// ── v2: Key Person Risk Level ─────────────────────────────────────────────────
+
+/**
+ * Classify a person's task-concentration percentage relative to a threshold.
+ *
+ * high   ≥ threshold
+ * medium ≥ threshold / 2
+ * low    below threshold / 2
+ */
+export function computeKeyPersonRiskLevel(
+  pct: number,
+  threshold: number
+): 'high' | 'medium' | 'low' {
+  if (pct >= threshold)       return 'high';
+  if (pct >= threshold / 2)   return 'medium';
+  return 'low';
+}
+
+// ── v2: Team Health Dimension Level ──────────────────────────────────────────
+
+export type TeamHealthDimensionName =
+  | 'velocity'
+  | 'on_time_delivery'
+  | 'work_quality'
+  | 'capacity'
+  | 'dora'
+  | 'budget_burn';
+
+/**
+ * Score a single team-health dimension.
+ *
+ * dimension-specific thresholds:
+ *   velocity:          good (up/stable trend), watch (slight down), alert (steep down)
+ *   on_time_delivery:  good ≥75%, watch ≥50%, alert <50%
+ *   work_quality:      good <15% bugs, watch 15–25%, alert >25%
+ *   capacity:          good 70–110%, watch 110–130% or <70%, alert >130%
+ *   dora:              good elite/high, watch medium, alert low
+ *   budget_burn:       good <85%, watch 85–100%, alert >100%
+ */
+export function computeTeamHealthDimensionLevel(
+  dimension: TeamHealthDimensionName,
+  value: number,
+  extra?: { trend?: string; doraLevel?: string }
+): 'good' | 'watch' | 'alert' {
+  switch (dimension) {
+    case 'velocity':
+      if (!extra?.trend || extra.trend === 'stable' || extra.trend === 'up') return 'good';
+      // value carries decline percentage for velocity
+      if (value < 20) return 'watch';
+      return 'alert';
+    case 'on_time_delivery':
+      if (value >= 75) return 'good';
+      if (value >= 50) return 'watch';
+      return 'alert';
+    case 'work_quality':
+      if (value < 15) return 'good';
+      if (value <= 25) return 'watch';
+      return 'alert';
+    case 'capacity':
+      if (value >= 70 && value <= 110) return 'good';
+      if (value <= 130) return 'watch';
+      return 'alert';
+    case 'dora':
+      if (extra?.doraLevel === 'elite' || extra?.doraLevel === 'high') return 'good';
+      if (extra?.doraLevel === 'medium') return 'watch';
+      return 'alert';
+    case 'budget_burn':
+      if (value < 85) return 'good';
+      if (value <= 100) return 'watch';
+      return 'alert';
+  }
+}
+
+/**
+ * Overall team health = most severe level across all available dimensions.
+ */
+export function computeTeamOverallLevel(
+  levels: Array<'good' | 'watch' | 'alert'>
+): 'good' | 'watch' | 'alert' {
+  if (levels.includes('alert')) return 'alert';
+  if (levels.includes('watch')) return 'watch';
+  return 'good';
+}
+
+// ── v2: Linear Regression + t-test ───────────────────────────────────────────
+
+export interface LinearRegressionResult {
+  slope: number;
+  rSquared: number;
+  pValue: number;
+  intercept: number;
+}
+
+/**
+ * Normal CDF approximation (Abramowitz & Stegun 26.2.17).
+ * Max absolute error < 7.5e-8.
+ */
+function normalCdfApprox(z: number): number {
+  const p = 0.2316419;
+  const b = [0, 0.319381530, -0.356563782, 1.781477937, -1.821255978, 1.330274429];
+  const t = 1 / (1 + p * Math.abs(z));
+  const pdf = Math.exp(-z * z / 2) / Math.sqrt(2 * Math.PI);
+  const poly = t * (b[1] + t * (b[2] + t * (b[3] + t * (b[4] + t * b[5]))));
+  const cdf = 1 - pdf * poly;
+  return z >= 0 ? cdf : 1 - cdf;
+}
+
+/**
+ * Simple linear regression of ys on xs.
+ * Returns slope, intercept, R², and two-tailed p-value for the slope.
+ *
+ * Uses normal approximation for p-value (appropriate for n ≥ 8).
+ * Returns pValue = 1.0 for n < 3 or zero variance in x.
+ */
+export function computeLinearRegression(xs: number[], ys: number[]): LinearRegressionResult {
+  const n = xs.length;
+  if (n < 3) return { slope: 0, rSquared: 0, pValue: 1, intercept: round2(mean(ys)) };
+
+  const mx = mean(xs);
+  const my = mean(ys);
+  let Sxx = 0, Sxy = 0, Syy = 0;
+  for (let i = 0; i < n; i++) {
+    Sxx += (xs[i] - mx) ** 2;
+    Sxy += (xs[i] - mx) * (ys[i] - my);
+    Syy += (ys[i] - my) ** 2;
+  }
+
+  if (Sxx === 0) return { slope: 0, rSquared: 0, pValue: 1, intercept: round2(my) };
+
+  const slope     = Sxy / Sxx;
+  const intercept = my - slope * mx;
+  const ssRes     = ys.reduce((s, y, i) => s + (y - (slope * xs[i] + intercept)) ** 2, 0);
+  const rSquared  = Syy > 0 ? Math.max(0, 1 - ssRes / Syy) : 0;
+
+  const df = n - 2;
+  if (df < 1) {
+    return { slope: round2(slope), rSquared: round2(rSquared), pValue: 1, intercept: round2(intercept) };
+  }
+
+  const se     = Math.sqrt(ssRes / df / Sxx);
+  // Perfect fit (se=0): slope is infinitely significant → pValue = 0
+  // No slope (se>0 but slope=0): not significant → pValue = 1
+  const tStat  = se > 0 ? slope / se : (slope !== 0 ? Infinity : 0);
+  // Two-tailed p-value via normal approximation (reliable for df ≥ 5)
+  const pValue = Math.min(1, 2 * (1 - normalCdfApprox(Math.abs(tStat))));
+
+  return {
+    slope:     round2(slope),
+    rSquared:  round2(rSquared),
+    pValue:    round2(pValue),
+    intercept: round2(intercept)
+  };
+}
+
+/**
+ * Compute the percentile value from a sorted (ascending) array.
+ * Uses linear interpolation (same as numpy's default).
+ */
+export function computePercentile(sortedValues: number[], p: number): number {
+  const n = sortedValues.length;
+  if (n === 0) return 0;
+  if (n === 1) return round2(sortedValues[0]);
+  const idx = (p / 100) * (n - 1);
+  const lo  = Math.floor(idx);
+  const hi  = Math.ceil(idx);
+  if (lo === hi) return round2(sortedValues[lo]);
+  return round2(sortedValues[lo] + (sortedValues[hi] - sortedValues[lo]) * (idx - lo));
 }
 
 // ── Capacity Utilization ──────────────────────────────────────────────────────
