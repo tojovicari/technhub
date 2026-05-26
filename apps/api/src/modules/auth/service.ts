@@ -74,8 +74,6 @@ export async function register(input: RegisterInput) {
     throw Object.assign(new Error('Tenant already exists'), { code: 'TENANT_ALREADY_EXISTS' });
   }
 
-  await ensureTenant(input.tenant_id);
-
   const existing = await prisma.platformAccount.findUnique({
     where: { email: input.email }
   });
@@ -83,6 +81,8 @@ export async function register(input: RegisterInput) {
   if (existing) {
     throw Object.assign(new Error('Email already registered'), { code: 'EMAIL_TAKEN' });
   }
+
+  await ensureTenant(input.tenant_id);
 
   const passwordHash = await hashPassword(input.password);
 
