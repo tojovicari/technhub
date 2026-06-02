@@ -20,18 +20,18 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateConnectionRequest'
+              $ref: "#/components/schemas/CreateConnectionRequest"
       responses:
-        '201':
+        "201":
           description: Created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ConnectionResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+                $ref: "#/components/schemas/ConnectionResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /integrations/connections/{connection_id}/secrets:
     put:
@@ -50,15 +50,15 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RotateSecretRequest'
+              $ref: "#/components/schemas/RotateSecretRequest"
       responses:
-        '204':
+        "204":
           description: Secret rotated
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
           description: Connection not found
 
   /integrations/sync-jobs:
@@ -71,18 +71,18 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateSyncJobRequest'
+              $ref: "#/components/schemas/CreateSyncJobRequest"
       responses:
-        '202':
+        "202":
           description: Accepted
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SyncJobResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
+                $ref: "#/components/schemas/SyncJobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /integrations/sync-jobs/{job_id}:
     get:
@@ -96,17 +96,17 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SyncJobResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
+                $ref: "#/components/schemas/SyncJobResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
           description: Not found
 
   /integrations/webhooks/{provider}/{tenant_id}:
@@ -140,15 +140,15 @@ paths:
               type: object
               additionalProperties: true
       responses:
-        '202':
+        "202":
           description: Accepted and queued
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookEventAcceptedResponse'
-        '400':
+                $ref: "#/components/schemas/WebhookEventAcceptedResponse"
+        "400":
           description: Unsupported provider or invalid payload
-        '401':
+        "401":
           description: Invalid webhook token
 
   /integrations/webhooks/events/{event_id}:
@@ -163,17 +163,17 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WebhookEventResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
+                $ref: "#/components/schemas/WebhookEventResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
           description: Not found
 
 components:
@@ -189,13 +189,13 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: "#/components/schemas/ErrorResponse"
     Forbidden:
       description: Missing permission or tenant mismatch
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/ErrorResponse'
+            $ref: "#/components/schemas/ErrorResponse"
 
   schemas:
     Meta:
@@ -228,9 +228,9 @@ components:
         data:
           nullable: true
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         error:
-          $ref: '#/components/schemas/ErrorBody'
+          $ref: "#/components/schemas/ErrorBody"
 
     CreateConnectionRequest:
       type: object
@@ -246,8 +246,8 @@ components:
           additionalProperties: true
         credentials:
           oneOf:
-            - $ref: '#/components/schemas/VaultReferenceCredential'
-            - $ref: '#/components/schemas/InlineSecretCredential'
+            - $ref: "#/components/schemas/VaultReferenceCredential"
+            - $ref: "#/components/schemas/InlineSecretCredential"
       description: Use vault references when available. Inline secrets are encrypted at rest by server.
 
     VaultReferenceCredential:
@@ -268,6 +268,7 @@ components:
         auth_type:
           type: string
           enum: [oauth2, token, app]
+          description: For GitHub frontend flow, use `token` (PAT/token).
         client_id:
           type: string
         client_secret:
@@ -278,6 +279,12 @@ components:
           type: string
           format: password
           writeOnly: true
+          description: Access token value for auth_type=token.
+        token:
+          type: string
+          format: password
+          writeOnly: true
+          description: Legacy alias for access_token accepted by backend.
         refresh_token:
           type: string
           format: password
@@ -313,9 +320,9 @@ components:
       type: object
       properties:
         data:
-          $ref: '#/components/schemas/Connection'
+          $ref: "#/components/schemas/Connection"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         error:
           nullable: true
 
@@ -327,8 +334,8 @@ components:
           type: string
         credentials:
           oneOf:
-            - $ref: '#/components/schemas/VaultReferenceCredential'
-            - $ref: '#/components/schemas/InlineSecretCredential'
+            - $ref: "#/components/schemas/VaultReferenceCredential"
+            - $ref: "#/components/schemas/InlineSecretCredential"
 
     CreateSyncJobRequest:
       type: object
@@ -375,9 +382,9 @@ components:
       type: object
       properties:
         data:
-          $ref: '#/components/schemas/SyncJob'
+          $ref: "#/components/schemas/SyncJob"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         error:
           nullable: true
 
@@ -401,15 +408,25 @@ components:
       type: object
       properties:
         data:
-          $ref: '#/components/schemas/WebhookEventAccepted'
+          $ref: "#/components/schemas/WebhookEventAccepted"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         error:
           nullable: true
 
     WebhookEvent:
       type: object
-      required: [id, tenant_id, provider, external_id, event_type, status, attempts, received_at]
+      required:
+        [
+          id,
+          tenant_id,
+          provider,
+          external_id,
+          event_type,
+          status,
+          attempts,
+          received_at,
+        ]
       properties:
         id:
           type: string
@@ -442,8 +459,8 @@ components:
       type: object
       properties:
         data:
-          $ref: '#/components/schemas/WebhookEvent'
+          $ref: "#/components/schemas/WebhookEvent"
         meta:
-          $ref: '#/components/schemas/Meta'
+          $ref: "#/components/schemas/Meta"
         error:
           nullable: true

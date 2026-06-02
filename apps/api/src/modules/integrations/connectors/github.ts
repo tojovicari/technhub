@@ -12,6 +12,14 @@ type GithubAppCredentials = {
   installation_id: number;
 };
 
+type GithubTokenCredentials = {
+  auth_type: 'token';
+  access_token?: string;
+  token?: string;
+};
+
+type GithubCredentials = GithubAppCredentials | GithubTokenCredentials;
+
 type GithubScope = {
   org: string;
   repos?: string[]; // optional allowlist; if absent, sync all repos in the org
@@ -19,15 +27,30 @@ type GithubScope = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-function buildOctokit(creds: GithubAppCredentials): Octokit {
-  return new Octokit({
-    authStrategy: createAppAuth,
-    auth: {
-      appId: creds.app_id,
-      privateKey: creds.private_key_pem,
-      installationId: creds.installation_id,
-    },
-  });
+function resolveGithubToken(creds: GithubTokenCredentials): string | undefined {
+  const raw = creds.access_token ?? creds.token;
+  const token = typeof raw === 'string' ? raw.trim() : '';
+  return token.length > 0 ? token : undefined;
+}
+
+function buildOctokit(creds: GithubCredentials): Octokit {
+  if (creds.auth_type === 'app') {
+    return new Octokit({
+      authStrategy: createAppAuth,
+      auth: {
+        appId: creds.app_id,
+        privateKey: creds.private_key_pem,
+        installationId: creds.installation_id,
+      },
+    });
+  }
+
+  const token = resolveGithubToken(creds);
+  if (!token) {
+    throw new Error('GitHub token credentials missing access token (access_token or token)');
+  }
+
+  return new Octokit({ auth: token });
 }
 
 type CanonicalTaskType = 'feature' | 'bug' | 'chore' | 'spike' | 'tech_debt';
@@ -107,11 +130,36 @@ async function syncRepos(
   octokit: Octokit,
   tenantId: string,
   org: string,
+  authType: 'app' | 'token',
   allowlist?: string[],
 ): Promise<Array<{ id: string; repoName: string }>> {
-  // Use installation-scoped endpoint — works for both orgs and personal accounts
-  const { data } = await octokit.apps.listReposAccessibleToInstallation({ per_page: 100 });
-  const allRepos = data.repositories.filter(r => r.owner.login === org);
+  let allRepos: Array<{
+    name: string;
+    full_name: string;
+    archived?: boolean;
+    owner: { login: string };
+  }> = [];
+
+  if (authType === 'app') {
+    // Installation-scoped endpoint for GitHub App credentials
+    const { data } = await octokit.apps.listReposAccessibleToInstallation({ per_page: 100 });
+    allRepos = data.repositories.filter(r => r.owner.login === org);
+  } else {
+    try {
+      // Org-level PAT path
+      allRepos = await octokit.paginate(octokit.repos.listForOrg, {
+        org,
+        type: 'all',
+        per_page: 100,
+      });
+    } catch {
+      // Personal account fallback
+      allRepos = await octokit.paginate(octokit.repos.listForUser, {
+        username: org,
+        per_page: 100,
+      });
+    }
+  }
 
   const filtered = allowlist
     ? allRepos.filter(r => allowlist.includes(r.name))
@@ -423,9 +471,21 @@ export class GithubConnector implements IntegrationConnector {
   }
 
   async runSync(input: SyncInput): Promise<SyncResult> {
-    const creds = input.credentials as GithubAppCredentials | undefined;
-    if (!creds || creds.auth_type !== 'app') {
-      throw new Error('GitHub App credentials not provided (auth_type must be "app")');
+    const creds = input.credentials as GithubCredentials | undefined;
+    if (!creds) {
+      throw new Error('GitHub credentials not provided');
+    }
+
+    if (creds.auth_type === 'app') {
+      if (!creds.app_id || !creds.private_key_pem || !creds.installation_id) {
+        throw new Error('GitHub App credentials not provided (app_id, private_key_pem, installation_id are required)');
+      }
+    } else if (creds.auth_type === 'token') {
+      if (!resolveGithubToken(creds)) {
+        throw new Error('GitHub token credentials missing access token (access_token or token)');
+      }
+    } else {
+      throw new Error('Unsupported GitHub auth_type. Expected "app" or "token"');
     }
 
     const scope = input.scope as GithubScope | undefined;
@@ -448,7 +508,7 @@ export class GithubConnector implements IntegrationConnector {
 
     counts.members += await syncMembers(octokit, input.tenantId, org);
 
-    const projects = await syncRepos(octokit, input.tenantId, org, scope.repos);
+    const projects = await syncRepos(octokit, input.tenantId, org, creds.auth_type, scope.repos);
     counts.repos += projects.length;
 
     for (const { id: projectId, repoName } of projects) {

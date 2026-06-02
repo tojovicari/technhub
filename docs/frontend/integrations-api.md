@@ -16,24 +16,24 @@ The Integrations module manages connections to external providers (Jira, GitHub,
 
 ## Permissions Summary
 
-| Route | Method | Required Permission |
-|---|---|---|
-| `/integrations/connections` | GET | `integrations.connection.read` |
-| `/integrations/connections` | POST | `integrations.connection.manage` |
-| `/integrations/connections/:id` | GET | `integrations.connection.read` |
-| `/integrations/connections/:id` | PATCH | `integrations.connection.manage` |
-| `/integrations/connections/:id` | DELETE | `integrations.connection.manage` |
-| `/integrations/connections/:id/secrets` | PUT | `integrations.secret.rotate` |
-| `/integrations/connections/:id/original-types` | GET | `integrations.connection.read` |
-| `/integrations/original-types` | GET | `integrations.connection.read` |
-| `/integrations/connections/:id/type-mapping` | GET | `integrations.connection.read` |
-| `/integrations/connections/:id/type-mapping` | PATCH | `integrations.connection.manage` |
-| `/integrations/connections/:id/incident-io/severities` | GET | `integrations.connection.read` |
-| `/integrations/connections/:id/opsgenie/priorities` | GET | `integrations.connection.read` |
-| `/integrations/sync-jobs` | POST | `integrations.sync.trigger` |
-| `/integrations/sync-jobs/:id` | GET | `integrations.sync.read` |
-| `/integrations/webhooks/:provider/:tenant_id` | POST | Public (token-gated — see below) |
-| `/integrations/webhooks/events/:event_id` | GET | `integrations.webhook.read` |
+| Route                                                  | Method | Required Permission              |
+| ------------------------------------------------------ | ------ | -------------------------------- |
+| `/integrations/connections`                            | GET    | `integrations.connection.read`   |
+| `/integrations/connections`                            | POST   | `integrations.connection.manage` |
+| `/integrations/connections/:id`                        | GET    | `integrations.connection.read`   |
+| `/integrations/connections/:id`                        | PATCH  | `integrations.connection.manage` |
+| `/integrations/connections/:id`                        | DELETE | `integrations.connection.manage` |
+| `/integrations/connections/:id/secrets`                | PUT    | `integrations.secret.rotate`     |
+| `/integrations/connections/:id/original-types`         | GET    | `integrations.connection.read`   |
+| `/integrations/original-types`                         | GET    | `integrations.connection.read`   |
+| `/integrations/connections/:id/type-mapping`           | GET    | `integrations.connection.read`   |
+| `/integrations/connections/:id/type-mapping`           | PATCH  | `integrations.connection.manage` |
+| `/integrations/connections/:id/incident-io/severities` | GET    | `integrations.connection.read`   |
+| `/integrations/connections/:id/opsgenie/priorities`    | GET    | `integrations.connection.read`   |
+| `/integrations/sync-jobs`                              | POST   | `integrations.sync.trigger`      |
+| `/integrations/sync-jobs/:id`                          | GET    | `integrations.sync.read`         |
+| `/integrations/webhooks/:provider/:tenant_id`          | POST   | Public (token-gated — see below) |
+| `/integrations/webhooks/events/:event_id`              | GET    | `integrations.webhook.read`      |
 
 ---
 
@@ -41,10 +41,10 @@ The Integrations module manages connections to external providers (Jira, GitHub,
 
 When provider data is synced, each task stores two type fields:
 
-| Field | Description |
-|---|---|
-| `task_type` | Canonical type after normalization: `bug` \| `feature` \| `chore` \| `spike` \| `tech_debt`. Can be `null` if no mapping is configured for the provider's raw type. |
-| `original_type` | Raw type string from the provider — e.g. `"Incident"`, `"Security Finding"`, `"Customer Request"`. Always stored; never overwritten by normalization. |
+| Field           | Description                                                                                                                                                         |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task_type`     | Canonical type after normalization: `bug` \| `feature` \| `chore` \| `spike` \| `tech_debt`. Can be `null` if no mapping is configured for the provider's raw type. |
+| `original_type` | Raw type string from the provider — e.g. `"Incident"`, `"Security Finding"`, `"Customer Request"`. Always stored; never overwritten by normalization.               |
 
 **Why this matters:** Providers like Jira have types (`Incident`, `Security Finding`, etc.) that don’t map 1:1 to canonical types. Instead of silently falling back to a wrong type (which corrupts DORA/COGS data), the system stores the original type and lets the tenant configure the mapping explicitly.
 
@@ -89,7 +89,13 @@ List all connections for the tenant.
       "scope": {
         "use_incident_api": false,
         "field_mapping": {
-          "severity_to_priority": { "P1": "P1", "P2": "P2", "P3": "P3", "P4": "P4", "P5": "P5" },
+          "severity_to_priority": {
+            "P1": "P1",
+            "P2": "P2",
+            "P3": "P3",
+            "P4": "P4",
+            "P5": "P5"
+          },
           "include_priorities": ["P1", "P2"]
         }
       },
@@ -104,7 +110,11 @@ List all connections for the tenant.
       }
     }
   ],
-  "meta": { "request_id": "req_000", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "meta": {
+    "request_id": "req_000",
+    "version": "v1",
+    "timestamp": "2026-04-10T12:00:00Z"
+  },
   "error": null
 }
 ```
@@ -113,10 +123,10 @@ List all connections for the tenant.
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
+| Status | Code           | When              |
+| ------ | -------------- | ----------------- |
+| 401    | `UNAUTHORIZED` | —                 |
+| 403    | `FORBIDDEN`    | Permission denied |
 
 ---
 
@@ -128,8 +138,8 @@ Retrieve a single connection by ID.
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
+| Param           | Type   | Notes         |
+| --------------- | ------ | ------------- |
 | `connection_id` | string | Connection ID |
 
 **Response — 200 OK:**
@@ -144,7 +154,13 @@ Retrieve a single connection by ID.
     "scope": {
       "use_incident_api": false,
       "field_mapping": {
-        "severity_to_priority": { "P1": "P1", "P2": "P2", "P3": "P3", "P4": "P4", "P5": "P5" },
+        "severity_to_priority": {
+          "P1": "P1",
+          "P2": "P2",
+          "P3": "P3",
+          "P4": "P4",
+          "P5": "P5"
+        },
         "include_priorities": ["P1", "P2"]
       }
     },
@@ -152,7 +168,11 @@ Retrieve a single connection by ID.
     "secret_last_rotated_at": "2026-04-10T12:00:00Z",
     "last_sync": null
   },
-  "meta": { "request_id": "req_00a", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "meta": {
+    "request_id": "req_00a",
+    "version": "v1",
+    "timestamp": "2026-04-10T12:00:00Z"
+  },
   "error": null
 }
 ```
@@ -161,11 +181,11 @@ Retrieve a single connection by ID.
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
+| Status | Code           | When                 |
+| ------ | -------------- | -------------------- |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | Permission denied    |
+| 404    | `NOT_FOUND`    | Connection not found |
 
 ---
 
@@ -177,18 +197,19 @@ Register a new integration connection for the tenant.
 
 **Request Body:**
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `tenant_id` | string | ✅ | Must match JWT `tenant_id` |
-| `provider` | enum | ✅ | `jira` \| `github` \| `opsgenie` \| `incident_io` |
-| `scope` | object | ❌ | Provider-specific scope configuration (e.g. `{ "org": "acme-corp" }`) |
-| `credentials` | object | ❌ | See Credential types below |
+| Field         | Type   | Required | Notes                                                                 |
+| ------------- | ------ | -------- | --------------------------------------------------------------------- |
+| `tenant_id`   | string | ✅       | Must match JWT `tenant_id`                                            |
+| `provider`    | enum   | ✅       | `jira` \| `github` \| `opsgenie` \| `incident_io`                     |
+| `scope`       | object | ❌       | Provider-specific scope configuration (e.g. `{ "org": "acme-corp" }`) |
+| `credentials` | object | ❌       | See Credential types below                                            |
 
 **Credential options:**
 
 You can provide credentials either as a vault reference (preferred) or inline (encrypted at rest):
 
 **Option A — Vault reference (preferred):**
+
 ```json
 {
   "auth_type": "oauth2",
@@ -197,6 +218,7 @@ You can provide credentials either as a vault reference (preferred) or inline (e
 ```
 
 **Option B — Inline secret:**
+
 ```json
 {
   "auth_type": "token",
@@ -212,14 +234,15 @@ You can provide credentials either as a vault reference (preferred) or inline (e
 
 #### GitHub
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `scope.org` | string | ✅ | GitHub organization or user login |
-| `scope.repos` | string[] | ❌ | Allowlist of repo names. Omit to sync all repos in the org |
-| `credentials.auth_type` | `"app"` | ✅ | GitHub App authentication |
-| `credentials.app_id` | number | ✅ | GitHub App ID |
-| `credentials.private_key_pem` | string | ✅ | PEM-encoded private key |
-| `credentials.installation_id` | number | ✅ | GitHub App installation ID |
+| Field                      | Type      | Required | Notes                                                      |
+| -------------------------- | --------- | -------- | ---------------------------------------------------------- |
+| `scope.org`                | string    | ✅       | GitHub organization or user login                          |
+| `scope.repos`              | string[]  | ❌       | Allowlist of repo names. Omit to sync all repos in the org |
+| `credentials.auth_type`    | `"token"` | ✅       | Fixed authentication mode for GitHub                       |
+| `credentials.access_token` | string    | ✅       | PAT or token with org read access                          |
+| `credentials.token`        | string    | ❌       | Legacy alias accepted by backend; prefer `access_token`    |
+
+**GitHub token (org-level quick setup):**
 
 ```json
 {
@@ -227,23 +250,21 @@ You can provide credentials either as a vault reference (preferred) or inline (e
   "provider": "github",
   "scope": { "org": "acme-corp", "repos": ["platform", "api-service"] },
   "credentials": {
-    "auth_type": "app",
-    "app_id": 123456,
-    "private_key_pem": "-----BEGIN RSA PRIVATE KEY-----\n...",
-    "installation_id": 78901234
+    "auth_type": "token",
+    "access_token": "<your-github-token>"
   }
 }
 ```
 
 #### Jira
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `scope.project_keys` | string[] | ❌ | Allowlist of Jira project keys (e.g. `["AUTH", "PLAT"]`). Omit to sync all |
-| `credentials.auth_type` | `"token"` | ✅ | Jira API token |
-| `credentials.base_url` | string | ✅ | Jira instance URL (e.g. `https://myorg.atlassian.net`) |
-| `credentials.email` | string | ✅ | Jira account email |
-| `credentials.access_token` | string | ✅ | Jira API token |
+| Field                      | Type      | Required | Notes                                                                      |
+| -------------------------- | --------- | -------- | -------------------------------------------------------------------------- |
+| `scope.project_keys`       | string[]  | ❌       | Allowlist of Jira project keys (e.g. `["AUTH", "PLAT"]`). Omit to sync all |
+| `credentials.auth_type`    | `"token"` | ✅       | Jira API token                                                             |
+| `credentials.base_url`     | string    | ✅       | Jira instance URL (e.g. `https://myorg.atlassian.net`)                     |
+| `credentials.email`        | string    | ✅       | Jira account email                                                         |
+| `credentials.access_token` | string    | ✅       | Jira API token                                                             |
 
 ```json
 {
@@ -263,14 +284,14 @@ You can provide credentials either as a vault reference (preferred) or inline (e
 
 > **`scope.field_mapping` is required.** incident.io uses custom severity names — you must map them to the canonical P1–P5 scale so MTTR/MTTA calculations work correctly. Fetch the tenant's severities from `GET /incident-io/v1/severities` (on the incident.io API) to populate the mapping UI.
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `scope.field_mapping.severity_to_priority` | object | ✅ | Maps provider severity names → `P1`–`P5` |
-| `scope.field_mapping.include_priorities` | string[] | ❌ | Which priorities count for MTTR/MTTA. Default: `["P1","P2"]` |
-| `scope.field_mapping.production_indicator` | object | ❌ | How to detect production incidents. Default: `{ "type": "none" }` (all incidents included) |
-| `scope.field_mapping.affected_service_field` | object | ❌ | Where to read affected services. Default: `{ "type": "none" }` |
-| `credentials.auth_type` | `"bearer"` | ✅ | |
-| `credentials.api_key` | string | ✅ | incident.io API key |
+| Field                                        | Type       | Required | Notes                                                                                      |
+| -------------------------------------------- | ---------- | -------- | ------------------------------------------------------------------------------------------ |
+| `scope.field_mapping.severity_to_priority`   | object     | ✅       | Maps provider severity names → `P1`–`P5`                                                   |
+| `scope.field_mapping.include_priorities`     | string[]   | ❌       | Which priorities count for MTTR/MTTA. Default: `["P1","P2"]`                               |
+| `scope.field_mapping.production_indicator`   | object     | ❌       | How to detect production incidents. Default: `{ "type": "none" }` (all incidents included) |
+| `scope.field_mapping.affected_service_field` | object     | ❌       | Where to read affected services. Default: `{ "type": "none" }`                             |
+| `credentials.auth_type`                      | `"bearer"` | ✅       |                                                                                            |
+| `credentials.api_key`                        | string     | ✅       | incident.io API key                                                                        |
 
 ```json
 {
@@ -296,6 +317,7 @@ You can provide credentials either as a vault reference (preferred) or inline (e
 ```
 
 **`production_indicator` options:**
+
 ```json
 { "type": "none" }                                          // all incidents
 { "type": "tag", "values": ["production", "prod"] }        // tag-based
@@ -306,15 +328,15 @@ You can provide credentials either as a vault reference (preferred) or inline (e
 
 > **`scope.field_mapping` is required.** OpsGenie already uses P1–P5 natively, so the mapping is 1:1. You must still provide it explicitly.
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `scope.use_incident_api` | boolean | ✅ | `true` = Incident API (Standard/Enterprise plans); `false` = Alert API (all plans) |
-| `scope.field_mapping.severity_to_priority` | object | ✅ | Maps OpsGenie priority names → `P1`–`P5` |
-| `scope.field_mapping.include_priorities` | string[] | ❌ | Default: `["P1","P2"]` |
-| `scope.field_mapping.production_indicator` | object | ❌ | Default: `{ "type": "none" }` |
-| `credentials.auth_type` | `"api_key"` | ✅ | |
-| `credentials.api_key` | string | ✅ | OpsGenie API key |
-| `credentials.region` | `"us"` \| `"eu"` | ❌ | Default: `"us"` |
+| Field                                      | Type             | Required | Notes                                                                              |
+| ------------------------------------------ | ---------------- | -------- | ---------------------------------------------------------------------------------- |
+| `scope.use_incident_api`                   | boolean          | ✅       | `true` = Incident API (Standard/Enterprise plans); `false` = Alert API (all plans) |
+| `scope.field_mapping.severity_to_priority` | object           | ✅       | Maps OpsGenie priority names → `P1`–`P5`                                           |
+| `scope.field_mapping.include_priorities`   | string[]         | ❌       | Default: `["P1","P2"]`                                                             |
+| `scope.field_mapping.production_indicator` | object           | ❌       | Default: `{ "type": "none" }`                                                      |
+| `credentials.auth_type`                    | `"api_key"`      | ✅       |                                                                                    |
+| `credentials.api_key`                      | string           | ✅       | OpsGenie API key                                                                   |
+| `credentials.region`                       | `"us"` \| `"eu"` | ❌       | Default: `"us"`                                                                    |
 
 ```json
 {
@@ -352,10 +374,8 @@ You can provide credentials either as a vault reference (preferred) or inline (e
   "provider": "github",
   "scope": { "org": "acme-corp", "repos": ["platform", "api-service"] },
   "credentials": {
-    "auth_type": "app",
-    "app_id": 123456,
-    "private_key_pem": "-----BEGIN RSA PRIVATE KEY-----\n...",
-    "installation_id": 78901234
+    "auth_type": "token",
+    "access_token": "<your-github-token>"
   }
 }
 ```
@@ -374,7 +394,11 @@ You can provide credentials either as a vault reference (preferred) or inline (e
     "secret_last_rotated_at": "2026-04-10T12:00:00Z",
     "last_sync": null
   },
-  "meta": { "request_id": "req_001", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "meta": {
+    "request_id": "req_001",
+    "version": "v1",
+    "timestamp": "2026-04-10T12:00:00Z"
+  },
   "error": null
 }
 ```
@@ -383,11 +407,11 @@ You can provide credentials either as a vault reference (preferred) or inline (e
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Invalid `provider`, missing `tenant_id` |
-| 401 | `UNAUTHORIZED` | Invalid token |
-| 403 | `FORBIDDEN` | Permission denied |
+| Status | Code           | When                                    |
+| ------ | -------------- | --------------------------------------- |
+| 400    | `BAD_REQUEST`  | Invalid `provider`, missing `tenant_id` |
+| 401    | `UNAUTHORIZED` | Invalid token                           |
+| 403    | `FORBIDDEN`    | Permission denied                       |
 
 ---
 
@@ -399,16 +423,16 @@ Rotate or set provider credentials for an existing connection. Write-only — no
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
+| Param           | Type   | Notes                   |
+| --------------- | ------ | ----------------------- |
 | `connection_id` | string | Connection ID to update |
 
 **Request Body:**
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `tenant_id` | string | ✅ | Must match JWT `tenant_id` |
-| `credentials` | object | ✅ | Vault reference or inline secret (same shapes as POST) |
+| Field         | Type   | Required | Notes                                                  |
+| ------------- | ------ | -------- | ------------------------------------------------------ |
+| `tenant_id`   | string | ✅       | Must match JWT `tenant_id`                             |
+| `credentials` | object | ✅       | Vault reference or inline secret (same shapes as POST) |
 
 **Request Example:**
 
@@ -426,11 +450,11 @@ Rotate or set provider credentials for an existing connection. Write-only — no
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
+| Status | Code           | When                 |
+| ------ | -------------- | -------------------- |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | Permission denied    |
+| 404    | `NOT_FOUND`    | Connection not found |
 
 ---
 
@@ -442,19 +466,19 @@ Delete a connection and all associated secrets and sync jobs.
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
+| Param           | Type   | Notes                   |
+| --------------- | ------ | ----------------------- |
 | `connection_id` | string | Connection ID to delete |
 
 **Response — 204 No Content** (empty body)
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
+| Status | Code           | When                 |
+| ------ | -------------- | -------------------- |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | Permission denied    |
+| 404    | `NOT_FOUND`    | Connection not found |
 
 ---
 
@@ -466,17 +490,17 @@ Update the scope configuration of an existing connection — for example, to sav
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
+| Param           | Type   | Notes                   |
+| --------------- | ------ | ----------------------- |
 | `connection_id` | string | Connection ID to update |
 
 **Request Body:**
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `tenant_id` | string | ✅ | Must match JWT `tenant_id` |
-| `status` | `"active"` \| `"disabled"` | ❌ | At least one of `status` or `scope` must be present |
-| `scope` | object | ❌ | Full scope override. At least one of `status` or `scope` must be present |
+| Field       | Type                       | Required | Notes                                                                    |
+| ----------- | -------------------------- | -------- | ------------------------------------------------------------------------ |
+| `tenant_id` | string                     | ✅       | Must match JWT `tenant_id`                                               |
+| `status`    | `"active"` \| `"disabled"` | ❌       | At least one of `status` or `scope` must be present                      |
+| `scope`     | object                     | ❌       | Full scope override. At least one of `status` or `scope` must be present |
 
 **Request Example (saving field_mapping after wizard):**
 
@@ -508,7 +532,12 @@ Update the scope configuration of an existing connection — for example, to sav
     "status": "active",
     "scope": {
       "field_mapping": {
-        "severity_to_priority": { "critical": "P1", "major": "P2", "minor": "P3", "informational": "P4" },
+        "severity_to_priority": {
+          "critical": "P1",
+          "major": "P2",
+          "minor": "P3",
+          "informational": "P4"
+        },
         "include_priorities": ["P1", "P2"]
       }
     },
@@ -516,7 +545,11 @@ Update the scope configuration of an existing connection — for example, to sav
     "secret_last_rotated_at": "2026-04-10T12:00:00Z",
     "last_sync": null
   },
-  "meta": { "request_id": "req_006", "version": "v1", "timestamp": "2026-04-15T10:00:00Z" },
+  "meta": {
+    "request_id": "req_006",
+    "version": "v1",
+    "timestamp": "2026-04-15T10:00:00Z"
+  },
   "error": null
 }
 ```
@@ -525,12 +558,12 @@ Update the scope configuration of an existing connection — for example, to sav
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Missing `tenant_id`, neither `status` nor `scope` provided, or invalid values |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
+| Status | Code           | When                                                                          |
+| ------ | -------------- | ----------------------------------------------------------------------------- |
+| 400    | `BAD_REQUEST`  | Missing `tenant_id`, neither `status` nor `scope` provided, or invalid values |
+| 401    | `UNAUTHORIZED` | —                                                                             |
+| 403    | `FORBIDDEN`    | Permission denied                                                             |
+| 404    | `NOT_FOUND`    | Connection not found                                                          |
 
 ---
 
@@ -542,11 +575,11 @@ Trigger a data sync for a connection. The job runs synchronously — the respons
 
 **Request Body:**
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `tenant_id` | string | ✅ | Must match JWT `tenant_id` |
-| `connection_id` | string | ✅ | Connection to sync |
-| `mode` | `"full"` \| `"incremental"` | ❌ | Default: `"incremental"`. Use `"full"` to re-sync all data |
+| Field           | Type                        | Required | Notes                                                      |
+| --------------- | --------------------------- | -------- | ---------------------------------------------------------- |
+| `tenant_id`     | string                      | ✅       | Must match JWT `tenant_id`                                 |
+| `connection_id` | string                      | ✅       | Connection to sync                                         |
+| `mode`          | `"full"` \| `"incremental"` | ❌       | Default: `"incremental"`. Use `"full"` to re-sync all data |
 
 **Request Example:**
 
@@ -572,7 +605,11 @@ Trigger a data sync for a connection. The job runs synchronously — the respons
     "finished_at": "2026-04-10T14:00:01Z",
     "error_summary": null
   },
-  "meta": { "request_id": "req_s01", "version": "v1", "timestamp": "2026-04-10T14:00:01Z" },
+  "meta": {
+    "request_id": "req_s01",
+    "version": "v1",
+    "timestamp": "2026-04-10T14:00:01Z"
+  },
   "error": null
 }
 ```
@@ -581,12 +618,12 @@ Trigger a data sync for a connection. The job runs synchronously — the respons
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Invalid `connection_id` or missing fields |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
+| Status | Code           | When                                      |
+| ------ | -------------- | ----------------------------------------- |
+| 400    | `BAD_REQUEST`  | Invalid `connection_id` or missing fields |
+| 401    | `UNAUTHORIZED` | —                                         |
+| 403    | `FORBIDDEN`    | Permission denied                         |
+| 404    | `NOT_FOUND`    | Connection not found                      |
 
 ---
 
@@ -610,27 +647,31 @@ Retrieve a past sync job by ID.
     "finished_at": "2026-04-10T14:00:01Z",
     "error_summary": null
   },
-  "meta": { "request_id": "req_003", "version": "v1", "timestamp": "2026-04-10T14:05:00Z" },
+  "meta": {
+    "request_id": "req_003",
+    "version": "v1",
+    "timestamp": "2026-04-10T14:05:00Z"
+  },
   "error": null
 }
 ```
 
 **Sync Job Status Values:**
 
-| Value | Meaning |
-|---|---|
-| `queued` | Enqueued, not yet started |
-| `running` | Currently executing |
-| `success` | Finished successfully |
-| `failed` | Finished with errors — see `error_summary` |
+| Value     | Meaning                                    |
+| --------- | ------------------------------------------ |
+| `queued`  | Enqueued, not yet started                  |
+| `running` | Currently executing                        |
+| `success` | Finished successfully                      |
+| `failed`  | Finished with errors — see `error_summary` |
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Job not found |
+| Status | Code           | When              |
+| ------ | -------------- | ----------------- |
+| 401    | `UNAUTHORIZED` | —                 |
+| 403    | `FORBIDDEN`    | Permission denied |
+| 404    | `NOT_FOUND`    | Job not found     |
 
 ---
 
@@ -658,7 +699,11 @@ SLA templates are tenant-scoped and evaluated against tasks from all connections
       "Task"
     ]
   },
-  "meta": { "request_id": "req_009", "version": "v1", "timestamp": "2026-04-10T15:00:00Z" },
+  "meta": {
+    "request_id": "req_009",
+    "version": "v1",
+    "timestamp": "2026-04-10T15:00:00Z"
+  },
   "error": null
 }
 ```
@@ -667,10 +712,10 @@ SLA templates are tenant-scoped and evaluated against tasks from all connections
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
+| Status | Code           | When              |
+| ------ | -------------- | ----------------- |
+| 401    | `UNAUTHORIZED` | —                 |
+| 403    | `FORBIDDEN`    | Permission denied |
 
 ---
 
@@ -682,8 +727,8 @@ Retrieve the distinct raw types that have been ingested for a connection. Use th
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
+| Param           | Type   | Notes               |
+| --------------- | ------ | ------------------- |
 | `connection_id` | string | Connection to query |
 
 **Response — 200 OK:**
@@ -702,7 +747,11 @@ Retrieve the distinct raw types that have been ingested for a connection. Use th
       "Customer Request"
     ]
   },
-  "meta": { "request_id": "req_010", "version": "v1", "timestamp": "2026-04-10T15:00:00Z" },
+  "meta": {
+    "request_id": "req_010",
+    "version": "v1",
+    "timestamp": "2026-04-10T15:00:00Z"
+  },
   "error": null
 }
 ```
@@ -711,11 +760,11 @@ Retrieve the distinct raw types that have been ingested for a connection. Use th
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
+| Status | Code           | When                 |
+| ------ | -------------- | -------------------- |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | Permission denied    |
+| 404    | `NOT_FOUND`    | Connection not found |
 
 ---
 
@@ -727,8 +776,8 @@ Read the current type mapping configuration for a connection.
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
+| Param           | Type   | Notes               |
+| --------------- | ------ | ------------------- |
 | `connection_id` | string | Connection to query |
 
 **Response — 200 OK:**
@@ -738,14 +787,18 @@ Read the current type mapping configuration for a connection.
   "data": {
     "connection_id": "conn-jira-abc",
     "mapping": {
-      "Incident":          "bug",
-      "Major Incident":    "bug",
-      "Security Finding":  "bug",
-      "Customer Request":  "feature",
-      "Task":              "chore"
+      "Incident": "bug",
+      "Major Incident": "bug",
+      "Security Finding": "bug",
+      "Customer Request": "feature",
+      "Task": "chore"
     }
   },
-  "meta": { "request_id": "req_011", "version": "v1", "timestamp": "2026-04-10T15:00:00Z" },
+  "meta": {
+    "request_id": "req_011",
+    "version": "v1",
+    "timestamp": "2026-04-10T15:00:00Z"
+  },
   "error": null
 }
 ```
@@ -754,11 +807,11 @@ Read the current type mapping configuration for a connection.
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
+| Status | Code           | When                 |
+| ------ | -------------- | -------------------- |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | Permission denied    |
+| 404    | `NOT_FOUND`    | Connection not found |
 
 ---
 
@@ -770,26 +823,26 @@ Update the type mapping for a connection. The new mapping replaces the previous 
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
+| Param           | Type   | Notes                |
+| --------------- | ------ | -------------------- |
 | `connection_id` | string | Connection to update |
 
 **Request Body:**
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `mapping` | object | ✅ | Keys: raw provider type strings. Values: canonical type — `"bug"` \| `"feature"` \| `"chore"` \| `"spike"` \| `"tech_debt"` |
+| Field     | Type   | Required | Notes                                                                                                                       |
+| --------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `mapping` | object | ✅       | Keys: raw provider type strings. Values: canonical type — `"bug"` \| `"feature"` \| `"chore"` \| `"spike"` \| `"tech_debt"` |
 
 **Request Example:**
 
 ```json
 {
   "mapping": {
-    "Incident":          "bug",
-    "Major Incident":    "bug",
-    "Security Finding":  "bug",
-    "Customer Request":  "feature",
-    "Task":              "chore"
+    "Incident": "bug",
+    "Major Incident": "bug",
+    "Security Finding": "bug",
+    "Customer Request": "feature",
+    "Task": "chore"
   }
 }
 ```
@@ -803,26 +856,30 @@ Update the type mapping for a connection. The new mapping replaces the previous 
   "data": {
     "connection_id": "conn-jira-abc",
     "mapping": {
-      "Incident":          "bug",
-      "Major Incident":    "bug",
-      "Security Finding":  "bug",
-      "Customer Request":  "feature",
-      "Task":              "chore"
+      "Incident": "bug",
+      "Major Incident": "bug",
+      "Security Finding": "bug",
+      "Customer Request": "feature",
+      "Task": "chore"
     }
   },
-  "meta": { "request_id": "req_012", "version": "v1", "timestamp": "2026-04-10T15:05:00Z" },
+  "meta": {
+    "request_id": "req_012",
+    "version": "v1",
+    "timestamp": "2026-04-10T15:05:00Z"
+  },
   "error": null
 }
 ```
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Invalid canonical type value in mapping |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
+| Status | Code           | When                                    |
+| ------ | -------------- | --------------------------------------- |
+| 400    | `BAD_REQUEST`  | Invalid canonical type value in mapping |
+| 401    | `UNAUTHORIZED` | —                                       |
+| 403    | `FORBIDDEN`    | Permission denied                       |
+| 404    | `NOT_FOUND`    | Connection not found                    |
 
 ---
 
@@ -834,17 +891,17 @@ Receive a provider webhook and enqueue it for async processing.
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
-| `provider` | enum | `jira` \| `github` \| `opsgenie` \| `incident_io` |
-| `tenant_id` | string | The target tenant |
+| Param       | Type   | Notes                                             |
+| ----------- | ------ | ------------------------------------------------- |
+| `provider`  | enum   | `jira` \| `github` \| `opsgenie` \| `incident_io` |
+| `tenant_id` | string | The target tenant                                 |
 
 **Headers:**
 
-| Header | Required | Notes |
-|---|---|---|
-| `x-webhook-token` | ✅ | Shared secret configured in the integration connection |
-| `Content-Type` | ✅ | `application/json` |
+| Header            | Required | Notes                                                  |
+| ----------------- | -------- | ------------------------------------------------------ |
+| `x-webhook-token` | ✅       | Shared secret configured in the integration connection |
+| `Content-Type`    | ✅       | `application/json`                                     |
 
 **Request Body:** Free-form JSON — the raw provider webhook payload.
 
@@ -858,7 +915,11 @@ Receive a provider webhook and enqueue it for async processing.
     "status": "queued",
     "received_at": "2026-04-10T14:10:00Z"
   },
-  "meta": { "request_id": "req_004", "version": "v1", "timestamp": "2026-04-10T14:10:00Z" },
+  "meta": {
+    "request_id": "req_004",
+    "version": "v1",
+    "timestamp": "2026-04-10T14:10:00Z"
+  },
   "error": null
 }
 ```
@@ -867,10 +928,10 @@ Receive a provider webhook and enqueue it for async processing.
 
 **Error Scenarios:**
 
-| Status | Meaning |
-|---|---|
-| 400 | Unsupported provider or malformed payload |
-| 401 | Invalid or missing `x-webhook-token` |
+| Status | Meaning                                   |
+| ------ | ----------------------------------------- |
+| 400    | Unsupported provider or malformed payload |
+| 401    | Invalid or missing `x-webhook-token`      |
 
 > **Note:** This endpoint is called by the external provider, not by your frontend. Document it for backend/DevOps setup reference. All four providers (`jira`, `github`, `opsgenie`, `incident_io`) use this same route.
 
@@ -898,28 +959,32 @@ Check the processing status of a received webhook event.
     "received_at": "2026-04-10T14:10:00Z",
     "processed_at": "2026-04-10T14:10:04Z"
   },
-  "meta": { "request_id": "req_005", "version": "v1", "timestamp": "2026-04-10T14:15:00Z" },
+  "meta": {
+    "request_id": "req_005",
+    "version": "v1",
+    "timestamp": "2026-04-10T14:15:00Z"
+  },
   "error": null
 }
 ```
 
 **Webhook Event Status Values:**
 
-| Value | Meaning |
-|---|---|
-| `queued` | Waiting to be processed |
-| `processing` | Being handled |
-| `processed` | Handled successfully |
-| `failed` | Processing failed |
-| `skipped` | Event type not handled |
+| Value        | Meaning                 |
+| ------------ | ----------------------- |
+| `queued`     | Waiting to be processed |
+| `processing` | Being handled           |
+| `processed`  | Handled successfully    |
+| `failed`     | Processing failed       |
+| `skipped`    | Event type not handled  |
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Event not found |
+| Status | Code           | When              |
+| ------ | -------------- | ----------------- |
+| 401    | `UNAUTHORIZED` | —                 |
+| 403    | `FORBIDDEN`    | Permission denied |
+| 404    | `NOT_FOUND`    | Event not found   |
 
 ---
 
@@ -960,13 +1025,13 @@ OpsGenie and incident.io connections feed the **DORA MTTR and MTTA** metrics. Un
 }
 ```
 
-| Scope field | Required | Notes |
-|---|---|---|
-| `use_incident_api` | ✅ | `true` = Incident API (Standard/Enterprise plans); `false` = Alert API (Essentials) |
-| `field_mapping.severity_to_priority` | ✅ | Maps OpsGenie priority labels to canonical P1–P5 |
-| `field_mapping.include_priorities` | ❌ | Which priorities to sync (default: `["P1","P2"]`) |
-| `field_mapping.production_indicator` | ❌ | How to detect production incidents (`{ type: "tag", value: "production" }`) |
-| `field_mapping.affected_service_field` | ❌ | Where to read `affectedServices` from the payload |
+| Scope field                            | Required | Notes                                                                               |
+| -------------------------------------- | -------- | ----------------------------------------------------------------------------------- |
+| `use_incident_api`                     | ✅       | `true` = Incident API (Standard/Enterprise plans); `false` = Alert API (Essentials) |
+| `field_mapping.severity_to_priority`   | ✅       | Maps OpsGenie priority labels to canonical P1–P5                                    |
+| `field_mapping.include_priorities`     | ❌       | Which priorities to sync (default: `["P1","P2"]`)                                   |
+| `field_mapping.production_indicator`   | ❌       | How to detect production incidents (`{ type: "tag", value: "production" }`)         |
+| `field_mapping.affected_service_field` | ❌       | Where to read `affectedServices` from the payload                                   |
 
 **Full POST example:**
 
@@ -1026,13 +1091,13 @@ Set `x-webhook-token` header to the value of the `OPSGENIE_WEBHOOK_TOKEN` env va
 }
 ```
 
-| Scope field | Required | Notes |
-|---|---|---|
-| `field_mapping.severity_to_priority` | ✅ | Maps incident.io severity names to canonical P1–P5. Use the `/severities` wizard endpoint to get available names. |
-| `field_mapping.include_priorities` | ❌ | Which priorities to sync after mapping (default: `["P1","P2"]`) |
-| `field_mapping.production_indicator` | ❌ | Filter for production incidents |
-| `field_mapping.affected_service_field` | ❌ | Custom field key for affected services |
-| `field_mapping.opened_at_field` | ❌ | Field to use as `openedAt` (default `created_at`) |
+| Scope field                            | Required | Notes                                                                                                             |
+| -------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `field_mapping.severity_to_priority`   | ✅       | Maps incident.io severity names to canonical P1–P5. Use the `/severities` wizard endpoint to get available names. |
+| `field_mapping.include_priorities`     | ❌       | Which priorities to sync after mapping (default: `["P1","P2"]`)                                                   |
+| `field_mapping.production_indicator`   | ❌       | Filter for production incidents                                                                                   |
+| `field_mapping.affected_service_field` | ❌       | Custom field key for affected services                                                                            |
+| `field_mapping.opened_at_field`        | ❌       | Field to use as `openedAt` (default `created_at`)                                                                 |
 
 **Full POST example:**
 
@@ -1052,7 +1117,11 @@ Set `x-webhook-token` header to the value of the `OPSGENIE_WEBHOOK_TOKEN` env va
         "Minor": "P3"
       },
       "include_priorities": ["P1", "P2"],
-      "production_indicator": { "type": "field", "field": "environment", "value": "production" }
+      "production_indicator": {
+        "type": "field",
+        "field": "environment",
+        "value": "production"
+      }
     }
   }
 }
@@ -1075,8 +1144,8 @@ Fetch the live severity list from the tenant's incident.io account.
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
+| Param           | Type          | Notes                              |
+| --------------- | ------------- | ---------------------------------- |
 | `connection_id` | string (UUID) | Active `incident_io` connection ID |
 
 **Response — 200 OK:**
@@ -1086,12 +1155,31 @@ Fetch the live severity list from the tenant's incident.io account.
   "data": {
     "connection_id": "conn-uuid-001",
     "severities": [
-      { "id": "sev-1", "name": "Critical", "rank": 1, "description": "Total service outage" },
-      { "id": "sev-2", "name": "Major",    "rank": 2, "description": "Significant impact" },
-      { "id": "sev-3", "name": "Minor",    "rank": 3, "description": "Partial degradation" }
+      {
+        "id": "sev-1",
+        "name": "Critical",
+        "rank": 1,
+        "description": "Total service outage"
+      },
+      {
+        "id": "sev-2",
+        "name": "Major",
+        "rank": 2,
+        "description": "Significant impact"
+      },
+      {
+        "id": "sev-3",
+        "name": "Minor",
+        "rank": 3,
+        "description": "Partial degradation"
+      }
     ]
   },
-  "meta": { "request_id": "req_w01", "version": "v1", "timestamp": "2026-04-14T10:00:00Z" },
+  "meta": {
+    "request_id": "req_w01",
+    "version": "v1",
+    "timestamp": "2026-04-14T10:00:00Z"
+  },
   "error": null
 }
 ```
@@ -1100,13 +1188,13 @@ Use `name` as the left-hand key in `severity_to_priority`. Render rows sorted by
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Connection is not `incident_io` or has no credentials |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
-| 502 | `BAD_GATEWAY` | incident.io API returned an error |
+| Status | Code           | When                                                  |
+| ------ | -------------- | ----------------------------------------------------- |
+| 400    | `BAD_REQUEST`  | Connection is not `incident_io` or has no credentials |
+| 401    | `UNAUTHORIZED` | —                                                     |
+| 403    | `FORBIDDEN`    | Permission denied                                     |
+| 404    | `NOT_FOUND`    | Connection not found                                  |
+| 502    | `BAD_GATEWAY`  | incident.io API returned an error                     |
 
 ---
 
@@ -1118,8 +1206,8 @@ Return the static OpsGenie priority list (no API call required — priorities ar
 
 **Path Params:**
 
-| Param | Type | Notes |
-|---|---|---|
+| Param           | Type          | Notes                           |
+| --------------- | ------------- | ------------------------------- |
 | `connection_id` | string (UUID) | Active `opsgenie` connection ID |
 
 **Response — 200 OK:**
@@ -1136,7 +1224,11 @@ Return the static OpsGenie priority list (no API call required — priorities ar
       { "name": "P5", "label": "P5 — Informational" }
     ]
   },
-  "meta": { "request_id": "req_w02", "version": "v1", "timestamp": "2026-04-14T10:00:00Z" },
+  "meta": {
+    "request_id": "req_w02",
+    "version": "v1",
+    "timestamp": "2026-04-14T10:00:00Z"
+  },
   "error": null
 }
 ```
@@ -1145,12 +1237,12 @@ Use `name` as the left-hand key in `severity_to_priority`. Since OpsGenie priori
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Connection is not `opsgenie` |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Connection not found |
+| Status | Code           | When                         |
+| ------ | -------------- | ---------------------------- |
+| 400    | `BAD_REQUEST`  | Connection is not `opsgenie` |
+| 401    | `UNAUTHORIZED` | —                            |
+| 403    | `FORBIDDEN`    | Permission denied            |
+| 404    | `NOT_FOUND`    | Connection not found         |
 
 ---
 
@@ -1198,40 +1290,39 @@ Use `name` as the left-hand key in `severity_to_priority`. Since OpsGenie priori
 
 ### Provider
 
-| Value | Notes |
-|---|---|
-| `jira` | Atlassian Jira Cloud or Server — syncs tasks, epics, projects, users |
-| `github` | GitHub Cloud — syncs PRs, issues, releases, users |
-| `opsgenie` | Atlassian OpsGenie — syncs incidents/alerts as `IncidentEvent` (MTTR/MTTA) |
-| `incident_io` | incident.io — syncs incidents as `IncidentEvent` (MTTR/MTTA) |
+| Value         | Notes                                                                      |
+| ------------- | -------------------------------------------------------------------------- |
+| `jira`        | Atlassian Jira Cloud or Server — syncs tasks, epics, projects, users       |
+| `github`      | GitHub Cloud — syncs PRs, issues, releases, users                          |
+| `opsgenie`    | Atlassian OpsGenie — syncs incidents/alerts as `IncidentEvent` (MTTR/MTTA) |
+| `incident_io` | incident.io — syncs incidents as `IncidentEvent` (MTTR/MTTA)               |
 
 ### Auth Type
 
-| Value | Use Case |
-|---|---|
-| `oauth2` | OAuth2 flow (client_id + client_secret or tokens) |
-| `token` | Personal access token or API key |
-| `app` | GitHub App (private key PEM) |
-| `bearer` | Bearer token (e.g. incident.io API key) |
-| `api_key` | API key (e.g. OpsGenie) |
+| Value     | Use Case                                                           |
+| --------- | ------------------------------------------------------------------ |
+| `oauth2`  | OAuth2 flow (client_id + client_secret or tokens)                  |
+| `token`   | Personal access token or API key; GitHub usa este modo no frontend |
+| `bearer`  | Bearer token (e.g. incident.io API key)                            |
+| `api_key` | API key (e.g. OpsGenie)                                            |
 
 ### Secret Strategy
 
-| Value | Meaning |
-|---|---|
+| Value          | Meaning                                                              |
+| -------------- | -------------------------------------------------------------------- |
 | `db_encrypted` | Secret was submitted inline and is encrypted at rest in the database |
-| `vault_ref` | Secret is referenced from an external vault |
+| `vault_ref`    | Secret is referenced from an external vault                          |
 
 ### Canonical Task Types
 
-| Value | Notes |
-|---|---|
-| `bug` | Defects and incidents — counted in DORA MTTR; tracked in breach cost |
-| `feature` | New functionality — tracked in lead time; COGS rolled up by epic |
-| `chore` | Maintenance and operational work |
-| `spike` | Research and investigation; excluded from velocity |
-| `tech_debt` | Accumulated technical debt; monitored for accumulation |
-| `null` | Unknown type — no canonical classification. SLA can still apply via `original_type`. |
+| Value       | Notes                                                                                |
+| ----------- | ------------------------------------------------------------------------------------ |
+| `bug`       | Defects and incidents — counted in DORA MTTR; tracked in breach cost                 |
+| `feature`   | New functionality — tracked in lead time; COGS rolled up by epic                     |
+| `chore`     | Maintenance and operational work                                                     |
+| `spike`     | Research and investigation; excluded from velocity                                   |
+| `tech_debt` | Accumulated technical debt; monitored for accumulation                               |
+| `null`      | Unknown type — no canonical classification. SLA can still apply via `original_type`. |
 
 ---
 
@@ -1286,8 +1377,8 @@ Use the tenant-scoped endpoint here because SLA templates apply across all conne
 
 ### Connection Status
 
-| Value | Meaning |
-|---|---|
-| `active` | Connection is valid and operational |
-| `disabled` | Manually disabled by the tenant |
-| `error` | Last sync or auth check failed |
+| Value      | Meaning                             |
+| ---------- | ----------------------------------- |
+| `active`   | Connection is valid and operational |
+| `disabled` | Manually disabled by the tenant     |
+| `error`    | Last sync or auth check failed      |
