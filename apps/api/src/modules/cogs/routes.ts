@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { ok, fail } from '../../lib/http.js';
+import { logAuditEvent } from '../../lib/audit.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
 import { requireModule } from '../billing/entitlement.js';
 import {
@@ -7,6 +8,8 @@ import {
   listCogsEntriesQuerySchema,
   listCogsEntriesAuditQuerySchema,
   cogsRollupQuerySchema,
+  cogsResourceGroupParamsSchema,
+  cogsResourceGroupRollupQuerySchema,
   createCogsBudgetSchema,
   updateCogsBudgetSchema,
   budgetParamsSchema,
@@ -20,6 +23,7 @@ import {
   createCogsEntryFromStoryPoints,
   listCogsEntries,
   computeCogsRollup,
+  computeCogsRollupByResourceGroup,
   createCogsBudget,
   listCogsBudgets,
   updateCogsBudget,
@@ -57,6 +61,11 @@ export async function cogsRoutes(app: FastifyInstance) {
       if (scopeError) return scopeError;
 
       const entry = await createCogsEntry(tenantId, parsed.data);
+      logAuditEvent(req, 'audit.cogs', 'cogs.entry.create', {
+        entry_id: entry.id,
+        category: entry.category,
+        total_cost: entry.totalCost
+      });
       return reply.status(201).send(ok(req, entry));
     }
   );
@@ -77,6 +86,12 @@ export async function cogsRoutes(app: FastifyInstance) {
 
       try {
         const entry = await createCogsEntryFromStoryPoints(tenantId, parsed.data);
+        logAuditEvent(req, 'audit.cogs', 'cogs.entry.estimate_from_story_points', {
+          entry_id: entry.id,
+          project_id: parsed.data.project_id ?? null,
+          epic_id: parsed.data.epic_id ?? null,
+          story_points: parsed.data.story_points
+        });
         return reply.status(201).send(ok(req, entry));
       } catch (err: unknown) {
         if (err instanceof Error && err.message === 'USER_NOT_FOUND') {
@@ -125,6 +140,39 @@ export async function cogsRoutes(app: FastifyInstance) {
     }
   );
 
+  // ── GET /cogs/resource-groups/:group_id/rollup ─────────────────────────────
+  app.get(
+    '/cogs/resource-groups/:group_id/rollup',
+    { preHandler: [app.authenticate, cogsGuard, app.requirePermission('cogs.read')] },
+    async (req, reply) => {
+      const paramsParsed = cogsResourceGroupParamsSchema.safeParse(req.params);
+      if (!paramsParsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid group_id', { issues: paramsParsed.error.issues }));
+      }
+
+      const queryParsed = cogsResourceGroupRollupQuerySchema.safeParse(req.query);
+      if (!queryParsed.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: queryParsed.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+
+      const rollup = await computeCogsRollupByResourceGroup(
+        tenantId,
+        paramsParsed.data.group_id,
+        queryParsed.data
+      );
+
+      if (!rollup) {
+        return reply.status(404).send(fail(req, 'NOT_FOUND', 'Resource group not found'));
+      }
+
+      return reply.status(200).send(ok(req, rollup));
+    }
+  );
+
   // ── GET /cogs/epics/:epic_id — epic cost analysis + ROI ────────────────────
   app.get(
     '/cogs/epics/:epic_id',
@@ -163,6 +211,13 @@ export async function cogsRoutes(app: FastifyInstance) {
       if (scopeError) return scopeError;
 
       const budget = await createCogsBudget(tenantId, parsed.data);
+      logAuditEvent(req, 'audit.cogs', 'cogs.budget.create', {
+        budget_id: budget.id,
+        period: budget.period,
+        project_id: budget.projectId ?? null,
+        team_id: budget.teamId ?? null,
+        budget_amount: budget.budgetAmount
+      });
       return reply.status(201).send(ok(req, budget));
     }
   );
@@ -206,6 +261,10 @@ export async function cogsRoutes(app: FastifyInstance) {
 
       const updated = await updateCogsBudget(tenantId, paramsParsed.data.id, bodyParsed.data);
       if (!updated) return reply.status(404).send(fail(req, 'NOT_FOUND', 'Budget not found'));
+      logAuditEvent(req, 'audit.cogs', 'cogs.budget.update', {
+        budget_id: updated.id,
+        updated_fields: Object.keys(bodyParsed.data)
+      });
       return reply.status(200).send(ok(req, updated));
     }
   );
@@ -226,6 +285,9 @@ export async function cogsRoutes(app: FastifyInstance) {
 
       const deleted = await deleteCogsBudget(tenantId, paramsParsed.data.id);
       if (!deleted) return reply.status(404).send(fail(req, 'NOT_FOUND', 'Budget not found'));
+      logAuditEvent(req, 'audit.cogs', 'cogs.budget.delete', {
+        budget_id: paramsParsed.data.id
+      });
       return reply.status(204).send();
     }
   );
@@ -254,6 +316,12 @@ export async function cogsRoutes(app: FastifyInstance) {
           paramsParsed.data.project_id,
           bodyParsed.data.overhead_rate
         );
+        logAuditEvent(req, 'audit.cogs', 'cogs.initiative.generate', {
+          project_id: paramsParsed.data.project_id,
+          overhead_rate: bodyParsed.data.overhead_rate,
+          created_count: result.stats?.created ?? null,
+          skipped_count: result.stats?.skipped ?? null
+        });
         return reply.status(200).send(ok(req, result));
       } catch (err: unknown) {
         if (err instanceof Error && err.message === 'INITIATIVE_NOT_FOUND') {

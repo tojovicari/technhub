@@ -16,17 +16,18 @@ The SLA module manages Service Level Agreement templates and tracks compliance p
 
 ## Permissions Summary
 
-| Route | Method | Required Permission |
-|---|---|---|
-| `/sla/templates` | POST | `sla.template.manage` |
-| `/sla/templates` | GET | `sla.template.read` |
-| `/sla/templates/:id` | GET | `sla.template.read` |
-| `/sla/templates/:id` | PATCH | `sla.template.manage` |
-| `/sla/templates/:id` | DELETE | `sla.template.manage` |
-| `/sla/compliance` | GET | `sla.template.read` |
-| `/sla/instances` | GET | `sla.template.read` |
-| `/sla/summary` | GET | `sla.template.read` |
-| `/sla/summary/by-template` | GET | `sla.template.read` |
+| Route                                       | Method | Required Permission   |
+| ------------------------------------------- | ------ | --------------------- |
+| `/sla/templates`                            | POST   | `sla.template.manage` |
+| `/sla/templates`                            | GET    | `sla.template.read`   |
+| `/sla/templates/:id`                        | GET    | `sla.template.read`   |
+| `/sla/templates/:id`                        | PATCH  | `sla.template.manage` |
+| `/sla/templates/:id`                        | DELETE | `sla.template.manage` |
+| `/sla/compliance`                           | GET    | `sla.template.read`   |
+| `/sla/resource-groups/:group_id/compliance` | GET    | `sla.read`            |
+| `/sla/instances`                            | GET    | `sla.template.read`   |
+| `/sla/summary`                              | GET    | `sla.template.read`   |
+| `/sla/summary/by-template`                  | GET    | `sla.template.read`   |
 
 ---
 
@@ -42,18 +43,18 @@ Create a new SLA template.
 
 **Request Body:**
 
-| Field | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `name` | string | ✅ | — | Template label |
-| `description` | string | ❌ | null | — |
-| `condition` | object | ✅ | — | DSL filter — determines which tasks this template matches (see Condition DSL) |
-| `rules` | object | ✅ | — | Time targets per priority: `{ "P0": { "target_minutes": 60, "warning_at_percent": 75 }, ... }` |
-| `priority` | integer | ✅ | — | Evaluation order across templates (lower = first). Use `5` for max urgency, `10`–`50` for specific rules, `100` for default fallback |
-| `applies_to` | string[] | ❌ | `[]` | Pre-filter by canonical type: `"bug"` \| `"feature"` \| `"chore"` \| `"spike"` \| `"tech_debt"`. **Empty array disables the pre-filter** — any task is evaluated by `condition`. Required when condition uses `original_type`. |
-| `escalation_rule` | object | ❌ | null | Who to notify at each trigger (see Escalation) |
-| `project_ids` | string[] | ❌ | `[]` | Restrict to specific projects; empty = all tenant projects |
-| `is_default` | boolean | ❌ | `false` | Final fallback when no more-specific template matches |
-| `is_active` | boolean | ❌ | `true` | Inactive templates are skipped during evaluation |
+| Field             | Type     | Required | Default | Notes                                                                                                                                                                                                                          |
+| ----------------- | -------- | -------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`            | string   | ✅       | —       | Template label                                                                                                                                                                                                                 |
+| `description`     | string   | ❌       | null    | —                                                                                                                                                                                                                              |
+| `condition`       | object   | ✅       | —       | DSL filter — determines which tasks this template matches (see Condition DSL)                                                                                                                                                  |
+| `rules`           | object   | ✅       | —       | Time targets per priority: `{ "P0": { "target_minutes": 60, "warning_at_percent": 75 }, ... }`                                                                                                                                 |
+| `priority`        | integer  | ✅       | —       | Evaluation order across templates (lower = first). Use `5` for max urgency, `10`–`50` for specific rules, `100` for default fallback                                                                                           |
+| `applies_to`      | string[] | ❌       | `[]`    | Pre-filter by canonical type: `"bug"` \| `"feature"` \| `"chore"` \| `"spike"` \| `"tech_debt"`. **Empty array disables the pre-filter** — any task is evaluated by `condition`. Required when condition uses `original_type`. |
+| `escalation_rule` | object   | ❌       | null    | Who to notify at each trigger (see Escalation)                                                                                                                                                                                 |
+| `project_ids`     | string[] | ❌       | `[]`    | Restrict to specific projects; empty = all tenant projects                                                                                                                                                                     |
+| `is_default`      | boolean  | ❌       | `false` | Final fallback when no more-specific template matches                                                                                                                                                                          |
+| `is_active`       | boolean  | ❌       | `true`  | Inactive templates are skipped during evaluation                                                                                                                                                                               |
 
 **Condition object** — determines which tasks this template matches:
 
@@ -74,11 +75,11 @@ Create a new SLA template.
 
 ```json
 {
-  "P0": { "target_minutes": 60,   "warning_at_percent": 75 },
-  "P1": { "target_minutes": 240,  "warning_at_percent": 80 },
+  "P0": { "target_minutes": 60, "warning_at_percent": 75 },
+  "P1": { "target_minutes": 240, "warning_at_percent": 80 },
   "P2": { "target_minutes": 1440, "warning_at_percent": 80 },
   "P3": { "target_minutes": 4320, "warning_at_percent": 80 },
-  "P4": { "target_minutes": 10080,"warning_at_percent": 80 }
+  "P4": { "target_minutes": 10080, "warning_at_percent": 80 }
 }
 ```
 
@@ -109,13 +110,13 @@ Create a new SLA template.
   "condition": {
     "operator": "AND",
     "rules": [
-      { "field": "task_type", "op": "eq",       "value": "bug" },
-      { "field": "priority",  "op": "in",       "value": ["P0", "P1"] },
-      { "field": "labels",    "op": "contains", "value": "production" }
+      { "field": "task_type", "op": "eq", "value": "bug" },
+      { "field": "priority", "op": "in", "value": ["P0", "P1"] },
+      { "field": "labels", "op": "contains", "value": "production" }
     ]
   },
   "rules": {
-    "P0": { "target_minutes": 60,  "warning_at_percent": 70 },
+    "P0": { "target_minutes": 60, "warning_at_percent": 70 },
     "P1": { "target_minutes": 240, "warning_at_percent": 80 }
   },
   "applies_to": ["bug"],
@@ -124,8 +125,14 @@ Create a new SLA template.
   "is_default": false,
   "is_active": true,
   "escalation_rule": {
-    "at_risk":  { "notify": ["assignee", "team_lead"],            "create_incident": false },
-    "breached": { "notify": ["assignee", "team_lead", "manager"], "create_incident": true  }
+    "at_risk": {
+      "notify": ["assignee", "team_lead"],
+      "create_incident": false
+    },
+    "breached": {
+      "notify": ["assignee", "team_lead", "manager"],
+      "create_incident": true
+    }
   }
 }
 ```
@@ -142,20 +149,26 @@ Create a new SLA template.
     "condition": {
       "operator": "AND",
       "rules": [
-        { "field": "task_type", "op": "eq",       "value": "bug" },
-        { "field": "priority",  "op": "in",       "value": ["P0", "P1"] },
-        { "field": "labels",    "op": "contains", "value": "production" }
+        { "field": "task_type", "op": "eq", "value": "bug" },
+        { "field": "priority", "op": "in", "value": ["P0", "P1"] },
+        { "field": "labels", "op": "contains", "value": "production" }
       ]
     },
     "rules": {
-      "P0": { "target_minutes": 60,  "warning_at_percent": 70 },
+      "P0": { "target_minutes": 60, "warning_at_percent": 70 },
       "P1": { "target_minutes": 240, "warning_at_percent": 80 }
     },
     "applies_to": ["bug"],
     "priority": 10,
     "escalation_rule": {
-      "at_risk":  { "notify": ["assignee", "team_lead"],            "create_incident": false },
-      "breached": { "notify": ["assignee", "team_lead", "manager"], "create_incident": true }
+      "at_risk": {
+        "notify": ["assignee", "team_lead"],
+        "create_incident": false
+      },
+      "breached": {
+        "notify": ["assignee", "team_lead", "manager"],
+        "create_incident": true
+      }
     },
     "project_ids": [],
     "is_default": false,
@@ -163,18 +176,22 @@ Create a new SLA template.
     "created_at": "2026-04-10T12:00:00Z",
     "updated_at": "2026-04-10T12:00:00Z"
   },
-  "meta": { "request_id": "req_001", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "meta": {
+    "request_id": "req_001",
+    "version": "v1",
+    "timestamp": "2026-04-10T12:00:00Z"
+  },
   "error": null
 }
 ```
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Invalid condition structure, missing required fields |
-| 401 | `UNAUTHORIZED` | Invalid token |
-| 403 | `FORBIDDEN` | Permission denied |
+| Status | Code           | When                                                 |
+| ------ | -------------- | ---------------------------------------------------- |
+| 400    | `BAD_REQUEST`  | Invalid condition structure, missing required fields |
+| 401    | `UNAUTHORIZED` | Invalid token                                        |
+| 403    | `FORBIDDEN`    | Permission denied                                    |
 
 ---
 
@@ -186,21 +203,27 @@ List all SLA templates for the tenant.
 
 **Query Params:**
 
-| Param | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `is_active` | boolean | ❌ | — | Filter: `true` for active only |
-| `limit` | integer | ❌ | 25 | Max 100 |
-| `cursor` | string (UUID) | ❌ | — | Pagination cursor |
+| Param       | Type          | Required | Default | Notes                          |
+| ----------- | ------------- | -------- | ------- | ------------------------------ |
+| `is_active` | boolean       | ❌       | —       | Filter: `true` for active only |
+| `limit`     | integer       | ❌       | 25      | Max 100                        |
+| `cursor`    | string (UUID) | ❌       | —       | Pagination cursor              |
 
 **Response — 200 OK:**
 
 ```json
 {
   "data": {
-    "items": [ /* SlaTemplate objects */ ],
+    "items": [
+      /* SlaTemplate objects */
+    ],
     "next_cursor": null
   },
-  "meta": { "request_id": "req_002", "version": "v1", "timestamp": "2026-04-10T12:00:00Z" },
+  "meta": {
+    "request_id": "req_002",
+    "version": "v1",
+    "timestamp": "2026-04-10T12:00:00Z"
+  },
   "error": null
 }
 ```
@@ -217,10 +240,10 @@ Get a single SLA template by ID.
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 404 | `NOT_FOUND` | Template not found in this tenant |
+| Status | Code           | When                              |
+| ------ | -------------- | --------------------------------- |
+| 401    | `UNAUTHORIZED` | —                                 |
+| 404    | `NOT_FOUND`    | Template not found in this tenant |
 
 ---
 
@@ -247,12 +270,12 @@ Update an SLA template. Only send fields that changed.
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Invalid field values |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Template not found |
+| Status | Code           | When                 |
+| ------ | -------------- | -------------------- |
+| 400    | `BAD_REQUEST`  | Invalid field values |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | Permission denied    |
+| 404    | `NOT_FOUND`    | Template not found   |
 
 ---
 
@@ -266,11 +289,11 @@ Soft-deactivate or permanently delete an SLA template.
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
-| 404 | `NOT_FOUND` | Template not found |
+| Status | Code           | When               |
+| ------ | -------------- | ------------------ |
+| 401    | `UNAUTHORIZED` | —                  |
+| 403    | `FORBIDDEN`    | Permission denied  |
+| 404    | `NOT_FOUND`    | Template not found |
 
 ---
 
@@ -282,18 +305,21 @@ Returns template-by-template compliance data computed from task snapshots. This 
 
 **Query Params:**
 
-| Param | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `from` | string (ISO 8601) | ❌ | start of current month | Start of evaluation window |
-| `to` | string (ISO 8601) | ❌ | now | End of evaluation window |
-| `project_id` | string (UUID) | ❌ | — | Restrict to a specific project |
+| Param        | Type              | Required | Default                | Notes                          |
+| ------------ | ----------------- | -------- | ---------------------- | ------------------------------ |
+| `from`       | string (ISO 8601) | ❌       | start of current month | Start of evaluation window     |
+| `to`         | string (ISO 8601) | ❌       | now                    | End of evaluation window       |
+| `project_id` | string (UUID)     | ❌       | —                      | Restrict to a specific project |
 
 **Response — 200 OK:**
 
 ```json
 {
   "data": {
-    "period": { "from": "2026-04-01T00:00:00.000Z", "to": "2026-04-12T10:00:00.000Z" },
+    "period": {
+      "from": "2026-04-01T00:00:00.000Z",
+      "to": "2026-04-12T10:00:00.000Z"
+    },
     "templates": [
       {
         "template_id": "sla-tpl-001",
@@ -320,18 +346,87 @@ Returns template-by-template compliance data computed from task snapshots. This 
       }
     ]
   },
-  "meta": { "request_id": "req_003", "version": "v1", "timestamp": "2026-04-12T10:00:00Z" },
+  "meta": {
+    "request_id": "req_003",
+    "version": "v1",
+    "timestamp": "2026-04-12T10:00:00Z"
+  },
   "error": null
 }
 ```
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Invalid query params |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
+| Status | Code           | When                 |
+| ------ | -------------- | -------------------- |
+| 400    | `BAD_REQUEST`  | Invalid query params |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | Permission denied    |
+
+---
+
+### GET /sla/resource-groups/:group_id/compliance
+
+Retorna a compliance consolidada de SLA para um Resource Group específico, considerando somente os projetos vinculados ao grupo.
+
+**Permission:** `sla.read`
+
+**Path Params:**
+
+| Param      | Type          | Required | Notes                |
+| ---------- | ------------- | -------- | -------------------- |
+| `group_id` | string (UUID) | ✅       | ID do Resource Group |
+
+**Query Params:**
+
+| Param         | Type              | Required | Notes                              |
+| ------------- | ----------------- | -------- | ---------------------------------- |
+| `from`        | string (ISO 8601) | ✅       | Início da janela de avaliação      |
+| `to`          | string (ISO 8601) | ✅       | Fim da janela de avaliação         |
+| `template_id` | string (UUID)     | ❌       | Filtra para um template específico |
+
+**Response — 200 OK:**
+
+```json
+{
+  "data": {
+    "resource_group": {
+      "id": "b2b2a93a-4156-4e60-9e5f-08f7b4f59dc0",
+      "key": "payments-platform",
+      "name": "Payments Platform",
+      "project_count": 2
+    },
+    "period": {
+      "from": "2026-04-01T00:00:00.000Z",
+      "to": "2026-04-30T23:59:59.000Z"
+    },
+    "summary": {
+      "total": 10,
+      "met": 6,
+      "running": 2,
+      "at_risk": 1,
+      "breached": 1,
+      "compliance_rate": 85.7
+    },
+    "templates": []
+  },
+  "meta": {
+    "request_id": "req_011",
+    "version": "v1",
+    "timestamp": "2026-04-12T10:00:00Z"
+  },
+  "error": null
+}
+```
+
+**Error Scenarios:**
+
+| Status | Code           | When                                    |
+| ------ | -------------- | --------------------------------------- |
+| 400    | `BAD_REQUEST`  | `group_id` inválido ou query inválida   |
+| 401    | `UNAUTHORIZED` | Token inválido/ausente                  |
+| 403    | `FORBIDDEN`    | Sem permissão `sla.read`                |
+| 404    | `NOT_FOUND`    | Resource Group não encontrado no tenant |
 
 ---
 
@@ -351,11 +446,11 @@ Returns template-by-template compliance data computed from task snapshots. This 
 
 **Query Params:**
 
-| Param | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `project_id` | string (UUID) | ❌ | — | Restrict to a specific project |
-| `from` | string (ISO 8601) | ❌ | — | Start of period filter (applied to `started_at`) |
-| `to` | string (ISO 8601) | ❌ | — | End of period filter |
+| Param        | Type              | Required | Default | Notes                                            |
+| ------------ | ----------------- | -------- | ------- | ------------------------------------------------ |
+| `project_id` | string (UUID)     | ❌       | —       | Restrict to a specific project                   |
+| `from`       | string (ISO 8601) | ❌       | —       | Start of period filter (applied to `started_at`) |
+| `to`         | string (ISO 8601) | ❌       | —       | End of period filter                             |
 
 **Response — 200 OK:**
 
@@ -374,28 +469,32 @@ Returns template-by-template compliance data computed from task snapshots. This 
     "mean_resolution_minutes": 184,
     "breach_severity_avg_minutes": 63
   },
-  "meta": { "request_id": "req_010", "version": "v1", "timestamp": "2026-04-10T17:00:00Z" },
+  "meta": {
+    "request_id": "req_010",
+    "version": "v1",
+    "timestamp": "2026-04-10T17:00:00Z"
+  },
   "error": null
 }
 ```
 
 **Field reference:**
 
-| Field | Formula | Notes |
-|---|---|---|
-| `compliance_rate` | `met / (met + breached) × 100` | `null` when no closed instances yet |
-| `breach_rate` | `breached / (met + breached) × 100` | `null` when no closed instances yet |
-| `at_risk_rate` | `at_risk / running × 100` | `0` when no running instances |
-| `mean_resolution_minutes` | `avg(actual_minutes)` of `met` instances | `null` when no `met` instances |
+| Field                         | Formula                                       | Notes                               |
+| ----------------------------- | --------------------------------------------- | ----------------------------------- |
+| `compliance_rate`             | `met / (met + breached) × 100`                | `null` when no closed instances yet |
+| `breach_rate`                 | `breached / (met + breached) × 100`           | `null` when no closed instances yet |
+| `at_risk_rate`                | `at_risk / running × 100`                     | `0` when no running instances       |
+| `mean_resolution_minutes`     | `avg(actual_minutes)` of `met` instances      | `null` when no `met` instances      |
 | `breach_severity_avg_minutes` | `avg(breach_minutes)` of `breached` instances | `null` when no `breached` instances |
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Invalid query params |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
+| Status | Code           | When                 |
+| ------ | -------------- | -------------------- |
+| 400    | `BAD_REQUEST`  | Invalid query params |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | Permission denied    |
 
 ---
 
@@ -429,7 +528,11 @@ Returns the same metrics as `/sla/summary` but broken down per template, sorted 
       "breach_severity_avg_minutes": null
     }
   ],
-  "meta": { "request_id": "req_011", "version": "v1", "timestamp": "2026-04-10T17:00:00Z" },
+  "meta": {
+    "request_id": "req_011",
+    "version": "v1",
+    "timestamp": "2026-04-10T17:00:00Z"
+  },
   "error": null
 }
 ```
@@ -438,11 +541,11 @@ Returns the same metrics as `/sla/summary` but broken down per template, sorted 
 
 **Error Scenarios:**
 
-| Status | Code | When |
-|---|---|---|
-| 400 | `BAD_REQUEST` | Invalid query params |
-| 401 | `UNAUTHORIZED` | — |
-| 403 | `FORBIDDEN` | Permission denied |
+| Status | Code           | When                 |
+| ------ | -------------- | -------------------- |
+| 400    | `BAD_REQUEST`  | Invalid query params |
+| 401    | `UNAUTHORIZED` | —                    |
+| 403    | `FORBIDDEN`    | Permission denied    |
 
 ---
 
@@ -450,41 +553,41 @@ Returns the same metrics as `/sla/summary` but broken down per template, sorted 
 
 ### SLA Instance Status
 
-| Value | Meaning |
-|---|---|
-| `running` | SLA is active, deadline not yet reached |
-| `at_risk` | Warning threshold crossed — approaching deadline |
-| `met` | Task completed before deadline |
-| `breached` | Deadline passed without completion |
-| `superseded` | Instance replaced by a newer evaluation |
+| Value        | Meaning                                          |
+| ------------ | ------------------------------------------------ |
+| `running`    | SLA is active, deadline not yet reached          |
+| `at_risk`    | Warning threshold crossed — approaching deadline |
+| `met`        | Task completed before deadline                   |
+| `breached`   | Deadline passed without completion               |
+| `superseded` | Instance replaced by a newer evaluation          |
 
 > `breach_minutes` is populated (positive integer) only when `status = "breached"`.  
 > `actual_minutes` is populated when `status = "met"`.
 
 ### Condition Operators
 
-| Op | Meaning |
-|---|---|
-| `eq` | Exact match |
-| `in` | Value is in array |
-| `contains` | String contains |
-| `any` | Array has any matching element |
-| `gte` | Greater than or equal |
-| `lte` | Less than or equal |
+| Op         | Meaning                        |
+| ---------- | ------------------------------ |
+| `eq`       | Exact match                    |
+| `in`       | Value is in array              |
+| `contains` | String contains                |
+| `any`      | Array has any matching element |
+| `gte`      | Greater than or equal          |
+| `lte`      | Less than or equal             |
 
 ### Matchable Fields in Conditions
 
-| Field | Type | Notes |
-|---|---|---|
-| `task_type` | string \| null | `"bug"` \| `"feature"` \| `"chore"` \| `"spike"` \| `"tech_debt"`. Can be `null` if no type mapping is configured for the provider's raw type. |
-| `original_type` | string | Raw type from the provider — e.g. `"Incident"`, `"Security Finding"`, `"Customer Request"`. Always present; never normalized. Use this to target provider types that have no canonical equivalent, without depending on a type mapping. |
-| `priority` | string | `"P0"` \| `"P1"` \| `"P2"` \| `"P3"` \| `"P4"` |
-| `labels` | string[] | Jira labels or GitHub issue labels |
-| `component` | string | Jira component or team label |
-| `source` | string | `"jira"` \| `"github"` |
-| `project_id` | string | Canonical project ID in moasy.tech |
-| `sprint_name` | string | Jira sprint name — use `contains` op |
-| `story_points` | number | Use `gte` / `lte` for range matching |
+| Field           | Type           | Notes                                                                                                                                                                                                                                   |
+| --------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `task_type`     | string \| null | `"bug"` \| `"feature"` \| `"chore"` \| `"spike"` \| `"tech_debt"`. Can be `null` if no type mapping is configured for the provider's raw type.                                                                                          |
+| `original_type` | string         | Raw type from the provider — e.g. `"Incident"`, `"Security Finding"`, `"Customer Request"`. Always present; never normalized. Use this to target provider types that have no canonical equivalent, without depending on a type mapping. |
+| `priority`      | string         | `"P0"` \| `"P1"` \| `"P2"` \| `"P3"` \| `"P4"`                                                                                                                                                                                          |
+| `labels`        | string[]       | Jira labels or GitHub issue labels                                                                                                                                                                                                      |
+| `component`     | string         | Jira component or team label                                                                                                                                                                                                            |
+| `source`        | string         | `"jira"` \| `"github"`                                                                                                                                                                                                                  |
+| `project_id`    | string         | Canonical project ID in moasy.tech                                                                                                                                                                                                      |
+| `sprint_name`   | string         | Jira sprint name — use `contains` op                                                                                                                                                                                                    |
+| `story_points`  | number         | Use `gte` / `lte` for range matching                                                                                                                                                                                                    |
 
 > **`task_type` vs `original_type`:** `task_type` is the normalized value (may be null if not mapped); `original_type` is always the raw string from the provider. Use `original_type` when the provider has types like `"Incident"` that don't map cleanly to canonical types, or when you want the SLA to fire regardless of whether a mapping is configured.
 
@@ -506,6 +609,7 @@ For each task sync event:
 ```
 
 **Key behaviors:**
+
 - `applies_to: []` disables the type pre-filter — the `condition` is the sole gate. Required when targeting `original_type` values (since `original_type` is not a canonical type).
 - `is_default: true` acts as the catch-all fallback. It should have a high `priority` number (e.g. `100`) and `condition.rules: []` (always-true condition).
 - If a task's attributes change and a different template now matches, the old instance is marked `superseded` and a new one is created.
@@ -531,13 +635,13 @@ These scenarios cover the real-world configurations discussed during design. Eac
   "condition": {
     "operator": "AND",
     "rules": [
-      { "field": "task_type", "op": "eq",       "value": "bug" },
-      { "field": "priority",  "op": "in",       "value": ["P0", "P1"] },
-      { "field": "labels",    "op": "contains", "value": "production" }
+      { "field": "task_type", "op": "eq", "value": "bug" },
+      { "field": "priority", "op": "in", "value": ["P0", "P1"] },
+      { "field": "labels", "op": "contains", "value": "production" }
     ]
   },
   "rules": {
-    "P0": { "target_minutes": 60,  "warning_at_percent": 70 },
+    "P0": { "target_minutes": 60, "warning_at_percent": 70 },
     "P1": { "target_minutes": 240, "warning_at_percent": 80 }
   },
   "applies_to": ["bug"],
@@ -546,22 +650,29 @@ These scenarios cover the real-world configurations discussed during design. Eac
   "is_default": false,
   "is_active": true,
   "escalation_rule": {
-    "at_risk":  { "notify": ["assignee", "team_lead"],            "create_incident": false },
-    "breached": { "notify": ["assignee", "team_lead", "manager"], "create_incident": true  }
+    "at_risk": {
+      "notify": ["assignee", "team_lead"],
+      "create_incident": false
+    },
+    "breached": {
+      "notify": ["assignee", "team_lead", "manager"],
+      "create_incident": true
+    }
   }
 }
 ```
 
 **Instance lifecycle (P1 bug — 240 min target):**
 
-| Time | Event | Instance status |
-|---|---|---|
-| 09:00 | Task goes `in_progress` | `running` |
-| 12:12 | 80% threshold reached (192 min) | `at_risk` — alert to assignee + team lead |
-| 13:00 | Deadline with no resolution | `breached` — escalation + incident created |
-| 13:47 | Task goes `done` | `breached` — `actual_minutes: 287`, `breach_minutes: 47` |
+| Time  | Event                           | Instance status                                          |
+| ----- | ------------------------------- | -------------------------------------------------------- |
+| 09:00 | Task goes `in_progress`         | `running`                                                |
+| 12:12 | 80% threshold reached (192 min) | `at_risk` — alert to assignee + team lead                |
+| 13:00 | Deadline with no resolution     | `breached` — escalation + incident created               |
+| 13:47 | Task goes `done`                | `breached` — `actual_minutes: 287`, `breach_minutes: 47` |
 
 **Cross-module impact:**
+
 - **DORA:** P0 breaches feed into MTTR calculations per project.
 - **COGS:** `GET /api/v1/cogs/entries?task_id=<id>` to correlate breach window with cost.
 
@@ -581,7 +692,7 @@ These scenarios cover the real-world configurations discussed during design. Eac
     "operator": "AND",
     "rules": [
       { "field": "task_type", "op": "eq", "value": "feature" },
-      { "field": "priority",  "op": "in", "value": ["P2", "P3"] }
+      { "field": "priority", "op": "in", "value": ["P2", "P3"] }
     ]
   },
   "rules": {
@@ -594,8 +705,11 @@ These scenarios cover the real-world configurations discussed during design. Eac
   "is_default": false,
   "is_active": true,
   "escalation_rule": {
-    "at_risk":  { "notify": ["assignee"],             "create_incident": false },
-    "breached": { "notify": ["assignee", "team_lead"], "create_incident": false }
+    "at_risk": { "notify": ["assignee"], "create_incident": false },
+    "breached": {
+      "notify": ["assignee", "team_lead"],
+      "create_incident": false
+    }
   }
 }
 ```
@@ -625,8 +739,12 @@ GET /api/v1/sla/instances?task_id=<id>     → detail for a specific task
   "condition": {
     "operator": "OR",
     "rules": [
-      { "field": "labels",   "op": "any", "value": ["critical", "security-risk"] },
-      { "field": "priority", "op": "in",  "value": ["P1", "P2"] }
+      {
+        "field": "labels",
+        "op": "any",
+        "value": ["critical", "security-risk"]
+      },
+      { "field": "priority", "op": "in", "value": ["P1", "P2"] }
     ]
   },
   "rules": {
@@ -640,7 +758,7 @@ GET /api/v1/sla/instances?task_id=<id>     → detail for a specific task
   "is_default": false,
   "is_active": true,
   "escalation_rule": {
-    "at_risk":  { "notify": ["team_lead"],            "create_incident": false },
+    "at_risk": { "notify": ["team_lead"], "create_incident": false },
     "breached": { "notify": ["team_lead", "manager"], "create_incident": false }
   }
 }
@@ -667,8 +785,8 @@ GET /api/v1/sla/instances?task_id=<id>     → detail for a specific task
     ]
   },
   "rules": {
-    "P0": { "target_minutes": 60,   "warning_at_percent": 75 },
-    "P1": { "target_minutes": 180,  "warning_at_percent": 80 },
+    "P0": { "target_minutes": 60, "warning_at_percent": 75 },
+    "P1": { "target_minutes": 180, "warning_at_percent": 80 },
     "P2": { "target_minutes": 1440, "warning_at_percent": 75 },
     "P3": { "target_minutes": 4320, "warning_at_percent": 70 }
   },
@@ -678,8 +796,14 @@ GET /api/v1/sla/instances?task_id=<id>     → detail for a specific task
   "is_default": false,
   "is_active": true,
   "escalation_rule": {
-    "at_risk":  { "notify": ["assignee", "team_lead"],            "create_incident": false },
-    "breached": { "notify": ["assignee", "team_lead", "manager"], "create_incident": true  }
+    "at_risk": {
+      "notify": ["assignee", "team_lead"],
+      "create_incident": false
+    },
+    "breached": {
+      "notify": ["assignee", "team_lead", "manager"],
+      "create_incident": true
+    }
   }
 }
 ```
@@ -714,11 +838,11 @@ priority 100 →  SLA Padrão (is_default = true)         ← fallback
     "rules": []
   },
   "rules": {
-    "P0": { "target_minutes": 120,   "warning_at_percent": 80 },
-    "P1": { "target_minutes": 480,   "warning_at_percent": 80 },
-    "P2": { "target_minutes": 2880,  "warning_at_percent": 75 },
+    "P0": { "target_minutes": 120, "warning_at_percent": 80 },
+    "P1": { "target_minutes": 480, "warning_at_percent": 80 },
+    "P2": { "target_minutes": 2880, "warning_at_percent": 75 },
     "P3": { "target_minutes": 10080, "warning_at_percent": 70 },
-    "P4": { "target_minutes": 43200, "warning_at_percent": 0  }
+    "P4": { "target_minutes": 43200, "warning_at_percent": 0 }
   },
   "applies_to": ["bug", "feature", "chore", "spike", "tech_debt"],
   "priority": 100,
@@ -726,8 +850,11 @@ priority 100 →  SLA Padrão (is_default = true)         ← fallback
   "is_default": true,
   "is_active": true,
   "escalation_rule": {
-    "at_risk":  { "notify": ["assignee"],             "create_incident": false },
-    "breached": { "notify": ["assignee", "team_lead"], "create_incident": false }
+    "at_risk": { "notify": ["assignee"], "create_incident": false },
+    "breached": {
+      "notify": ["assignee", "team_lead"],
+      "create_incident": false
+    }
   }
 }
 ```
@@ -747,7 +874,14 @@ priority 100 →  SLA Padrão (is_default = true)         ← fallback
 ```json
 {
   "data": {
-    "original_types": ["Bug", "Epic", "Incident", "Major Incident", "Security Finding", "Task"]
+    "original_types": [
+      "Bug",
+      "Epic",
+      "Incident",
+      "Major Incident",
+      "Security Finding",
+      "Task"
+    ]
   }
 }
 ```
@@ -767,14 +901,14 @@ priority 100 →  SLA Padrão (is_default = true)         ← fallback
     "rules": [
       {
         "field": "original_type",
-        "op":    "in",
+        "op": "in",
         "value": ["Incident", "Major Incident", "Security Finding"]
       },
       { "field": "priority", "op": "in", "value": ["P0", "P1"] }
     ]
   },
   "rules": {
-    "P0": { "target_minutes": 30,  "warning_at_percent": 70 },
+    "P0": { "target_minutes": 30, "warning_at_percent": 70 },
     "P1": { "target_minutes": 120, "warning_at_percent": 80 }
   },
   "applies_to": [],
@@ -783,8 +917,14 @@ priority 100 →  SLA Padrão (is_default = true)         ← fallback
   "is_default": false,
   "is_active": true,
   "escalation_rule": {
-    "at_risk":  { "notify": ["assignee", "team_lead"],            "create_incident": false },
-    "breached": { "notify": ["assignee", "team_lead", "manager"], "create_incident": true  }
+    "at_risk": {
+      "notify": ["assignee", "team_lead"],
+      "create_incident": false
+    },
+    "breached": {
+      "notify": ["assignee", "team_lead", "manager"],
+      "create_incident": true
+    }
   }
 }
 ```
@@ -796,16 +936,16 @@ priority 100 →  SLA Padrão (is_default = true)         ← fallback
 
 ```json
 {
-  "task_id":       "tsk-incident-001",
-  "tenant_id":     "ten_1",
-  "task_type":     "bug",
+  "task_id": "tsk-incident-001",
+  "tenant_id": "ten_1",
+  "task_type": "bug",
   "original_type": "Incident",
-  "priority":      "P0",
-  "status":        "in_progress",
-  "labels":        ["on-call", "production"],
-  "project_id":    "proj-platform",
-  "source":        "jira",
-  "started_at":    "2026-04-10T14:00:00Z"
+  "priority": "P0",
+  "status": "in_progress",
+  "labels": ["on-call", "production"],
+  "project_id": "proj-platform",
+  "source": "jira",
+  "started_at": "2026-04-10T14:00:00Z"
 }
 ```
 
@@ -814,8 +954,8 @@ priority 100 →  SLA Padrão (is_default = true)         ← fallback
 
 **`task_type` vs `original_type` matrix:**
 
-| Scenario | `task_type` | `original_type` | SLA activated? |
-|---|---|---|---|
-| Type mapping `"Incident" → "bug"` configured | `"bug"` | `"Incident"` | ✅ — DORA/COGS also work correctly |
-| No mapping configured for `"Incident"` | `null` | `"Incident"` | ✅ — `original_type` condition still matches |
-| Native Jira `"Bug"` type | `"bug"` | `"Bug"` | ✅ — both fields work independently |
+| Scenario                                     | `task_type` | `original_type` | SLA activated?                               |
+| -------------------------------------------- | ----------- | --------------- | -------------------------------------------- |
+| Type mapping `"Incident" → "bug"` configured | `"bug"`     | `"Incident"`    | ✅ — DORA/COGS also work correctly           |
+| No mapping configured for `"Incident"`       | `null`      | `"Incident"`    | ✅ — `original_type` condition still matches |
+| Native Jira `"Bug"` type                     | `"bug"`     | `"Bug"`         | ✅ — both fields work independently          |

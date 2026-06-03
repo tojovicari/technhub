@@ -24,6 +24,10 @@ model Tenant {
   invites              Invite[]
   permissionProfiles   PermissionProfile[]
   notifications        Notification[]
+  resourceGroups       ResourceGroup[]
+  resourceGroupResources ResourceGroupResource[]
+  resourceGroupTeams   ResourceGroupTeam[]
+  resourceGroupMetricSnapshots ResourceGroupMetricSnapshot[]
 }
 
 enum PlatformRole {
@@ -373,6 +377,7 @@ model Team {
   lead             User?        @relation("TeamLead", fields: [leadId], references: [id], onDelete: SetNull)
   members          TeamMember[]
   projects         Project[]
+  resourceGroupLinks ResourceGroupTeam[]
 
   @@index([tenantId])
 }
@@ -412,9 +417,112 @@ model Project {
   epics          Epic[]
   tasks          Task[]
   sources        ProjectSource[]
+  resourceGroupLinks ResourceGroupResource[]
 
   @@unique([tenantId, key])
   @@index([tenantId])
+}
+
+enum ResourceGroupResourceRole {
+  primary
+  supporting
+  shared
+}
+
+enum ResourceWeightMode {
+  auto
+  manual
+}
+
+enum ResourceGroupTeamRole {
+  owner
+  contributor
+  platform
+}
+
+enum ResourceMetricType {
+  dora
+  sla
+  cogs
+  health
+}
+
+model ResourceGroup {
+  id          String        @id @default(uuid())
+  tenantId    String
+  key         String
+  name        String
+  description String?
+  status      ProjectStatus @default(planning)
+  ownerUserId String?
+  tags        String[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  resources   ResourceGroupResource[]
+  teams       ResourceGroupTeam[]
+  metricSnapshots ResourceGroupMetricSnapshot[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model ResourceGroupResource {
+  id              String                    @id @default(uuid())
+  tenantId        String
+  resourceGroupId String
+  projectId       String
+  role            ResourceGroupResourceRole @default(shared)
+  weightMode      ResourceWeightMode        @default(auto)
+  manualWeight    Float?
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+
+  tenant          Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  resourceGroup   ResourceGroup             @relation(fields: [resourceGroupId], references: [id], onDelete: Cascade)
+  project         Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceGroupId, projectId])
+  @@index([tenantId])
+  @@index([projectId])
+}
+
+model ResourceGroupTeam {
+  id                String                @id @default(uuid())
+  tenantId          String
+  resourceGroupId   String
+  teamId            String
+  role              ResourceGroupTeamRole @default(contributor)
+  allocationPercent Float?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  resourceGroup     ResourceGroup         @relation(fields: [resourceGroupId], references: [id], onDelete: Cascade)
+  team              Team                  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceGroupId, teamId])
+  @@index([tenantId])
+  @@index([teamId])
+}
+
+model ResourceGroupMetricSnapshot {
+  id              String             @id @default(uuid())
+  tenantId        String
+  resourceGroupId String
+  periodKey       String
+  metricType      ResourceMetricType
+  payload         Json
+  lineage         Json?
+  computedAt      DateTime           @default(now())
+  version         Int                @default(1)
+
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  resourceGroup   ResourceGroup      @relation(fields: [resourceGroupId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, resourceGroupId])
+  @@index([metricType, periodKey])
 }
 
 model ProjectSource {

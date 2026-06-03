@@ -40,6 +40,7 @@ vi.mock('./service.js', () => ({
   createCogsEntryFromStoryPoints: vi.fn(),
   listCogsEntries: vi.fn(),
   computeCogsRollup: vi.fn(),
+  computeCogsRollupByResourceGroup: vi.fn(),
   createCogsBudget: vi.fn(),
   listCogsBudgets: vi.fn(),
   getBurnRate: vi.fn(),
@@ -103,6 +104,25 @@ function makeRollup() {
     breakdown: { engineering: 5200 },
     entry_count: 5,
     filters: { project_id: null, epic_id: null, team_id: null, user_id: null, date_from: null, date_to: null }
+  };
+}
+
+function makeResourceGroupRollup() {
+  return {
+    resource_group: {
+      id: 'eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee',
+      key: 'payments-platform',
+      name: 'Payments Platform',
+      project_count: 3,
+      team_count: 2
+    },
+    total_cost: 5200,
+    total_hours: 40,
+    cost_per_story_point: 86.67,
+    group_by: 'category',
+    breakdown: { engineering: 5200 },
+    entry_count: 5,
+    filters: { date_from: null, date_to: null }
   };
 }
 
@@ -227,6 +247,71 @@ describe('COGS routes', () => {
     it('401: no token', async () => {
       const res = await app.inject({ method: 'GET', url: '/api/v1/cogs/rollup' });
       expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── GET /cogs/resource-groups/:group_id/rollup ───────────────────────────
+
+  describe('GET /api/v1/cogs/resource-groups/:group_id/rollup', () => {
+    const groupId = 'eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee';
+
+    it('200: returns resource group rollup', async () => {
+      vi.mocked(cogsSvc.computeCogsRollupByResourceGroup).mockResolvedValueOnce(
+        makeResourceGroupRollup() as any
+      );
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/cogs/resource-groups/${groupId}/rollup?group_by=category`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.resource_group.id).toBe(groupId);
+      expect(cogsSvc.computeCogsRollupByResourceGroup).toHaveBeenCalledWith(
+        TENANT,
+        groupId,
+        expect.objectContaining({ group_by: 'category' })
+      );
+    });
+
+    it('400: invalid group_id', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/cogs/resource-groups/not-a-uuid/rollup',
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('403: missing permission', async () => {
+      const limitedToken = app.jwt.sign({
+        sub: 'user-2',
+        tenant_id: TENANT,
+        roles: ['viewer'],
+        permissions: ['core.read']
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/cogs/resource-groups/${groupId}/rollup`,
+        headers: { authorization: `Bearer ${limitedToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('404: resource group not found', async () => {
+      vi.mocked(cogsSvc.computeCogsRollupByResourceGroup).mockResolvedValueOnce(null);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/cogs/resource-groups/${groupId}/rollup`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(404);
     });
   });
 

@@ -1,0 +1,544 @@
+openapi: "3.1.0"
+info:
+  title: moasy.tech - Resource Groups API
+  version: "1.0.0"
+  description: |
+    API para gerenciamento de Resource Groups, vinculo de recursos e times,
+    e leitura de resumo inicial de metricas por grupo.
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: Resource Groups
+    description: Contratos de Resource Group para consolidacao executiva
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        data: {}
+        meta:
+          type: object
+          properties:
+            request_id: { type: string }
+            version: { type: string }
+            timestamp: { type: string, format: date-time }
+        error:
+          nullable: true
+
+    ApiError:
+      type: object
+      properties:
+        data:
+          nullable: true
+        meta: { type: object }
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+
+    ResourceGroupStatus:
+      type: string
+      enum: [planning, active, on_hold, done]
+
+    ResourceGroupResourceRole:
+      type: string
+      enum: [primary, supporting, shared]
+
+    ResourceWeightMode:
+      type: string
+      enum: [auto, manual]
+
+    ResourceGroupTeamRole:
+      type: string
+      enum: [owner, contributor, platform]
+
+    ResourceGroup:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string }
+        key: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { $ref: "#/components/schemas/ResourceGroupStatus" }
+        owner_user_id: { type: string, format: uuid, nullable: true }
+        tags:
+          type: array
+          items: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        resources_count: { type: integer, nullable: true }
+        teams_count: { type: integer, nullable: true }
+
+    ResourceGroupSummary:
+      type: object
+      properties:
+        resource_group_id: { type: string, format: uuid }
+        resources_count: { type: integer }
+        teams_count: { type: integer }
+        providers_breakdown:
+          type: object
+          additionalProperties: { type: integer }
+        weight_mode_breakdown:
+          type: object
+          additionalProperties: { type: integer }
+        manual_overrides_count: { type: integer }
+        generated_at: { type: string, format: date-time }
+
+paths:
+  /resource-groups:
+    post:
+      tags: [Resource Groups]
+      summary: Criar Resource Group
+      x-required-permission: resource_group.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, name]
+              properties:
+                key:
+                  type: string
+                  minLength: 2
+                  maxLength: 64
+                  pattern: "^[a-z0-9][a-z0-9-]*$"
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                description:
+                  type: string
+                  maxLength: 500
+                  nullable: true
+                status:
+                  $ref: "#/components/schemas/ResourceGroupStatus"
+                owner_user_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                tags:
+                  type: array
+                  items: { type: string }
+      responses:
+        "201":
+          description: Grupo criado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/ResourceGroup"
+        "400":
+          {
+            description: Body invalido,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+
+    get:
+      tags: [Resource Groups]
+      summary: Listar Resource Groups
+      x-required-permission: resource_group.read
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+        - name: cursor
+          in: query
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/ResourceGroupStatus" }
+      responses:
+        "200":
+          description: Lista paginada
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        type: object
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              { $ref: "#/components/schemas/ResourceGroup" }
+                          next_cursor:
+                            type: string
+                            format: uuid
+                            nullable: true
+        "400":
+          {
+            description: Query invalida,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+
+  /resource-groups/{group_id}:
+    get:
+      tags: [Resource Groups]
+      summary: Detalhar Resource Group
+      x-required-permission: resource_group.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Grupo encontrado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data: { $ref: "#/components/schemas/ResourceGroup" }
+        "400":
+          {
+            description: Param invalido,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404":
+          {
+            description: Grupo nao encontrado,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+
+    patch:
+      tags: [Resource Groups]
+      summary: Editar Resource Group
+      x-required-permission: resource_group.manage
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                key:
+                  type: string
+                  minLength: 2
+                  maxLength: 64
+                  pattern: "^[a-z0-9][a-z0-9-]*$"
+                name:
+                  type: string
+                  minLength: 1
+                  maxLength: 120
+                description:
+                  type: string
+                  maxLength: 500
+                  nullable: true
+                status:
+                  $ref: "#/components/schemas/ResourceGroupStatus"
+                owner_user_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+                tags:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Grupo atualizado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data: { $ref: "#/components/schemas/ResourceGroup" }
+        "400":
+          {
+            description: Body/param invalido,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404":
+          {
+            description: Grupo nao encontrado,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+
+  /resource-groups/{group_id}/resources:
+    post:
+      tags: [Resource Groups]
+      summary: Vincular recurso ao grupo
+      x-required-permission: resource_group.manage
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [project_id]
+              properties:
+                project_id: { type: string, format: uuid }
+                role: { $ref: "#/components/schemas/ResourceGroupResourceRole" }
+                weight_mode: { $ref: "#/components/schemas/ResourceWeightMode" }
+                manual_weight:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  nullable: true
+      responses:
+        "200":
+          {
+            description: Vinculo criado/atualizado,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiResponse" } },
+              },
+          }
+        "400":
+          {
+            description: Body/param invalido,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404":
+          {
+            description: Grupo ou recurso nao encontrado,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+
+  /resource-groups/{group_id}/resources/{project_id}:
+    delete:
+      tags: [Resource Groups]
+      summary: Remover vinculo de recurso
+      x-required-permission: resource_group.manage
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: project_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Vinculo removido }
+        "400":
+          {
+            description: Param invalido,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404":
+          {
+            description: Vinculo nao encontrado,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+
+  /resource-groups/{group_id}/teams:
+    post:
+      tags: [Resource Groups]
+      summary: Vincular time ao grupo
+      x-required-permission: resource_group.manage
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [team_id]
+              properties:
+                team_id: { type: string, format: uuid }
+                role: { $ref: "#/components/schemas/ResourceGroupTeamRole" }
+                allocation_percent:
+                  type: number
+                  minimum: 0
+                  maximum: 100
+                  nullable: true
+      responses:
+        "200":
+          {
+            description: Vinculo criado/atualizado,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiResponse" } },
+              },
+          }
+        "400":
+          {
+            description: Body/param invalido,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404":
+          {
+            description: Grupo ou time nao encontrado,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+
+  /resource-groups/{group_id}/teams/{team_id}:
+    delete:
+      tags: [Resource Groups]
+      summary: Remover vinculo de time
+      x-required-permission: resource_group.manage
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: team_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Vinculo removido }
+        "400":
+          {
+            description: Param invalido,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404":
+          {
+            description: Vinculo nao encontrado,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+
+  /resource-groups/{group_id}/metrics/summary:
+    get:
+      tags: [Resource Groups]
+      summary: Ler resumo de metricas do grupo
+      x-required-permission: resource_group.metrics.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Summary retornado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        { $ref: "#/components/schemas/ResourceGroupSummary" }
+        "400":
+          {
+            description: Param invalido,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404":
+          {
+            description: Grupo nao encontrado,
+            content:
+              {
+                application/json:
+                  { schema: { $ref: "#/components/schemas/ApiError" } },
+              },
+          }

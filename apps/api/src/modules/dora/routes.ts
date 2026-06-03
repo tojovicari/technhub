@@ -1,10 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { ok, fail } from '../../lib/http.js';
+import { logAuditEvent } from '../../lib/audit.js';
 import { requireModule } from '../billing/entitlement.js';
 import { ensureTenantScope } from '../../plugins/auth.js';
 import {
   ingestDeployEvent,
   computeDoraScorecard,
+  computeDoraScorecardByResourceGroup,
   listDeployEvents,
   ingestLeadTimeEvent,
   listHealthMetrics
@@ -13,7 +15,9 @@ import {
   ingestDeployEventSchema,
   doraQuerySchema,
   listDeployEventsQuerySchema,
-  ingestLeadTimeEventSchema
+  ingestLeadTimeEventSchema,
+  doraResourceGroupParamsSchema,
+  doraResourceGroupQuerySchema
 } from './schema.js';
 import { z } from 'zod';
 
@@ -42,6 +46,11 @@ export async function doraRoutes(app: FastifyInstance) {
       if (scopeError) return scopeError;
 
       const event = await ingestDeployEvent(tenantId, result.data);
+      logAuditEvent(req, 'audit.dora', 'dora.deploy.ingest', {
+        event_id: event.id ?? null,
+        project_id: result.data.project_id ?? null,
+        environment: result.data.environment
+      });
       return reply.status(201).send(ok(req, event));
     }
   );
@@ -84,6 +93,39 @@ export async function doraRoutes(app: FastifyInstance) {
     }
   );
 
+  // GET /dora/resource-groups/:group_id/scorecard — DORA scorecard by resource group
+  app.get(
+    '/dora/resource-groups/:group_id/scorecard',
+    { preHandler: [app.authenticate, doraGuard, app.requirePermission('dora.read')] },
+    async (req, reply) => {
+      const params = doraResourceGroupParamsSchema.safeParse(req.params);
+      if (!params.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid params', { issues: params.error.issues }));
+      }
+
+      const queryResult = doraResourceGroupQuerySchema.safeParse(req.query);
+      if (!queryResult.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: queryResult.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const scopeError = ensureTenantScope(req, reply, tenantId);
+      if (scopeError) return scopeError;
+
+      const scorecard = await computeDoraScorecardByResourceGroup(
+        tenantId,
+        params.data.group_id,
+        queryResult.data
+      );
+
+      if (!scorecard) {
+        return reply.status(404).send(fail(req, 'NOT_FOUND', 'Resource group not found'));
+      }
+
+      return reply.status(200).send(ok(req, scorecard));
+    }
+  );
+
   // POST /dora/lead-time — ingest lead time from a merged PR
   app.post(
     '/dora/lead-time',
@@ -99,6 +141,11 @@ export async function doraRoutes(app: FastifyInstance) {
       if (scopeError) return scopeError;
 
       const outcome = await ingestLeadTimeEvent(tenantId, result.data);
+      logAuditEvent(req, 'audit.dora', 'dora.lead_time.ingest', {
+        project_id: result.data.project_id ?? null,
+        environment: result.data.environment,
+        pr_id: result.data.pr_id
+      });
       return reply.status(201).send(ok(req, outcome));
     }
   );

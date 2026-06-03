@@ -25,10 +25,11 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
   manager: [
     'core.read', 'core.write',
     'dora.read', 'sla.read', 'cogs.read', 'intel.read',
+    'resource_group.read', 'resource_group.manage', 'resource_group.metrics.read',
     'integrations.read', 'iam.permission_profile.read',
     'billing.read'
   ],
-  viewer: ['core.read', 'dora.read', 'sla.read', 'intel.read', 'billing.read']
+  viewer: ['core.read', 'dora.read', 'sla.read', 'intel.read', 'billing.read', 'resource_group.read', 'resource_group.metrics.read']
 };
 
 function tokenHash(raw: string) {

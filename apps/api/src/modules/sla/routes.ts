@@ -1,16 +1,20 @@
 import type { FastifyInstance } from 'fastify';
 import { fail, ok } from '../../lib/http.js';
+import { logAuditEvent } from '../../lib/audit.js';
 import { requireModule } from '../billing/entitlement.js';
 import {
   createSlaTemplateSchema,
   updateSlaTemplateSchema,
   listSlaTemplatesQuerySchema,
-  slaComplianceQuerySchema
+  slaComplianceQuerySchema,
+  slaResourceGroupComplianceQuerySchema,
+  slaResourceGroupParamsSchema
 } from './schema.js';
 import {
   createSlaTemplate,
   deleteSlaTemplate,
   getSlaCompliance,
+  getSlaComplianceByResourceGroup,
   getSlaTemplate,
   listSlaTemplates,
   updateSlaTemplate
@@ -65,6 +69,13 @@ export async function slaRoutes(app: FastifyInstance) {
 
       const tenantId = (req.user as { tenant_id: string }).tenant_id;
       const template = await createSlaTemplate(tenantId, parsed.data);
+
+      logAuditEvent(req, 'audit.sla', 'sla.template.create', {
+        template_id: template.id,
+        name: template.name,
+        priority: template.priority
+      });
+
       return reply.status(201).send(ok(req, mapTemplate(template)));
     }
   );
@@ -123,6 +134,11 @@ export async function slaRoutes(app: FastifyInstance) {
         return reply.status(404).send(fail(req, 'NOT_FOUND', 'SLA template not found'));
       }
 
+      logAuditEvent(req, 'audit.sla', 'sla.template.update', {
+        template_id: template.id,
+        updated_fields: Object.keys(parsed.data)
+      });
+
       return reply.status(200).send(ok(req, mapTemplate(template)));
     }
   );
@@ -140,6 +156,10 @@ export async function slaRoutes(app: FastifyInstance) {
         return reply.status(404).send(fail(req, 'NOT_FOUND', 'SLA template not found'));
       }
 
+      logAuditEvent(req, 'audit.sla', 'sla.template.delete', {
+        template_id: id
+      });
+
       return reply.status(204).send();
     }
   );
@@ -156,6 +176,36 @@ export async function slaRoutes(app: FastifyInstance) {
 
       const tenantId = (req.user as { tenant_id: string }).tenant_id;
       const result = await getSlaCompliance(tenantId, parsed.data);
+      return reply.status(200).send(ok(req, result));
+    }
+  );
+
+  // ── GET /sla/resource-groups/:group_id/compliance ──────────────────────────
+  app.get(
+    '/sla/resource-groups/:group_id/compliance',
+    { preHandler: [app.authenticate, slaGuard, app.requirePermission('sla.read')] },
+    async (req, reply) => {
+      const parsedParams = slaResourceGroupParamsSchema.safeParse(req.params);
+      if (!parsedParams.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid params', { issues: parsedParams.error.issues }));
+      }
+
+      const parsedQuery = slaResourceGroupComplianceQuerySchema.safeParse(req.query);
+      if (!parsedQuery.success) {
+        return reply.status(400).send(fail(req, 'BAD_REQUEST', 'Invalid query', { issues: parsedQuery.error.issues }));
+      }
+
+      const tenantId = (req.user as { tenant_id: string }).tenant_id;
+      const result = await getSlaComplianceByResourceGroup(
+        tenantId,
+        parsedParams.data.group_id,
+        parsedQuery.data
+      );
+
+      if (!result) {
+        return reply.status(404).send(fail(req, 'NOT_FOUND', 'Resource group not found'));
+      }
+
       return reply.status(200).send(ok(req, result));
     }
   );

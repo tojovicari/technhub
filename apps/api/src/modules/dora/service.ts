@@ -12,6 +12,7 @@ import {
 } from './engine.js';
 import type {
   DoraQueryInput,
+  DoraResourceGroupQueryInput,
   IngestDeployEventInput,
   IngestLeadTimeEventInput
 } from './schema.js';
@@ -82,7 +83,17 @@ export async function listDeployEvents(tenantId: string, query: ListDeployEvents
 
 // ── Compute DORA scorecard ────────────────────────────────────────────────────
 
-export async function computeDoraScorecard(tenantId: string, query: DoraQueryInput) {
+type DoraComputeScope = {
+  projectId?: string;
+  projectScopeIds?: string[];
+  projectServiceMatchers?: string[];
+};
+
+async function computeDoraScorecardScoped(
+  tenantId: string,
+  query: { window_days: number; environment: string },
+  scope: DoraComputeScope
+) {
   const windowDays = query.window_days;
   const windowEnd = new Date();
   const windowStart = new Date(windowEnd.getTime() - windowDays * 24 * 60 * 60 * 1000);
@@ -91,7 +102,11 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
     tenantId,
     environment: query.environment,
     deployedAt: { gte: windowStart, lte: windowEnd },
-    ...(query.project_id && { projectId: query.project_id })
+    ...(scope.projectScopeIds
+      ? { projectId: { in: scope.projectScopeIds } }
+      : scope.projectId
+        ? { projectId: scope.projectId }
+        : {})
   };
 
   // ── Deployment Frequency ───────────────────────────────────────────────────
@@ -106,7 +121,11 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
       metricName: 'lead_time_hours',
       windowStart: { gte: windowStart },
       windowEnd: { lte: windowEnd },
-      ...(query.project_id && { projectId: query.project_id })
+      ...(scope.projectScopeIds
+        ? { projectId: { in: scope.projectScopeIds } }
+        : scope.projectId
+          ? { projectId: scope.projectId }
+          : {})
     },
     select: { value: true }
   });
@@ -141,7 +160,7 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
         resolvedAt: { not: null },
         openedAt: { gte: windowStart, lte: windowEnd },
         priority: { in: ['P1', 'P2'] },
-        ...(query.project_id
+        ...(scope.projectId
           ? { affectedServices: { isEmpty: false } }  // project-scoped handled post-query
           : {})
       },
@@ -151,9 +170,13 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
     // If project_id is set, auto-match incidents whose affectedServices overlap
     // with the project name/key (case-insensitive). See dora-metrics.md §MTTR.
     let scoped = incidents;
-    if (query.project_id) {
+    if (scope.projectServiceMatchers && scope.projectServiceMatchers.length > 0) {
+      scoped = incidents.filter((i) =>
+        i.affectedServices.some((s) => scope.projectServiceMatchers!.includes(s.toLowerCase()))
+      );
+    } else if (scope.projectId) {
       const project = await prisma.project.findFirst({
-        where: { id: query.project_id, tenantId },
+        where: { id: scope.projectId, tenantId },
         select: { name: true, key: true }
       });
       if (project) {
@@ -207,7 +230,11 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
         taskType: 'bug',
         priority: { in: ['P0', 'P1'] },
         createdAt: { gte: deploy.deployedAt, lte: oneDayAfter },
-        ...(query.project_id && { projectId: query.project_id })
+        ...(scope.projectScopeIds
+          ? { projectId: { in: scope.projectScopeIds } }
+          : scope.projectId
+            ? { projectId: scope.projectId }
+            : {})
       }
     });
     if (correlated > 0) failedDeployCount++;
@@ -249,7 +276,7 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
       prisma.healthMetric.create({
         data: {
           tenantId,
-          projectId: query.project_id,
+          projectId: scope.projectId,
           metricName: s.metric_name,
           windowDays,
           value: s.value,
@@ -266,7 +293,7 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
     window_days: windowDays,
     window_start: windowStart.toISOString(),
     window_end: windowEnd.toISOString(),
-    project_id: query.project_id ?? null,
+    project_id: scope.projectId ?? null,
     overall_level: overallLevel,
     deployment_frequency: {
       value: df.value,
@@ -296,6 +323,77 @@ export async function computeDoraScorecard(tenantId: string, query: DoraQueryInp
           failed_deploys: failedDeployCount
         }
       : null
+  };
+}
+
+export async function computeDoraScorecard(tenantId: string, query: DoraQueryInput) {
+  return computeDoraScorecardScoped(tenantId, query, { projectId: query.project_id });
+}
+
+export async function computeDoraScorecardByResourceGroup(
+  tenantId: string,
+  groupId: string,
+  query: DoraResourceGroupQueryInput
+) {
+  const group = await prisma.resourceGroup.findFirst({
+    where: { id: groupId, tenantId },
+    include: {
+      resources: {
+        select: { projectId: true, project: { select: { name: true, key: true } } }
+      }
+    }
+  });
+
+  if (!group) return null;
+
+  const projectScopeIds = Array.from(new Set(group.resources.map((r) => r.projectId)));
+  const projectServiceMatchers = Array.from(
+    new Set(
+      group.resources.flatMap((r) => [r.project.name.toLowerCase(), r.project.key.toLowerCase()]).filter(Boolean)
+    )
+  );
+
+  if (projectScopeIds.length === 0) {
+    return {
+      resource_group: {
+        id: group.id,
+        key: group.key,
+        name: group.name,
+        project_count: 0
+      },
+      window_days: query.window_days,
+      window_start: new Date(Date.now() - query.window_days * 24 * 60 * 60 * 1000).toISOString(),
+      window_end: new Date().toISOString(),
+      project_id: null,
+      overall_level: 'low' as DoraLevel,
+      deployment_frequency: {
+        value: 0,
+        unit: 'per_day' as const,
+        level: 'low' as DoraLevel,
+        deploy_count: 0
+      },
+      lead_time: null,
+      mttr: null,
+      mttr_source: 'not_configured' as const,
+      mtta: null,
+      incident_frequency: null,
+      change_failure_rate: null
+    };
+  }
+
+  const scorecard = await computeDoraScorecardScoped(tenantId, query, {
+    projectScopeIds,
+    projectServiceMatchers
+  });
+
+  return {
+    resource_group: {
+      id: group.id,
+      key: group.key,
+      name: group.name,
+      project_count: projectScopeIds.length
+    },
+    ...scorecard
   };
 }
 

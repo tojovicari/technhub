@@ -17,6 +17,7 @@ import type {
   CreateCogsEntryInput,
   ListCogsEntriesQuery,
   CogsRollupQuery,
+  CogsResourceGroupRollupQuery,
   CreateCogsBudgetInput,
   UpdateCogsBudgetInput,
   BurnRateQuery,
@@ -240,6 +241,127 @@ export async function computeCogsRollup(tenantId: string, query: CogsRollupQuery
       epic_id: query.epic_id ?? null,
       team_id: query.team_id ?? null,
       user_id: query.user_id ?? null,
+      date_from: query.date_from ?? null,
+      date_to: query.date_to ?? null
+    }
+  };
+}
+
+export async function computeCogsRollupByResourceGroup(
+  tenantId: string,
+  groupId: string,
+  query: CogsResourceGroupRollupQuery
+) {
+  const group = await prisma.resourceGroup.findFirst({
+    where: { id: groupId, tenantId },
+    include: {
+      resources: { select: { projectId: true } },
+      teams: { select: { teamId: true } }
+    }
+  });
+
+  if (!group) return null;
+
+  const projectIds = Array.from(new Set(group.resources.map((resource) => resource.projectId)));
+  const teamIds = Array.from(new Set(group.teams.map((team) => team.teamId)));
+
+  if (projectIds.length === 0 && teamIds.length === 0) {
+    return {
+      resource_group: {
+        id: group.id,
+        key: group.key,
+        name: group.name,
+        project_count: 0,
+        team_count: 0
+      },
+      total_cost: 0,
+      total_hours: 0,
+      cost_per_story_point: null,
+      group_by: query.group_by,
+      breakdown: {},
+      entry_count: 0,
+      filters: {
+        date_from: query.date_from ?? null,
+        date_to: query.date_to ?? null
+      }
+    };
+  }
+
+  const where: Prisma.CogsEntryWhereInput = {
+    tenantId,
+    ...(projectIds.length > 0 || teamIds.length > 0
+      ? {
+          OR: [
+            ...(projectIds.length > 0 ? [{ projectId: { in: projectIds } }] : []),
+            ...(teamIds.length > 0 ? [{ teamId: { in: teamIds } }] : [])
+          ]
+        }
+      : {}),
+    ...(query.date_from || query.date_to
+      ? {
+          periodDate: {
+            ...(query.date_from && { gte: new Date(query.date_from) }),
+            ...(query.date_to && { lte: new Date(query.date_to) })
+          }
+        }
+      : {})
+  };
+
+  const entries = await prisma.cogsEntry.findMany({
+    where,
+    select: {
+      totalCost: true,
+      hoursWorked: true,
+      category: true,
+      projectId: true,
+      teamId: true
+    }
+  });
+
+  const totalCost = sumCost(entries);
+  const totalHours = entries.reduce((s, e) => s + e.hoursWorked, 0);
+
+  let breakdown: Record<string, number> = {};
+  if (query.group_by === 'category') {
+    breakdown = sumByCategory(entries);
+  } else if (query.group_by === 'project') {
+    for (const entry of entries) {
+      const key = entry.projectId ?? 'unassigned';
+      breakdown[key] = Math.round(((breakdown[key] ?? 0) + entry.totalCost) * 100) / 100;
+    }
+  } else {
+    for (const entry of entries) {
+      const key = entry.teamId ?? 'unassigned';
+      breakdown[key] = Math.round(((breakdown[key] ?? 0) + entry.totalCost) * 100) / 100;
+    }
+  }
+
+  const sp = await prisma.task.aggregate({
+    where: {
+      tenantId,
+      projectId: { in: projectIds },
+      storyPoints: { gt: 0 },
+      status: 'done'
+    },
+    _sum: { storyPoints: true }
+  });
+  const costPerStoryPoint = computeCostPerStoryPoint(totalCost, sp._sum.storyPoints ?? 0);
+
+  return {
+    resource_group: {
+      id: group.id,
+      key: group.key,
+      name: group.name,
+      project_count: projectIds.length,
+      team_count: teamIds.length
+    },
+    total_cost: totalCost,
+    total_hours: Math.round(totalHours * 100) / 100,
+    cost_per_story_point: costPerStoryPoint,
+    group_by: query.group_by,
+    breakdown,
+    entry_count: entries.length,
+    filters: {
       date_from: query.date_from ?? null,
       date_to: query.date_to ?? null
     }

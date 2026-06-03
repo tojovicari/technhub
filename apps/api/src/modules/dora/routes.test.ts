@@ -51,6 +51,7 @@ vi.mock('../../modules/sla/service.js', () => ({
 vi.mock('./service.js', () => ({
   ingestDeployEvent: vi.fn(),
   computeDoraScorecard: vi.fn(),
+  computeDoraScorecardByResourceGroup: vi.fn(),
   listDeployEvents: vi.fn(),
   ingestLeadTimeEvent: vi.fn(),
   listHealthMetrics: vi.fn()
@@ -103,6 +104,18 @@ function makeScorecard() {
     lead_time: null,
     mttr: null,
     change_failure_rate: null
+  };
+}
+
+function makeResourceGroupScorecard() {
+  return {
+    resource_group: {
+      id: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
+      key: 'payments-platform',
+      name: 'Payments Platform',
+      project_count: 3
+    },
+    ...makeScorecard()
   };
 }
 
@@ -225,6 +238,70 @@ describe('DORA routes', () => {
     it('401: no token', async () => {
       const res = await app.inject({ method: 'GET', url: '/api/v1/dora/scorecard' });
       expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── GET /dora/resource-groups/:group_id/scorecard ─────────────────────────
+
+  describe('GET /api/v1/dora/resource-groups/:group_id/scorecard', () => {
+    const groupId = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+
+    it('200: returns group scorecard', async () => {
+      vi.mocked(doraSvc.computeDoraScorecardByResourceGroup).mockResolvedValueOnce(
+        makeResourceGroupScorecard() as any
+      );
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/dora/resource-groups/${groupId}/scorecard?window_days=30&environment=production`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.resource_group.id).toBe(groupId);
+      expect(doraSvc.computeDoraScorecardByResourceGroup).toHaveBeenCalledWith(
+        TENANT,
+        groupId,
+        expect.objectContaining({ window_days: 30, environment: 'production' })
+      );
+    });
+
+    it('400: invalid group_id', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/dora/resource-groups/not-a-uuid/scorecard',
+        headers: { authorization: `Bearer ${token}` }
+      });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('403: missing permission', async () => {
+      const limitedToken = app.jwt.sign({
+        sub: 'user-2',
+        tenant_id: TENANT,
+        roles: ['viewer'],
+        permissions: ['core.read']
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/dora/resource-groups/${groupId}/scorecard`,
+        headers: { authorization: `Bearer ${limitedToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('404: resource group not found', async () => {
+      vi.mocked(doraSvc.computeDoraScorecardByResourceGroup).mockResolvedValueOnce(null);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/dora/resource-groups/${groupId}/scorecard`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(404);
     });
   });
 

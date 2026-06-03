@@ -28,6 +28,17 @@ export const doraQuerySchema = z.object({
 
 export type DoraQueryInput = z.infer<typeof doraQuerySchema>;
 
+export const doraResourceGroupParamsSchema = z.object({
+  group_id: z.string().uuid()
+});
+
+export const doraResourceGroupQuerySchema = z.object({
+  window_days: z.coerce.number().int().min(1).max(365).optional().default(30),
+  environment: z.string().optional().default('production')
+});
+
+export type DoraResourceGroupQueryInput = z.infer<typeof doraResourceGroupQuerySchema>;
+
 export const listDeployEventsQuerySchema = z.object({
   project_id: z.string().uuid().optional(),
   environment: z.string().optional(),

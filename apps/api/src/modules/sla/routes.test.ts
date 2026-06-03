@@ -47,7 +47,8 @@ vi.mock('./service.js', () => ({
   getSlaTemplate: vi.fn(),
   updateSlaTemplate: vi.fn(),
   deleteSlaTemplate: vi.fn(),
-  getSlaCompliance: vi.fn()
+  getSlaCompliance: vi.fn(),
+  getSlaComplianceByResourceGroup: vi.fn()
 }));
 
 vi.mock('../../modules/billing/entitlement.js', () => ({
@@ -314,6 +315,86 @@ describe('SLA routes', () => {
         url: '/api/v1/sla/compliance?from=2026-04-01T00:00:00Z&to=2026-04-30T23:59:59Z'
       });
       expect(res.statusCode).toBe(401);
+    });
+  });
+
+  // ── GET /sla/resource-groups/:group_id/compliance ─────────────────────────
+
+  describe('GET /api/v1/sla/resource-groups/:group_id/compliance', () => {
+    const groupId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+
+    it('200: returns compliance by resource group', async () => {
+      vi.mocked(slaSvc.getSlaComplianceByResourceGroup).mockResolvedValueOnce({
+        resource_group: {
+          id: groupId,
+          key: 'payments-platform',
+          name: 'Payments Platform',
+          project_count: 2
+        },
+        period: { from: '2026-04-01T00:00:00.000Z', to: '2026-04-30T23:59:59.000Z' },
+        summary: {
+          total: 10,
+          met: 6,
+          running: 2,
+          at_risk: 1,
+          breached: 1,
+          compliance_rate: 85.7
+        },
+        templates: []
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/sla/resource-groups/${groupId}/compliance?from=2026-04-01T00:00:00Z&to=2026-04-30T23:59:59Z`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.resource_group.id).toBe(groupId);
+      expect(slaSvc.getSlaComplianceByResourceGroup).toHaveBeenCalledWith(
+        'ten_test',
+        groupId,
+        expect.objectContaining({ from: '2026-04-01T00:00:00Z' })
+      );
+    });
+
+    it('400: invalid group_id', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/sla/resource-groups/not-uuid/compliance?from=2026-04-01T00:00:00Z&to=2026-04-30T23:59:59Z',
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('403: missing sla.read permission', async () => {
+      const limitedToken = app.jwt.sign({
+        sub: 'user-2',
+        tenant_id: 'ten_test',
+        roles: ['viewer'],
+        permissions: ['core.read']
+      });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/sla/resource-groups/${groupId}/compliance?from=2026-04-01T00:00:00Z&to=2026-04-30T23:59:59Z`,
+        headers: { authorization: `Bearer ${limitedToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+    });
+
+    it('404: resource group not found', async () => {
+      vi.mocked(slaSvc.getSlaComplianceByResourceGroup).mockResolvedValueOnce(null);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/sla/resource-groups/${groupId}/compliance?from=2026-04-01T00:00:00Z&to=2026-04-30T23:59:59Z`,
+        headers: { authorization: `Bearer ${token}` }
+      });
+
+      expect(res.statusCode).toBe(404);
     });
   });
 });

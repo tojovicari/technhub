@@ -78,6 +78,18 @@ export const cogsRollupQuerySchema = z.object({
 
 export type CogsRollupQuery = z.infer<typeof cogsRollupQuerySchema>;
 
+export const cogsResourceGroupParamsSchema = z.object({
+  group_id: z.string().uuid()
+});
+
+export const cogsResourceGroupRollupQuerySchema = z.object({
+  date_from: z.string().date().optional(),
+  date_to: z.string().date().optional(),
+  group_by: z.enum(['category', 'project', 'team']).default('category')
+});
+
+export type CogsResourceGroupRollupQuery = z.infer<typeof cogsResourceGroupRollupQuerySchema>;
+
 // ── Budget ────────────────────────────────────────────────────────────────────
 
 export const createCogsBudgetSchema = z.object({

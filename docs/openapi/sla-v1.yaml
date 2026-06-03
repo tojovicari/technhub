@@ -49,8 +49,8 @@ components:
           type: array
           items:
             oneOf:
-              - $ref: '#/components/schemas/SlaRule'
-              - $ref: '#/components/schemas/SlaConditionGroup'
+              - $ref: "#/components/schemas/SlaRule"
+              - $ref: "#/components/schemas/SlaConditionGroup"
       example:
         operator: AND
         rules:
@@ -79,7 +79,7 @@ components:
       type: object
       description: Map of TaskPriority → SlaRuleEntry
       additionalProperties:
-        $ref: '#/components/schemas/SlaRuleEntry'
+        $ref: "#/components/schemas/SlaRuleEntry"
       example:
         P0: { target_minutes: 120, warning_at_percent: 80 }
         P1: { target_minutes: 480, warning_at_percent: 80 }
@@ -100,9 +100,9 @@ components:
       type: object
       properties:
         at_risk:
-          $ref: '#/components/schemas/SlaEscalationNotify'
+          $ref: "#/components/schemas/SlaEscalationNotify"
         breached:
-          $ref: '#/components/schemas/SlaEscalationNotify'
+          $ref: "#/components/schemas/SlaEscalationNotify"
 
     SlaTemplate:
       type: object
@@ -118,7 +118,7 @@ components:
           type: string
           nullable: true
         condition:
-          $ref: '#/components/schemas/SlaConditionGroup'
+          $ref: "#/components/schemas/SlaConditionGroup"
         priority:
           type: integer
           description: Evaluation order — lower number evaluated first
@@ -128,9 +128,9 @@ components:
             type: string
             enum: [feature, bug, chore, spike, tech_debt]
         rules:
-          $ref: '#/components/schemas/SlaPriorityRules'
+          $ref: "#/components/schemas/SlaPriorityRules"
         escalation_rule:
-          $ref: '#/components/schemas/SlaEscalationRule'
+          $ref: "#/components/schemas/SlaEscalationRule"
           nullable: true
         project_ids:
           type: array
@@ -228,7 +228,7 @@ components:
         data:
           type: array
           items:
-            $ref: '#/components/schemas/SlaTemplate'
+            $ref: "#/components/schemas/SlaTemplate"
         next_cursor:
           type: string
           format: uuid
@@ -240,7 +240,7 @@ components:
         data:
           type: array
           items:
-            $ref: '#/components/schemas/SlaInstance'
+            $ref: "#/components/schemas/SlaInstance"
         next_cursor:
           type: string
           format: uuid
@@ -266,7 +266,7 @@ paths:
                 description:
                   type: string
                 condition:
-                  $ref: '#/components/schemas/SlaConditionGroup'
+                  $ref: "#/components/schemas/SlaConditionGroup"
                 priority:
                   type: integer
                   default: 100
@@ -277,9 +277,9 @@ paths:
                     enum: [feature, bug, chore, spike, tech_debt]
                   minItems: 1
                 rules:
-                  $ref: '#/components/schemas/SlaPriorityRules'
+                  $ref: "#/components/schemas/SlaPriorityRules"
                 escalation_rule:
-                  $ref: '#/components/schemas/SlaEscalationRule'
+                  $ref: "#/components/schemas/SlaEscalationRule"
                 project_ids:
                   type: array
                   items:
@@ -289,21 +289,21 @@ paths:
                   type: boolean
                   default: false
       responses:
-        '201':
+        "201":
           description: Created
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SlaTemplate'
-        '400':
+                $ref: "#/components/schemas/SlaTemplate"
+        "400":
           description: Validation error
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
-        '401':
+                $ref: "#/components/schemas/Error"
+        "401":
           description: Unauthorized
-        '403':
+        "403":
           description: Forbidden
 
     get:
@@ -328,13 +328,13 @@ paths:
             type: string
             format: uuid
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedTemplates'
-        '401':
+                $ref: "#/components/schemas/PaginatedTemplates"
+        "401":
           description: Unauthorized
 
   /sla/templates/{id}:
@@ -352,15 +352,15 @@ paths:
       x-required-permissions: [sla.template.read]
       tags: [SLA Templates]
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SlaTemplate'
-        '401':
+                $ref: "#/components/schemas/SlaTemplate"
+        "401":
           description: Unauthorized
-        '404':
+        "404":
           description: Not found
 
     patch:
@@ -380,7 +380,7 @@ paths:
                 description:
                   type: string
                 condition:
-                  $ref: '#/components/schemas/SlaConditionGroup'
+                  $ref: "#/components/schemas/SlaConditionGroup"
                 priority:
                   type: integer
                 applies_to:
@@ -389,9 +389,9 @@ paths:
                     type: string
                     enum: [feature, bug, chore, spike, tech_debt]
                 rules:
-                  $ref: '#/components/schemas/SlaPriorityRules'
+                  $ref: "#/components/schemas/SlaPriorityRules"
                 escalation_rule:
-                  $ref: '#/components/schemas/SlaEscalationRule'
+                  $ref: "#/components/schemas/SlaEscalationRule"
                 project_ids:
                   type: array
                   items:
@@ -402,19 +402,19 @@ paths:
                 is_active:
                   type: boolean
       responses:
-        '200':
+        "200":
           description: Updated
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SlaTemplate'
-        '400':
+                $ref: "#/components/schemas/SlaTemplate"
+        "400":
           description: Validation error
-        '401':
+        "401":
           description: Unauthorized
-        '403':
+        "403":
           description: Forbidden
-        '404':
+        "404":
           description: Not found
 
     delete:
@@ -423,13 +423,13 @@ paths:
       x-required-permissions: [sla.template.manage]
       tags: [SLA Templates]
       responses:
-        '204':
+        "204":
           description: Deleted
-        '401':
+        "401":
           description: Unauthorized
-        '403':
+        "403":
           description: Forbidden
-        '404':
+        "404":
           description: Not found
 
   /sla/evaluate:
@@ -480,17 +480,17 @@ paths:
                   type: string
                   enum: [jira, github, manual]
       responses:
-        '200':
+        "200":
           description: Evaluation result
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SlaEvaluateResult'
-        '400':
+                $ref: "#/components/schemas/SlaEvaluateResult"
+        "400":
           description: Validation error
-        '401':
+        "401":
           description: Unauthorized
-        '403':
+        "403":
           description: Forbidden — tenant mismatch
 
   /sla/instances:
@@ -522,11 +522,100 @@ paths:
             type: string
             format: uuid
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedInstances'
-        '401':
+                $ref: "#/components/schemas/PaginatedInstances"
+        "401":
           description: Unauthorized
+
+  /sla/resource-groups/{group_id}/compliance:
+    get:
+      summary: Consolidated SLA compliance for a Resource Group
+      operationId: getSlaComplianceByResourceGroup
+      x-required-permissions: [sla.read]
+      tags: [SLA Compliance]
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: from
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: template_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  resource_group:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                      key:
+                        type: string
+                      name:
+                        type: string
+                      project_count:
+                        type: integer
+                  period:
+                    type: object
+                    properties:
+                      from:
+                        type: string
+                        format: date-time
+                      to:
+                        type: string
+                        format: date-time
+                  summary:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                      met:
+                        type: integer
+                      running:
+                        type: integer
+                      at_risk:
+                        type: integer
+                      breached:
+                        type: integer
+                      compliance_rate:
+                        type: number
+                        nullable: true
+                  templates:
+                    type: array
+                    items:
+                      type: object
+        "400":
+          description: Validation error
+        "401":
+          description: Unauthorized
+        "403":
+          description: Forbidden
+        "404":
+          description: Resource group not found

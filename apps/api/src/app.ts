@@ -21,8 +21,10 @@ import { platformTenantsRoutes } from './modules/billing/platform-tenants-routes
 import { billingWebhookRoutes } from './modules/billing/webhook-routes.js';
 import { startBillingWorker } from './modules/billing/worker.js';
 import { platformImpersonationRoutes } from './modules/auth/platform-impersonation-routes.js';
+import { resourceGroupsRoutes } from './modules/resource-groups/routes.js';
 import { registerAuth } from './plugins/auth.js';
 import { loadEntitlement } from './modules/billing/entitlement.js';
+import { logRequestCompletion, markRequestStart } from './lib/observability.js';
 
 export function buildApp() {
   const app = Fastify({ logger: true });
@@ -41,6 +43,10 @@ export function buildApp() {
   });
   app.register(helmet);
   registerAuth(app);
+
+  app.addHook('onRequest', async (request) => {
+    markRequestStart(request);
+  });
 
   // Hook para injetar header X-Billing-Warning
   app.addHook('onSend', async (request, reply) => {
@@ -65,6 +71,10 @@ export function buildApp() {
     }
   });
 
+  app.addHook('onResponse', async (request, reply) => {
+    logRequestCompletion(request, reply);
+  });
+
   app.get('/health', async () => {
     return {
       status: 'ok',
@@ -83,6 +93,7 @@ export function buildApp() {
   app.register(integrationWebhookRoutes, { prefix: '/api/v1' });
   app.register(authRoutes, { prefix: '/api/v1' });
   app.register(coreRoutes, { prefix: '/api/v1' });
+  app.register(resourceGroupsRoutes, { prefix: '/api/v1' });
   app.register(slaRoutes, { prefix: '/api/v1' });
   app.register(doraRoutes, { prefix: '/api/v1' });
   app.register(cogsRoutes, { prefix: '/api/v1' });

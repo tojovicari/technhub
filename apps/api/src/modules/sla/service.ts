@@ -7,7 +7,8 @@ import type {
   createSlaTemplateSchema,
   updateSlaTemplateSchema,
   listSlaTemplatesQuerySchema,
-  slaComplianceQuerySchema
+  slaComplianceQuerySchema,
+  slaResourceGroupComplianceQuerySchema
 } from './schema.js';
 import type { z } from 'zod';
 
@@ -15,6 +16,7 @@ type CreateSlaTemplateInput = z.infer<typeof createSlaTemplateSchema>;
 type UpdateSlaTemplateInput = z.infer<typeof updateSlaTemplateSchema>;
 type ListSlaTemplatesQuery = z.infer<typeof listSlaTemplatesQuerySchema>;
 type SlaComplianceQuery = z.infer<typeof slaComplianceQuerySchema>;
+type SlaResourceGroupComplianceQuery = z.infer<typeof slaResourceGroupComplianceQuerySchema>;
 
 // ────────────────────────────────────────────────────────────────────────────────
 // Template CRUD
@@ -108,7 +110,11 @@ export async function deleteSlaTemplate(id: string, tenantId: string) {
 // SLA Compliance — on-demand calculation over tasks
 // ────────────────────────────────────────────────────────────────────────────────
 
-export async function getSlaCompliance(tenantId: string, query: SlaComplianceQuery) {
+async function computeSlaCompliance(
+  tenantId: string,
+  query: { from: string; to: string; template_id?: string },
+  projectScopeIds?: string[]
+) {
   const from = new Date(query.from);
   const to = new Date(query.to);
   const now = new Date();
@@ -136,7 +142,7 @@ export async function getSlaCompliance(tenantId: string, query: SlaComplianceQue
         { completedAt: null },
         { completedAt: { gte: from } }
       ],
-      ...(query.project_id && { projectId: query.project_id })
+      ...(projectScopeIds && { projectId: { in: projectScopeIds } })
     }
   });
 
@@ -261,5 +267,95 @@ export async function getSlaCompliance(tenantId: string, query: SlaComplianceQue
   return {
     period: { from: from.toISOString(), to: to.toISOString() },
     templates: result
+  };
+}
+
+export async function getSlaCompliance(tenantId: string, query: SlaComplianceQuery) {
+  const projectScopeIds = query.project_id ? [query.project_id] : undefined;
+  return computeSlaCompliance(tenantId, query, projectScopeIds);
+}
+
+export async function getSlaComplianceByResourceGroup(
+  tenantId: string,
+  groupId: string,
+  query: SlaResourceGroupComplianceQuery
+) {
+  const group = await prisma.resourceGroup.findFirst({
+    where: { id: groupId, tenantId },
+    include: {
+      resources: {
+        select: { projectId: true }
+      }
+    }
+  });
+
+  if (!group) {
+    return null;
+  }
+
+  const projectScopeIds = Array.from(
+    new Set(group.resources.map((resource) => resource.projectId))
+  );
+
+  if (projectScopeIds.length === 0) {
+    return {
+      resource_group: {
+        id: group.id,
+        key: group.key,
+        name: group.name,
+        project_count: 0
+      },
+      period: {
+        from: new Date(query.from).toISOString(),
+        to: new Date(query.to).toISOString()
+      },
+      summary: {
+        total: 0,
+        met: 0,
+        running: 0,
+        at_risk: 0,
+        breached: 0,
+        compliance_rate: null
+      },
+      templates: []
+    };
+  }
+
+  const compliance = await computeSlaCompliance(tenantId, query, projectScopeIds);
+
+  let total = 0;
+  let met = 0;
+  let running = 0;
+  let at_risk = 0;
+  let breached = 0;
+
+  for (const template of compliance.templates) {
+    total += template.summary.total;
+    met += template.summary.met;
+    running += template.summary.running;
+    at_risk += template.summary.at_risk;
+    breached += template.summary.breached;
+  }
+
+  const closed = met + breached;
+  const complianceRate = closed > 0 ? Math.round((met / closed) * 1000) / 10 : null;
+
+  return {
+    resource_group: {
+      id: group.id,
+      key: group.key,
+      name: group.name,
+      project_count: projectScopeIds.length
+    },
+    period: compliance.period,
+    summary: {
+      total,
+      met,
+      running,
+      at_risk,
+      breached,
+      compliance_rate: complianceRate
+    },
+    templates: compliance.templates
   };
 }

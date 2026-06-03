@@ -94,3 +94,13 @@ export const slaComplianceQuerySchema = z.object({
   template_id: z.string().uuid().optional(),
   project_id: z.string().uuid().optional()
 });
+
+export const slaResourceGroupParamsSchema = z.object({
+  group_id: z.string().uuid()
+});
+
+export const slaResourceGroupComplianceQuerySchema = z.object({
+  from: z.string().datetime({ message: 'from must be an ISO 8601 datetime string' }),
+  to: z.string().datetime({ message: 'to must be an ISO 8601 datetime string' }),
+  template_id: z.string().uuid().optional()
+});
