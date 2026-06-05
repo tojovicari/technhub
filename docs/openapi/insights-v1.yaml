@@ -1,0 +1,608 @@
+openapi: "3.1.0"
+info:
+  title: moasy.tech - Insights API
+  version: "1.0.0"
+  description: |
+    Sprint A, Sprint B e Sprint C do modulo de Insights por Resource Group.
+    Inclui overview operacional, insights de incidentes, confianca de planejamento, qualidade de backlog,
+    trends, freshness e recompute assíncrono.
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: Insights
+    description: Insights operacionais por Resource Group
+
+security:
+  - BearerAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        data: {}
+        meta: { type: object }
+        error: { nullable: true }
+
+    ApiError:
+      type: object
+      properties:
+        data: { nullable: true }
+        meta: { type: object }
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+
+    ResourceGroupRef:
+      type: object
+      required: [id, key, name]
+      properties:
+        id: { type: string, format: uuid }
+        key: { type: string }
+        name: { type: string }
+
+    InsightsOverview:
+      type: object
+      required:
+        [
+          resource_group,
+          period,
+          health_score,
+          risk_level,
+          drivers,
+          execution,
+          incident,
+          recommendations,
+          warnings,
+          freshness,
+          data_quality_warnings,
+        ]
+      properties:
+        resource_group:
+          $ref: "#/components/schemas/ResourceGroupRef"
+        period:
+          type: object
+          required: [window_days, from, to]
+          properties:
+            window_days: { type: integer, minimum: 7, maximum: 180 }
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        health_score: { type: integer, minimum: 0, maximum: 100 }
+        risk_level:
+          type: string
+          enum: [low, watch, high, critical]
+        drivers:
+          type: array
+          items: { type: string }
+        execution:
+          type: object
+          required: [throughput_7d, throughput_30d, trend]
+          properties:
+            throughput_7d: { type: integer }
+            throughput_30d: { type: integer }
+            trend: { type: string, enum: [up, stable, down] }
+        incident:
+          type: object
+          required:
+            [
+              incident_count_7d,
+              incident_count_30d,
+              mtta_p50_minutes,
+              mttr_p50_hours,
+              mttr_source,
+            ]
+          properties:
+            incident_count_7d: { type: integer }
+            incident_count_30d: { type: integer }
+            mtta_p50_minutes: { type: number, nullable: true }
+            mttr_p50_hours: { type: number, nullable: true }
+            mttr_source: { type: string, enum: [incidents, not_configured] }
+        recommendations:
+          type: array
+          items:
+            type: object
+            required: [type, priority, message]
+            properties:
+              type: { type: string }
+              priority: { type: string, enum: [high, medium, low] }
+              message: { type: string }
+              context: { type: object, additionalProperties: true }
+        warnings:
+          type: array
+          items: { type: string }
+        freshness:
+          type: object
+          required: [snapshot_generated_at, snapshot_age_minutes, stale]
+          properties:
+            snapshot_generated_at:
+              { type: string, nullable: true, format: date-time }
+            snapshot_age_minutes: { type: integer, nullable: true }
+            stale: { type: boolean }
+        data_quality_warnings:
+          type: array
+          items: { type: string }
+
+    IncidentInsights:
+      type: object
+      required:
+        [
+          resource_group,
+          period,
+          total_incidents,
+          severity_distribution,
+          hotspot_services,
+          mtta_p50_minutes,
+          mttr_p50_hours,
+          warnings,
+        ]
+      properties:
+        resource_group:
+          $ref: "#/components/schemas/ResourceGroupRef"
+        period: { type: string, description: YYYY-MM ou YYYY-Qn }
+        period_window:
+          type: object
+          required: [from, to]
+          properties:
+            from: { type: string, format: date }
+            to: { type: string, format: date }
+        total_incidents: { type: integer }
+        severity_distribution:
+          type: array
+          items:
+            type: object
+            required: [severity, count]
+            properties:
+              severity: { type: string }
+              count: { type: integer }
+        hotspot_services:
+          type: array
+          items:
+            type: object
+            required: [service, count]
+            properties:
+              service: { type: string }
+              count: { type: integer }
+        mtta_p50_minutes: { type: number, nullable: true }
+        mttr_p50_hours: { type: number, nullable: true }
+        warnings:
+          type: array
+          items: { type: string }
+
+    PlanningConfidence:
+      type: object
+      required:
+        [
+          resource_group,
+          period,
+          planning_confidence,
+          roadmap_confidence,
+          epics,
+          incident_correlation,
+          warnings,
+        ]
+      properties:
+        resource_group:
+          $ref: "#/components/schemas/ResourceGroupRef"
+        period: { type: string, description: YYYY-MM ou YYYY-Qn }
+        planning_confidence:
+          type: object
+          required: [score, level, trend, drivers]
+          properties:
+            score: { type: integer, minimum: 0, maximum: 100 }
+            level: { type: string, enum: [high, watch, low] }
+            trend: { type: string, enum: [up, stable, down] }
+            drivers:
+              type: array
+              items: { type: string }
+        roadmap_confidence:
+          type: object
+          required: [score, trend, on_track_ratio, delayed_epics_count]
+          properties:
+            score: { type: integer, minimum: 0, maximum: 100 }
+            trend: { type: string, enum: [up, stable, down] }
+            on_track_ratio: { type: number, minimum: 0, maximum: 1 }
+            delayed_epics_count: { type: integer }
+        epics:
+          type: array
+          items:
+            type: object
+            required:
+              [
+                epic_id,
+                epic_name,
+                confidence_score,
+                confidence_level,
+                weeks_overdue,
+                drivers,
+              ]
+            properties:
+              epic_id: { type: string }
+              epic_name: { type: string }
+              confidence_score: { type: integer, minimum: 0, maximum: 100 }
+              confidence_level: { type: string, enum: [high, watch, low] }
+              weeks_overdue: { type: integer }
+              drivers:
+                type: array
+                items: { type: string }
+        incident_correlation:
+          type: object
+          required: [impacted_epics_count, roadmap_risk_due_to_incidents]
+          properties:
+            impacted_epics_count: { type: integer }
+            roadmap_risk_due_to_incidents:
+              { type: string, enum: [high, medium, low] }
+        warnings:
+          type: array
+          items: { type: string }
+
+    BacklogQuality:
+      type: object
+      required: [resource_group, backlog_quality, thresholds, warnings]
+      properties:
+        resource_group:
+          $ref: "#/components/schemas/ResourceGroupRef"
+        backlog_quality:
+          type: object
+          required:
+            [
+              score,
+              level,
+              backlog_aging_index_days,
+              stale_backlog_rate,
+              overdue_backlog_rate,
+              flow_regression_rate,
+              backlog_churn_proxy,
+            ]
+          properties:
+            score: { type: integer, minimum: 0, maximum: 100 }
+            level: { type: string, enum: [good, watch, alert] }
+            backlog_aging_index_days: { type: number, nullable: true }
+            stale_backlog_rate: { type: number, minimum: 0, maximum: 1 }
+            overdue_backlog_rate: { type: number, minimum: 0, maximum: 1 }
+            flow_regression_rate: { type: number, minimum: 0, maximum: 1 }
+            backlog_churn_proxy: { type: number, minimum: 0, maximum: 1 }
+        thresholds:
+          type: object
+          required: [stale_days]
+          properties:
+            stale_days: { type: integer }
+        warnings:
+          type: array
+          items: { type: string }
+
+    Trends:
+      type: object
+      required:
+        [
+          resource_group,
+          window_days,
+          granularity,
+          series,
+          anomalies,
+          degradation_signals,
+          warnings,
+        ]
+      properties:
+        resource_group:
+          $ref: "#/components/schemas/ResourceGroupRef"
+        window_days: { type: integer }
+        granularity: { type: string, enum: [daily, weekly] }
+        series:
+          type: object
+          required: [throughput, incidents, confidence]
+          properties:
+            throughput:
+              type: array
+              items:
+                type: object
+                required: [bucket, value]
+                properties:
+                  bucket: { type: string }
+                  value: { type: integer }
+            incidents:
+              type: array
+              items:
+                type: object
+                required: [bucket, value]
+                properties:
+                  bucket: { type: string }
+                  value: { type: integer }
+            confidence:
+              type: array
+              items:
+                type: object
+                required: [bucket, value]
+                properties:
+                  bucket: { type: string }
+                  value: { type: integer }
+        anomalies:
+          type: array
+          items:
+            type: object
+            required: [metric_name, bucket, date, z_score, direction]
+            properties:
+              metric_name: { type: string }
+              bucket: { type: string }
+              date: { type: string }
+              z_score: { type: number }
+              direction: { type: string, enum: [spike, drop] }
+        degradation_signals:
+          type: array
+          items:
+            type: object
+            required: [id, level, message]
+            properties:
+              id: { type: string }
+              level: { type: string, enum: [high, medium, low] }
+              message: { type: string }
+        warnings:
+          type: array
+          items: { type: string }
+
+    RecomputeAccepted:
+      type: object
+      required: [job_id, status, resource_group_id, submitted_at]
+      properties:
+        job_id: { type: string }
+        status: { type: string, enum: [queued] }
+        resource_group_id: { type: string, format: uuid }
+        submitted_at: { type: string, format: date-time }
+
+paths:
+  /insights/resource-groups/{group_id}/overview:
+    get:
+      tags: [Insights]
+      summary: Overview operacional por Resource Group
+      description: Retorna health score, drivers, throughput e resumo de incidentes do grupo.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: window_days
+          in: query
+          required: false
+          schema: { type: integer, minimum: 7, maximum: 180, default: 30 }
+      responses:
+        "200":
+          description: Overview calculado com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/InsightsOverview"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }
+
+  /insights/resource-groups/{group_id}/incidents:
+    get:
+      tags: [Insights]
+      summary: Insights de incidentes por Resource Group
+      description: Retorna distribuicao de severidade, hotspots e MTTA/MTTR do grupo para o periodo.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^(\\d{4}-(0[1-9]|1[0-2])|\\d{4}-Q[1-4])$'
+            description: YYYY-MM ou YYYY-Qn
+      responses:
+        "200":
+          description: Insights de incidentes retornados com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/IncidentInsights"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }
+
+  /insights/resource-groups/{group_id}/planning-confidence:
+    get:
+      tags: [Insights]
+      summary: Confianca de planejamento por Resource Group
+      description: Retorna confianca agregada de planejamento e roadmap por grupo, com explicabilidade dos epicos.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^(\\d{4}-(0[1-9]|1[0-2])|\\d{4}-Q[1-4])$'
+            description: YYYY-MM ou YYYY-Qn
+      responses:
+        "200":
+          description: Planning confidence calculada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/PlanningConfidence"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }
+
+  /insights/resource-groups/{group_id}/backlog-quality:
+    get:
+      tags: [Insights]
+      summary: Qualidade de backlog por Resource Group
+      description: Retorna sinais de backlog aging, stale backlog, overdue e proxies de vaivem do grupo.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: stale_days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 7
+            maximum: 120
+            default: 21
+      responses:
+        "200":
+          description: Backlog quality calculada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/BacklogQuality"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }
+
+  /insights/resource-groups/{group_id}/trends:
+    get:
+      tags: [Insights]
+      summary: Trends operacionais por Resource Group
+      description: Retorna series de throughput, incidentes e confidence com anomalias e sinais de degradacao.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: window_days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 14
+            maximum: 180
+            default: 60
+        - name: granularity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [daily, weekly]
+            default: weekly
+      responses:
+        "200":
+          description: Trends calculadas com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/Trends"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }
+
+  /insights/resource-groups/{group_id}/recompute:
+    post:
+      tags: [Insights]
+      summary: Recompute assíncrono de Insights por Resource Group
+      description: Enfileira recompute dos snapshots e retorna status queued para o frontend.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.recompute
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                mode:
+                  type: string
+                  enum: [full, incremental]
+                  default: incremental
+                reason:
+                  type: string
+      responses:
+        "202":
+          description: Recompute aceito e enfileirado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/RecomputeAccepted"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }
+        "409": { description: Recompute ja em andamento }

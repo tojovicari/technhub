@@ -22,6 +22,7 @@ import { billingWebhookRoutes } from './modules/billing/webhook-routes.js';
 import { startBillingWorker } from './modules/billing/worker.js';
 import { platformImpersonationRoutes } from './modules/auth/platform-impersonation-routes.js';
 import { resourceGroupsRoutes } from './modules/resource-groups/routes.js';
+import { insightsRoutes } from './modules/insights/routes.js';
 import { registerAuth } from './plugins/auth.js';
 import { loadEntitlement } from './modules/billing/entitlement.js';
 import { logRequestCompletion, markRequestStart } from './lib/observability.js';
@@ -94,6 +95,7 @@ export function buildApp() {
   app.register(authRoutes, { prefix: '/api/v1' });
   app.register(coreRoutes, { prefix: '/api/v1' });
   app.register(resourceGroupsRoutes, { prefix: '/api/v1' });
+  app.register(insightsRoutes, { prefix: '/api/v1' });
   app.register(slaRoutes, { prefix: '/api/v1' });
   app.register(doraRoutes, { prefix: '/api/v1' });
   app.register(cogsRoutes, { prefix: '/api/v1' });

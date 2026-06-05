@@ -113,6 +113,10 @@ primary_region = "gru"           # São Paulo — ajuste conforme necessidade
 
 > A rota `/health` deve retornar `200 { status: "ok" }` — já implementada em `src/app.ts`.
 
+> Trade-off MVP aceito (2026-06-05): manter `auto_stop_machines = true` e `min_machines_running = 0`.
+> Impacto conhecido: workers baseados em `setInterval` (comms/integrations/billing) podem pausar quando a machine estiver parada e retomar apenas no próximo wake-up por tráfego.
+> Decisão: risco aceito nesta fase para otimizar custo; revisão obrigatória na fase de hardening para mover jobs críticos para worker dedicado sempre ativo.
+
 ---
 
 ## Migrations no Deploy
