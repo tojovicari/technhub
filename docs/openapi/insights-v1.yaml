@@ -52,6 +52,35 @@ components:
         key: { type: string }
         name: { type: string }
 
+    InsightsCalculationContext:
+      type: object
+      required:
+        [
+          policy_source,
+          policy_id,
+          policy_version,
+          delivery_sources_used,
+          aggregation_mode,
+          state_mapping_hash,
+          fallback_used,
+          warnings,
+        ]
+      properties:
+        policy_source:
+          { type: string, enum: [resource_group, tenant_default, legacy] }
+        policy_id: { type: string, format: uuid, nullable: true }
+        policy_version: { type: integer, minimum: 1, nullable: true }
+        delivery_sources_used:
+          type: array
+          items: { type: string, enum: [task_done, pr_merged, release_deploy] }
+        aggregation_mode:
+          { type: string, enum: [single, any_of, weighted, priority_order] }
+        state_mapping_hash: { type: string }
+        fallback_used: { type: boolean }
+        warnings:
+          type: array
+          items: { type: string }
+
     InsightsOverview:
       type: object
       required:
@@ -67,6 +96,7 @@ components:
           warnings,
           freshness,
           data_quality_warnings,
+          calculation_context,
         ]
       properties:
         resource_group:
@@ -132,6 +162,8 @@ components:
         data_quality_warnings:
           type: array
           items: { type: string }
+        calculation_context:
+          $ref: "#/components/schemas/InsightsCalculationContext"
 
     IncidentInsights:
       type: object
@@ -190,6 +222,7 @@ components:
           epics,
           incident_correlation,
           warnings,
+          calculation_context,
         ]
       properties:
         resource_group:
@@ -245,10 +278,19 @@ components:
         warnings:
           type: array
           items: { type: string }
+        calculation_context:
+          $ref: "#/components/schemas/InsightsCalculationContext"
 
     BacklogQuality:
       type: object
-      required: [resource_group, backlog_quality, thresholds, warnings]
+      required:
+        [
+          resource_group,
+          backlog_quality,
+          thresholds,
+          warnings,
+          calculation_context,
+        ]
       properties:
         resource_group:
           $ref: "#/components/schemas/ResourceGroupRef"
@@ -280,6 +322,8 @@ components:
         warnings:
           type: array
           items: { type: string }
+        calculation_context:
+          $ref: "#/components/schemas/InsightsCalculationContext"
 
     Trends:
       type: object
@@ -292,6 +336,7 @@ components:
           anomalies,
           degradation_signals,
           warnings,
+          calculation_context,
         ]
       properties:
         resource_group:
@@ -349,6 +394,8 @@ components:
         warnings:
           type: array
           items: { type: string }
+        calculation_context:
+          $ref: "#/components/schemas/InsightsCalculationContext"
 
     RecomputeAccepted:
       type: object
@@ -358,6 +405,109 @@ components:
         status: { type: string, enum: [queued] }
         resource_group_id: { type: string, format: uuid }
         submitted_at: { type: string, format: date-time }
+
+    CalculationPolicy:
+      type: object
+      required:
+        [
+          id,
+          name,
+          status,
+          version,
+          effective_from,
+          effective_to,
+          config,
+          created_at,
+          updated_at,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        status: { type: string, enum: [draft, active, archived] }
+        version: { type: integer, minimum: 1 }
+        effective_from: { type: string, format: date-time, nullable: true }
+        effective_to: { type: string, format: date-time, nullable: true }
+        config: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CalculationPolicyResolved:
+      type: object
+      required: [resource_group_id, policy_source, policy]
+      properties:
+        resource_group_id: { type: string, format: uuid }
+        policy_source:
+          { type: string, enum: [resource_group, tenant_default, legacy] }
+        policy:
+          anyOf:
+            - $ref: "#/components/schemas/CalculationPolicy"
+            - type: "null"
+
+    CalculationPolicyMappingCandidate:
+      type: object
+      required: [provider, source_type, match]
+      properties:
+        provider: { type: string, enum: [jira, github, manual] }
+        source_type: { type: string }
+        match: { type: string }
+
+    CalculationPolicyMappingCandidates:
+      type: object
+      required: [resource_group_id, items, defaults]
+      properties:
+        resource_group_id: { type: string, format: uuid }
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CalculationPolicyMappingCandidate"
+        defaults:
+          type: object
+          required: [task_statuses]
+          properties:
+            task_statuses:
+              type: array
+              items:
+                type: string
+                enum: [backlog, todo, in_progress, review, done, cancelled]
+
+    CalculationPolicyHistoryItem:
+      type: object
+      required:
+        [
+          id,
+          resource_group_id,
+          name,
+          status,
+          version,
+          effective_from,
+          effective_to,
+          created_by,
+          updated_by,
+          created_at,
+          updated_at,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        resource_group_id: { type: string, format: uuid, nullable: true }
+        name: { type: string }
+        status: { type: string, enum: [draft, active, archived] }
+        version: { type: integer, minimum: 1 }
+        effective_from: { type: string, format: date-time, nullable: true }
+        effective_to: { type: string, format: date-time, nullable: true }
+        created_by: { type: string }
+        updated_by: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CalculationPolicyHistory:
+      type: object
+      required: [resource_group_id, items]
+      properties:
+        resource_group_id: { type: string, format: uuid }
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CalculationPolicyHistoryItem"
 
 paths:
   /insights/resource-groups/{group_id}/overview:
@@ -606,3 +756,211 @@ paths:
         "403": { description: Sem permissao }
         "404": { description: Resource Group nao encontrado }
         "409": { description: Recompute ja em andamento }
+
+  /insights/resource-groups/{group_id}/calculation-policy:
+    get:
+      tags: [Insights]
+      summary: Policy de calculo ativa resolvida por Resource Group
+      description: Retorna policy ativa considerando precedencia resource_group > tenant_default > legacy.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: at
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Policy resolvida com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/CalculationPolicyResolved"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }
+
+  /insights/resource-groups/{group_id}/calculation-policy/candidates:
+    get:
+      tags: [Insights]
+      summary: Candidatos de mapeamento para policy de calculo
+      description: Retorna combinacoes observadas de provider/status para apoiar multiselect no frontend.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Candidatos retornados com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/CalculationPolicyMappingCandidates"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }
+
+    put:
+      tags: [Insights]
+      summary: Cria draft de policy de calculo por Resource Group
+      description: Cria nova versao em draft com validacao de mapping sem sobreposicao.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.write
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, config]
+              properties:
+                name:
+                  type: string
+                  minLength: 3
+                  maxLength: 120
+                config:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "201":
+          description: Draft criada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: "#/components/schemas/CalculationPolicyHistoryItem"
+                          - type: object
+                            properties:
+                              config:
+                                { type: object, additionalProperties: true }
+        "400":
+          description: Body invalido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }
+
+  /insights/resource-groups/{group_id}/calculation-policy/publish:
+    post:
+      tags: [Insights]
+      summary: Publica draft de policy de calculo
+      description: Publica draft e aplica janela de efetividade, bloqueando conflitos de policy ativa.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.publish
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [draft_id]
+              properties:
+                draft_id: { type: string, format: uuid }
+                effective_from: { type: string, format: date-time }
+                effective_to: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Draft publicada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        allOf:
+                          - $ref: "#/components/schemas/CalculationPolicyHistoryItem"
+                          - type: object
+                            properties:
+                              config:
+                                { type: object, additionalProperties: true }
+        "400":
+          description: Body invalido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Draft ou Resource Group nao encontrado }
+        "409": { description: Conflito com policy ativa no periodo informado }
+
+  /insights/resource-groups/{group_id}/calculation-policy/history:
+    get:
+      tags: [Insights]
+      summary: Historico de policies por Resource Group
+      description: Lista versoes de policy para o grupo e opcionalmente inclui defaults do tenant.
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.read
+      parameters:
+        - name: group_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: include_defaults
+          in: query
+          required: false
+          schema: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Historico retornado com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/CalculationPolicyHistory"
+        "400":
+          description: Query invalida
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Resource Group nao encontrado }

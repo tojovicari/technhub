@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import type {
+  InsightsCalculationPolicyConfig,
   InsightsBacklogQualityQuery,
   InsightsIncidentsQuery,
   InsightsOverviewQuery,
@@ -9,12 +10,177 @@ import type {
   InsightsRecomputeBody,
   InsightsTrendsQuery
 } from './schema.js';
+import { insightsCalculationPolicyConfigSchema } from './schema.js';
+import { resolveActiveCalculationPolicy } from './policy.service.js';
 
 type GroupContext = {
   group: { id: string; key: string; name: string };
   projectIds: string[];
   serviceMatchers: string[];
 };
+
+type PolicyAwareContext = {
+  calculation_context: {
+    policy_source: 'resource_group' | 'tenant_default' | 'legacy';
+    policy_id: string | null;
+    policy_version: number | null;
+    delivery_sources_used: string[];
+    aggregation_mode: string;
+    state_mapping_hash: string;
+    fallback_used: boolean;
+    warnings: string[];
+  };
+  config: InsightsCalculationPolicyConfig | null;
+};
+
+type DeliveryRuntimeConfig = {
+  sources: string[];
+  aggregation_mode: string;
+  weights?: Record<string, number>;
+};
+
+type CanonicalStateKey = 'backlog' | 'planned' | 'in_progress' | 'paused' | 'done' | 'cancelled';
+
+const DEFAULT_CANONICAL_STATE_MATCHES: Record<CanonicalStateKey, string[]> = {
+  backlog: ['backlog', 'todo'],
+  planned: ['todo'],
+  in_progress: ['in_progress', 'review'],
+  paused: ['blocked', 'paused'],
+  done: ['done'],
+  cancelled: ['cancelled']
+};
+
+const DEFAULT_DELIVERY: DeliveryRuntimeConfig = {
+  sources: ['task_done'],
+  aggregation_mode: 'single'
+};
+
+function normalizeString(value: string | null | undefined) {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function hashStateMapping(config: InsightsCalculationPolicyConfig | null) {
+  if (!config) return 'legacy-default';
+  const serialized = JSON.stringify(config.state_mapping);
+  return `sha256:${crypto.createHash('sha256').update(serialized).digest('hex').slice(0, 16)}`;
+}
+
+function normalizeWeights(weights: Record<string, number> | undefined) {
+  if (!weights) return null;
+  const entries = Object.entries(weights).filter(([, value]) => Number.isFinite(value) && value > 0);
+  const total = entries.reduce((sum, [, value]) => sum + value, 0);
+  if (total <= 0) return null;
+
+  const normalized: Record<string, number> = {};
+  for (const [key, value] of entries) {
+    normalized[key] = value / total;
+  }
+  return normalized;
+}
+
+function resolveCanonicalStateSets(config: InsightsCalculationPolicyConfig | null) {
+  const stateMapping = config?.state_mapping;
+  const toSet = (stateKey: CanonicalStateKey) => {
+    const mappingByKey = stateMapping as InsightsCalculationPolicyConfig['state_mapping'] | undefined;
+    const configuredEntries = (mappingByKey?.[stateKey] ?? []) as Array<{ match: string }>;
+    const configuredMatches = configuredEntries.map((entry) => normalizeString(entry.match));
+    const defaults = DEFAULT_CANONICAL_STATE_MATCHES[stateKey];
+    const combined = configuredMatches.length > 0 ? configuredMatches : defaults;
+    return new Set(combined);
+  };
+
+  return {
+    backlog: toSet('backlog'),
+    planned: toSet('planned'),
+    in_progress: toSet('in_progress'),
+    paused: toSet('paused'),
+    done: toSet('done'),
+    cancelled: toSet('cancelled')
+  };
+}
+
+function classifyTaskCanonicalStatus(
+  status: string,
+  stateSets: ReturnType<typeof resolveCanonicalStateSets>
+) {
+  const normalizedStatus = normalizeString(status);
+  if (stateSets.done.has(normalizedStatus)) return 'done';
+  if (stateSets.cancelled.has(normalizedStatus)) return 'cancelled';
+  if (stateSets.paused.has(normalizedStatus)) return 'paused';
+  if (stateSets.in_progress.has(normalizedStatus)) return 'in_progress';
+  if (stateSets.planned.has(normalizedStatus)) return 'planned';
+  if (stateSets.backlog.has(normalizedStatus)) return 'backlog';
+  return 'unknown';
+}
+
+function aggregateDelivery(
+  values: Record<string, number>,
+  sources: string[],
+  aggregationMode: string,
+  weights?: Record<string, number>
+) {
+  const selectedValues = sources.map((source) => values[source] ?? 0);
+
+  if (aggregationMode === 'weighted') {
+    const normalizedWeights = normalizeWeights(weights);
+    if (!normalizedWeights) {
+      return Math.round(selectedValues.reduce((sum, current) => sum + current, 0));
+    }
+
+    let weighted = 0;
+    for (const source of sources) {
+      weighted += (values[source] ?? 0) * (normalizedWeights[source] ?? 0);
+    }
+    return Math.round(weighted);
+  }
+
+  if (aggregationMode === 'any_of') {
+    return Math.max(0, ...selectedValues);
+  }
+
+  if (aggregationMode === 'priority_order') {
+    const firstNonZero = selectedValues.find((value) => value > 0);
+    return firstNonZero ?? 0;
+  }
+
+  return selectedValues[0] ?? 0;
+}
+
+async function resolvePolicyContext(tenantId: string, resourceGroupId: string): Promise<PolicyAwareContext> {
+  const resolved = await resolveActiveCalculationPolicy({ tenantId, resourceGroupId });
+  const parsedConfig = resolved.policy
+    ? insightsCalculationPolicyConfigSchema.safeParse(resolved.policy.config)
+    : null;
+  const config = parsedConfig?.success ? parsedConfig.data : null;
+  const fallbackUsed = resolved.source === 'legacy' || !config;
+  const configDelivery = config?.delivery;
+  const deliverySources = configDelivery?.aggregation_mode === 'priority_order' && configDelivery.priority_order?.length
+    ? configDelivery.priority_order
+    : (configDelivery?.sources ?? DEFAULT_DELIVERY.sources);
+  const delivery: DeliveryRuntimeConfig = {
+    sources: deliverySources,
+    aggregation_mode: configDelivery?.aggregation_mode ?? DEFAULT_DELIVERY.aggregation_mode,
+    weights: configDelivery?.weights
+  };
+
+  const warnings: string[] = [];
+  if (resolved.policy && !parsedConfig?.success) warnings.push('policy_config_invalid_fallback_legacy');
+  if (!config) warnings.push('policy_legacy_defaults_applied');
+
+  return {
+    config,
+    calculation_context: {
+      policy_source: resolved.source,
+      policy_id: resolved.policy?.id ?? null,
+      policy_version: resolved.policy?.version ?? null,
+      delivery_sources_used: delivery.sources,
+      aggregation_mode: delivery.aggregation_mode,
+      state_mapping_hash: hashStateMapping(config),
+      fallback_used: fallbackUsed,
+      warnings
+    }
+  };
+}
 
 function round(value: number, digits = 2) {
   const factor = 10 ** digits;
@@ -135,10 +301,39 @@ function calculateBacklogQuality(tasks: Array<{
   updatedAt: Date;
   dueDate: Date | null;
   completedAt: Date | null;
-}>, staleDays: number) {
+}>, staleDays: number, options?: {
+  classifyStatus?: (status: string) => 'backlog' | 'planned' | 'in_progress' | 'paused' | 'done' | 'cancelled' | 'unknown';
+  weights?: {
+    stale_backlog_rate: number;
+    overdue_backlog_rate: number;
+    flow_regression_rate: number;
+    backlog_churn_proxy: number;
+  };
+}) {
   const now = new Date();
-  const backlogTasks = tasks.filter((task) => task.status === 'backlog' || task.status === 'todo');
-  const activeTasks = tasks.filter((task) => task.status !== 'done' && task.status !== 'cancelled');
+  const classifyStatus = options?.classifyStatus ?? ((status: string) => {
+    const normalized = normalizeString(status);
+    if (normalized === 'done') return 'done';
+    if (normalized === 'cancelled') return 'cancelled';
+    if (normalized === 'backlog' || normalized === 'todo') return 'backlog';
+    if (normalized === 'in_progress' || normalized === 'review') return 'in_progress';
+    return 'unknown';
+  });
+  const metricsWeights = options?.weights ?? {
+    stale_backlog_rate: 40,
+    overdue_backlog_rate: 25,
+    flow_regression_rate: 20,
+    backlog_churn_proxy: 15
+  };
+
+  const backlogTasks = tasks.filter((task) => {
+    const canonical = classifyStatus(task.status);
+    return canonical === 'backlog' || canonical === 'planned';
+  });
+  const activeTasks = tasks.filter((task) => {
+    const canonical = classifyStatus(task.status);
+    return canonical !== 'done' && canonical !== 'cancelled';
+  });
   const staleThreshold = staleDays * 24 * 60 * 60 * 1000;
   const churnWindow = Math.min(14, Math.max(3, Math.floor(staleDays / 2))) * 24 * 60 * 60 * 1000;
 
@@ -146,7 +341,10 @@ function calculateBacklogQuality(tasks: Array<{
   const staleCount = backlogTasks.filter((task) => now.getTime() - task.updatedAt.getTime() >= staleThreshold).length;
   const overdueCount = activeTasks.filter((task) => task.dueDate !== null && task.dueDate.getTime() < now.getTime()).length;
   const flowRegressionCount = tasks.filter(
-    (task) => task.completedAt !== null && task.status !== 'done' && task.status !== 'cancelled'
+    (task) => {
+      const canonical = classifyStatus(task.status);
+      return task.completedAt !== null && canonical !== 'done' && canonical !== 'cancelled';
+    }
   ).length;
   const churnCount = backlogTasks.filter((task) => {
     const age = now.getTime() - task.createdAt.getTime();
@@ -162,7 +360,12 @@ function calculateBacklogQuality(tasks: Array<{
 
   const score = Math.round(
     clamp(
-      100 - (staleBacklogRate * 40 + overdueBacklogRate * 25 + flowRegressionRate * 20 + backlogChurnProxy * 15),
+      100 - (
+        staleBacklogRate * metricsWeights.stale_backlog_rate +
+        overdueBacklogRate * metricsWeights.overdue_backlog_rate +
+        flowRegressionRate * metricsWeights.flow_regression_rate +
+        backlogChurnProxy * metricsWeights.backlog_churn_proxy
+      ),
       0,
       100
     )
@@ -372,6 +575,9 @@ export async function getInsightsOverviewByResourceGroup(
 ) {
   const context = await getGroupContext(tenantId, groupId);
   if (!context) return null;
+  const policyContext = await resolvePolicyContext(tenantId, context.group.id);
+  const deliveryConfig = policyContext.config?.delivery ?? DEFAULT_DELIVERY;
+  const overviewTuning = policyContext.config?.metric_tuning?.overview;
 
   const now = new Date();
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -381,7 +587,19 @@ export async function getInsightsOverviewByResourceGroup(
     ? { projectId: { in: context.projectIds } }
     : { projectId: '00000000-0000-0000-0000-000000000000' };
 
-  const [throughput7d, throughput30d, previousThroughput7d, hasIncidentIntegration, incidents30d] = await Promise.all([
+  const [
+    taskDone7d,
+    taskDone30d,
+    taskDonePrevious7d,
+    githubMerged7d,
+    githubMerged30d,
+    githubMergedPrevious7d,
+    deploy7d,
+    deploy30d,
+    deployPrevious7d,
+    hasIncidentIntegration,
+    incidents30d
+  ] = await Promise.all([
     prisma.task.count({
       where: {
         tenantId,
@@ -406,6 +624,54 @@ export async function getInsightsOverviewByResourceGroup(
         completedAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo }
       }
     }),
+    prisma.task.count({
+      where: {
+        tenantId,
+        ...whereByGroup,
+        source: 'github',
+        status: 'done',
+        completedAt: { gte: sevenDaysAgo, lte: now }
+      }
+    }),
+    prisma.task.count({
+      where: {
+        tenantId,
+        ...whereByGroup,
+        source: 'github',
+        status: 'done',
+        completedAt: { gte: thirtyDaysAgo, lte: now }
+      }
+    }),
+    prisma.task.count({
+      where: {
+        tenantId,
+        ...whereByGroup,
+        source: 'github',
+        status: 'done',
+        completedAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo }
+      }
+    }),
+    prisma.deployEvent.count({
+      where: {
+        tenantId,
+        ...(context.projectIds.length > 0 ? { projectId: { in: context.projectIds } } : {}),
+        deployedAt: { gte: sevenDaysAgo, lte: now }
+      }
+    }),
+    prisma.deployEvent.count({
+      where: {
+        tenantId,
+        ...(context.projectIds.length > 0 ? { projectId: { in: context.projectIds } } : {}),
+        deployedAt: { gte: thirtyDaysAgo, lte: now }
+      }
+    }),
+    prisma.deployEvent.count({
+      where: {
+        tenantId,
+        ...(context.projectIds.length > 0 ? { projectId: { in: context.projectIds } } : {}),
+        deployedAt: { gte: fourteenDaysAgo, lt: sevenDaysAgo }
+      }
+    }),
     prisma.integrationConnection.findFirst({
       where: {
         tenantId,
@@ -427,6 +693,39 @@ export async function getInsightsOverviewByResourceGroup(
       }
     })
   ]);
+
+  const throughput7d = aggregateDelivery(
+    {
+      task_done: taskDone7d,
+      pr_merged: githubMerged7d,
+      release_deploy: deploy7d
+    },
+    deliveryConfig.sources,
+    deliveryConfig.aggregation_mode,
+    deliveryConfig.weights
+  );
+
+  const throughput30d = aggregateDelivery(
+    {
+      task_done: taskDone30d,
+      pr_merged: githubMerged30d,
+      release_deploy: deploy30d
+    },
+    deliveryConfig.sources,
+    deliveryConfig.aggregation_mode,
+    deliveryConfig.weights
+  );
+
+  const previousThroughput7d = aggregateDelivery(
+    {
+      task_done: taskDonePrevious7d,
+      pr_merged: githubMergedPrevious7d,
+      release_deploy: deployPrevious7d
+    },
+    deliveryConfig.sources,
+    deliveryConfig.aggregation_mode,
+    deliveryConfig.weights
+  );
 
   const serviceMatchers = toLowerSet(context.serviceMatchers);
   const scopedIncidents30d = incidents30d.filter((incident) =>
@@ -450,8 +749,11 @@ export async function getInsightsOverviewByResourceGroup(
   const currentRate = throughput7d / 7;
   const trend = currentRate > previousRate * 1.1 ? 'up' : currentRate < previousRate * 0.9 ? 'down' : 'stable';
 
-  const incidentPenalty = Math.min(40, incidents7d.length * 4 + scopedIncidents30d.length);
-  const throughputPenalty = trend === 'down' ? 15 : trend === 'stable' ? 6 : 0;
+  const incidentPenaltyCap = overviewTuning?.incident_penalty_cap ?? 40;
+  const incidentPenalty = Math.min(incidentPenaltyCap, incidents7d.length * 4 + scopedIncidents30d.length);
+  const throughputPenaltyDown = overviewTuning?.throughput_penalty_down ?? 15;
+  const throughputPenaltyStable = overviewTuning?.throughput_penalty_stable ?? 6;
+  const throughputPenalty = trend === 'down' ? throughputPenaltyDown : trend === 'stable' ? throughputPenaltyStable : 0;
   const recoveryPenalty = mttrHours == null ? 4 : mttrHours > 8 ? 20 : mttrHours > 4 ? 12 : mttrHours > 2 ? 6 : 0;
 
   const healthScore = Math.max(0, Math.min(100, Math.round(100 - incidentPenalty - throughputPenalty - recoveryPenalty)));
@@ -461,6 +763,7 @@ export async function getInsightsOverviewByResourceGroup(
   if (!hasIncidentIntegration) warnings.push('incident_integration_not_configured');
   if (context.projectIds.length === 0) warnings.push('resource_group_without_projects');
   if (context.projectIds.length > 0 && scopedIncidents30d.length === 0) warnings.push('no_incident_matches_resource_group');
+  warnings.push(...policyContext.calculation_context.warnings);
 
   const drivers: string[] = [];
   if (incidentPenalty >= 12) drivers.push('incident_load');
@@ -531,9 +834,13 @@ export async function getInsightsOverviewByResourceGroup(
       mttr_source: hasIncidentIntegration ? 'incidents' : 'not_configured'
     },
     recommendations,
-    warnings,
+    warnings: Array.from(new Set(warnings)),
     freshness,
-    data_quality_warnings: Array.from(new Set(dataQualityWarnings))
+    data_quality_warnings: Array.from(new Set(dataQualityWarnings)),
+    calculation_context: {
+      ...policyContext.calculation_context,
+      warnings: Array.from(new Set(policyContext.calculation_context.warnings))
+    }
   };
 }
 
@@ -634,6 +941,8 @@ export async function getInsightTrendsByResourceGroup(
 ) {
   const context = await getGroupContext(tenantId, groupId);
   if (!context) return null;
+  const policyContext = await resolvePolicyContext(tenantId, context.group.id);
+  const deliveryConfig = policyContext.config?.delivery ?? DEFAULT_DELIVERY;
 
   const now = new Date();
   const windowStart = new Date(now.getTime() - query.window_days * 24 * 60 * 60 * 1000);
@@ -641,14 +950,22 @@ export async function getInsightTrendsByResourceGroup(
   const buckets = buildTrendBuckets(windowStart, now, granularity);
 
   const projectFilter = context.projectIds.length > 0 ? { projectId: { in: context.projectIds } } : undefined;
-  const [tasks, incidents, hasIncidentIntegration] = await Promise.all([
+  const [tasks, deployEvents, incidents, hasIncidentIntegration] = await Promise.all([
     prisma.task.findMany({
       where: {
         tenantId,
         ...(projectFilter ?? {}),
         completedAt: { gte: windowStart, lte: now }
       },
-      select: { completedAt: true, createdAt: true, updatedAt: true, status: true, dueDate: true, epicId: true }
+      select: { completedAt: true, createdAt: true, updatedAt: true, status: true, dueDate: true, epicId: true, source: true }
+    }),
+    prisma.deployEvent.findMany({
+      where: {
+        tenantId,
+        ...(projectFilter ?? {}),
+        deployedAt: { gte: windowStart, lte: now }
+      },
+      select: { deployedAt: true }
     }),
     prisma.incidentEvent.findMany({
       where: {
@@ -672,7 +989,16 @@ export async function getInsightTrendsByResourceGroup(
 
   const throughputSeries = buckets.map((bucket) => ({
     bucket: bucket.bucket,
-    value: tasks.filter((task) => task.completedAt !== null && task.completedAt >= bucket.start && task.completedAt <= bucket.end).length
+    value: aggregateDelivery(
+      {
+        task_done: tasks.filter((task) => task.completedAt !== null && task.completedAt >= bucket.start && task.completedAt <= bucket.end && task.status === 'done').length,
+        pr_merged: tasks.filter((task) => task.completedAt !== null && task.completedAt >= bucket.start && task.completedAt <= bucket.end && task.status === 'done' && task.source === 'github').length,
+        release_deploy: deployEvents.filter((deploy) => deploy.deployedAt >= bucket.start && deploy.deployedAt <= bucket.end).length
+      },
+      deliveryConfig.sources,
+      deliveryConfig.aggregation_mode,
+      deliveryConfig.weights
+    )
   }));
 
   const incidentSeries = buckets.map((bucket) => ({
@@ -757,6 +1083,7 @@ export async function getInsightTrendsByResourceGroup(
   if (!hasIncidentIntegration) warnings.push('incident_integration_not_configured');
   if (context.projectIds.length === 0) warnings.push('resource_group_without_projects');
   if (scopedIncidents.length === 0 && hasIncidentIntegration) warnings.push('no_incident_matches_resource_group');
+  warnings.push(...policyContext.calculation_context.warnings);
 
   await persistResourceGroupSnapshot({
     tenantId,
@@ -793,7 +1120,11 @@ export async function getInsightTrendsByResourceGroup(
     },
     anomalies,
     degradation_signals: degradationSignals,
-    warnings
+    warnings,
+    calculation_context: {
+      ...policyContext.calculation_context,
+      warnings: Array.from(new Set(policyContext.calculation_context.warnings))
+    }
   };
 }
 
@@ -804,6 +1135,10 @@ export async function getBacklogQualityByResourceGroup(
 ) {
   const context = await getGroupContext(tenantId, groupId);
   if (!context) return null;
+  const policyContext = await resolvePolicyContext(tenantId, context.group.id);
+  const stateSets = resolveCanonicalStateSets(policyContext.config);
+  const backlogWeights = policyContext.config?.metric_tuning?.backlog_quality?.weights;
+  const classifyStatus = (status: string) => classifyTaskCanonicalStatus(status, stateSets);
 
   if (context.projectIds.length === 0) {
     return {
@@ -818,7 +1153,11 @@ export async function getBacklogQualityByResourceGroup(
         backlog_churn_proxy: 0
       },
       thresholds: { stale_days: query.stale_days },
-      warnings: ['resource_group_without_projects', 'no_backlog_items_found']
+      warnings: ['resource_group_without_projects', 'no_backlog_items_found', ...policyContext.calculation_context.warnings],
+      calculation_context: {
+        ...policyContext.calculation_context,
+        warnings: Array.from(new Set(policyContext.calculation_context.warnings))
+      }
     };
   }
 
@@ -836,9 +1175,13 @@ export async function getBacklogQualityByResourceGroup(
     }
   });
 
-  const backlog = calculateBacklogQuality(tasks, query.stale_days);
+  const backlog = calculateBacklogQuality(tasks, query.stale_days, {
+    classifyStatus,
+    weights: backlogWeights
+  });
   const warnings = [...backlog.warnings];
   if (context.projectIds.length === 0) warnings.push('resource_group_without_projects');
+  warnings.push(...policyContext.calculation_context.warnings);
 
   return {
     resource_group: context.group,
@@ -846,7 +1189,11 @@ export async function getBacklogQualityByResourceGroup(
     thresholds: {
       stale_days: query.stale_days
     },
-    warnings
+    warnings: Array.from(new Set(warnings)),
+    calculation_context: {
+      ...policyContext.calculation_context,
+      warnings: Array.from(new Set(policyContext.calculation_context.warnings))
+    }
   };
 }
 
@@ -913,6 +1260,10 @@ export async function getPlanningConfidenceByResourceGroup(
 ) {
   const context = await getGroupContext(tenantId, groupId);
   if (!context) return null;
+  const policyContext = await resolvePolicyContext(tenantId, context.group.id);
+  const stateSets = resolveCanonicalStateSets(policyContext.config);
+  const backlogWeights = policyContext.config?.metric_tuning?.backlog_quality?.weights;
+  const classifyStatus = (status: string) => classifyTaskCanonicalStatus(status, stateSets);
 
   const period = parsePeriodOrDefault(query.period);
   if (!period) return null;
@@ -995,7 +1346,10 @@ export async function getPlanningConfidenceByResourceGroup(
       })
     : [];
 
-  const backlog = calculateBacklogQuality(tasks, 21);
+  const backlog = calculateBacklogQuality(tasks, 21, {
+    classifyStatus,
+    weights: backlogWeights
+  });
   const taskByEpic = groupByEpicId(tasks);
   const dependencyByTaskId = new Map<string, number>();
   for (const dependency of dependencies) {
@@ -1006,7 +1360,7 @@ export async function getPlanningConfidenceByResourceGroup(
   const scopedIncidents = incidents.filter((incident) => incidentMatchesGroup(incident.affectedServices, serviceMatchers));
   const epicResults = epics.map((epic) => {
     const epicTasks = taskByEpic.get(epic.id) ?? [];
-    const completedTasks = epic.completedTasks ?? epicTasks.filter((task) => task.status === 'done').length;
+    const completedTasks = epic.completedTasks ?? epicTasks.filter((task) => classifyStatus(task.status) === 'done').length;
     const totalTasks = Math.max(epic.totalTasks ?? 0, epicTasks.length, 1);
     const progressRatio = totalTasks === 0 ? 0 : completedTasks / totalTasks;
     const openRatio = 1 - progressRatio;
@@ -1084,6 +1438,7 @@ export async function getPlanningConfidenceByResourceGroup(
   if (epicResults.length === 0) warnings.push('no_epics_in_resource_group');
   if (backlog.warnings.includes('flow_regression_uses_proxy')) warnings.push('flow_regression_rate_uses_proxy');
   if (scopedIncidents.length === 0 && hasIncidentIntegration) warnings.push('no_incident_matches_resource_group');
+  warnings.push(...policyContext.calculation_context.warnings);
 
   return {
     resource_group: context.group,
@@ -1108,6 +1463,10 @@ export async function getPlanningConfidenceByResourceGroup(
       roadmap_risk_due_to_incidents:
         incidentPressureRatio >= 0.5 || scopedIncidents.length >= 5 ? 'high' : incidentPressureRatio > 0 ? 'medium' : 'low'
     },
-    warnings: Array.from(new Set(warnings.concat(backlog.warnings.filter((warning) => warning !== 'flow_regression_uses_proxy'))))
+    warnings: Array.from(new Set(warnings.concat(backlog.warnings.filter((warning) => warning !== 'flow_regression_uses_proxy')))),
+    calculation_context: {
+      ...policyContext.calculation_context,
+      warnings: Array.from(new Set(policyContext.calculation_context.warnings))
+    }
   };
 }

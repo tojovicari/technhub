@@ -62,8 +62,17 @@ vi.mock('./service.js', () => ({
   recomputeInsightsForResourceGroup: vi.fn()
 }));
 
+vi.mock('./policy.service.js', () => ({
+  getActiveCalculationPolicyForResourceGroup: vi.fn(),
+  listCalculationPolicyMappingCandidatesForResourceGroup: vi.fn(),
+  createDraftCalculationPolicy: vi.fn(),
+  publishDraftCalculationPolicy: vi.fn(),
+  listCalculationPolicyHistory: vi.fn()
+}));
+
 import { buildApp } from '../../app.js';
 import * as svc from './service.js';
+import * as policySvc from './policy.service.js';
 import type { FastifyInstance } from 'fastify';
 
 const TENANT = 'ten_test';
@@ -73,6 +82,7 @@ describe('Insights routes', () => {
   let app: FastifyInstance;
   let fullToken: string;
   let missingPermissionToken: string;
+  let policyToken: string;
 
   beforeAll(async () => {
     process.env.JWT_SECRET = 'test-secret-do-not-use-in-production';
@@ -93,6 +103,13 @@ describe('Insights routes', () => {
       tenant_id: TENANT,
       roles: ['viewer'],
       permissions: ['resource_group.read']
+    });
+
+    policyToken = app.jwt.sign({
+      sub: 'user-5',
+      tenant_id: TENANT,
+      roles: ['manager'],
+      permissions: ['insights.policy.read', 'insights.policy.write', 'insights.policy.publish']
     });
   });
 
@@ -494,6 +511,284 @@ describe('Insights routes', () => {
 
       expect(res.statusCode).toBe(404);
       expect(res.json().error.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('GET /api/v1/insights/resource-groups/:group_id/calculation-policy', () => {
+    it('200: retorna policy ativa resolvida', async () => {
+      vi.mocked(policySvc.getActiveCalculationPolicyForResourceGroup).mockResolvedValueOnce({
+        resource_group_id: GROUP_ID,
+        policy_source: 'resource_group',
+        policy: {
+          id: '11111111-1111-4111-8111-111111111111',
+          name: 'Payments custom policy',
+          status: 'active',
+          version: 3,
+          effective_from: '2026-06-08T10:00:00.000Z',
+          effective_to: null,
+          config: { state_mapping: {}, delivery: { sources: ['task_done'], aggregation_mode: 'single' } },
+          created_at: '2026-06-08T10:00:00.000Z',
+          updated_at: '2026-06-08T10:00:00.000Z'
+        }
+      } as any);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.policy_source).toBe('resource_group');
+    });
+
+    it('400: query invalida', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy?at=invalid-date`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
+    });
+
+    it('403: sem permissao', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy`,
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+    });
+  });
+
+  describe('PUT /api/v1/insights/resource-groups/:group_id/calculation-policy', () => {
+    it('201: cria draft', async () => {
+      vi.mocked(policySvc.createDraftCalculationPolicy).mockResolvedValueOnce({
+        data: {
+          id: '22222222-2222-4222-8222-222222222222',
+          resource_group_id: GROUP_ID,
+          name: 'Draft policy',
+          status: 'draft',
+          version: 4,
+          effective_from: null,
+          effective_to: null,
+          created_by: 'user-5',
+          updated_by: 'user-5',
+          created_at: '2026-06-08T11:00:00.000Z',
+          updated_at: '2026-06-08T11:00:00.000Z',
+          config: {
+            state_mapping: {
+              backlog: [{ provider: 'jira', source_type: 'issue', match: 'To Do' }],
+              planned: [],
+              in_progress: [],
+              paused: [],
+              done: [{ provider: 'jira', source_type: 'issue', match: 'Done' }],
+              cancelled: []
+            },
+            delivery: {
+              sources: ['task_done'],
+              aggregation_mode: 'single',
+              dedup: { enabled: true, key_strategy: 'task_source_or_pr_or_release' }
+            }
+          }
+        }
+      } as any);
+
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          name: 'Draft policy',
+          config: {
+            state_mapping: {
+              backlog: [{ provider: 'jira', source_type: 'issue', match: 'To Do' }],
+              planned: [],
+              in_progress: [],
+              paused: [],
+              done: [{ provider: 'jira', source_type: 'issue', match: 'Done' }],
+              cancelled: []
+            },
+            delivery: {
+              sources: ['task_done'],
+              aggregation_mode: 'single'
+            }
+          }
+        }
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().data.status).toBe('draft');
+    });
+
+    it('400: body invalido', async () => {
+      const res = await app.inject({
+        method: 'PUT',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          name: 'x',
+          config: {}
+        }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
+    });
+  });
+
+  describe('GET /api/v1/insights/resource-groups/:group_id/calculation-policy/candidates', () => {
+    it('200: retorna candidatos de mapping para multiselect', async () => {
+      vi.mocked(policySvc.listCalculationPolicyMappingCandidatesForResourceGroup).mockResolvedValueOnce({
+        resource_group_id: GROUP_ID,
+        items: [
+          { provider: 'jira', source_type: 'task_status', match: 'todo' },
+          { provider: 'jira', source_type: 'task_status', match: 'in_progress' },
+          { provider: 'github', source_type: 'task_status', match: 'done' }
+        ],
+        defaults: {
+          task_statuses: ['backlog', 'todo', 'in_progress', 'review', 'done', 'cancelled']
+        }
+      } as any);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy/candidates`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.items).toHaveLength(3);
+      expect(res.json().data.defaults.task_statuses).toContain('done');
+    });
+
+    it('403: sem permissao', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy/candidates`,
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+    });
+
+    it('404: resource group inexistente', async () => {
+      vi.mocked(policySvc.listCalculationPolicyMappingCandidatesForResourceGroup).mockResolvedValueOnce(null);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy/candidates`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('POST /api/v1/insights/resource-groups/:group_id/calculation-policy/publish', () => {
+    it('200: publica draft', async () => {
+      vi.mocked(policySvc.publishDraftCalculationPolicy).mockResolvedValueOnce({
+        data: {
+          id: '22222222-2222-4222-8222-222222222222',
+          resource_group_id: GROUP_ID,
+          name: 'Draft policy',
+          status: 'active',
+          version: 4,
+          effective_from: '2026-06-08T11:30:00.000Z',
+          effective_to: null,
+          created_by: 'user-5',
+          updated_by: 'user-5',
+          created_at: '2026-06-08T11:00:00.000Z',
+          updated_at: '2026-06-08T11:30:00.000Z',
+          config: {
+            state_mapping: {},
+            delivery: {
+              sources: ['task_done'],
+              aggregation_mode: 'single'
+            }
+          }
+        }
+      } as any);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy/publish`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          draft_id: '22222222-2222-4222-8222-222222222222'
+        }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.status).toBe('active');
+    });
+
+    it('409: conflito com policy ativa', async () => {
+      vi.mocked(policySvc.publishDraftCalculationPolicy).mockResolvedValueOnce({
+        error: 'ACTIVE_POLICY_CONFLICT',
+        conflictPolicyId: '33333333-3333-4333-8333-333333333333'
+      } as any);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy/publish`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          draft_id: '22222222-2222-4222-8222-222222222222'
+        }
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.code).toBe('CONFLICT');
+    });
+  });
+
+  describe('GET /api/v1/insights/resource-groups/:group_id/calculation-policy/history', () => {
+    it('200: retorna historico', async () => {
+      vi.mocked(policySvc.listCalculationPolicyHistory).mockResolvedValueOnce({
+        resource_group_id: GROUP_ID,
+        items: [
+          {
+            id: '22222222-2222-4222-8222-222222222222',
+            resource_group_id: GROUP_ID,
+            name: 'Draft policy',
+            status: 'active',
+            version: 4,
+            effective_from: '2026-06-08T11:30:00.000Z',
+            effective_to: null,
+            created_by: 'user-5',
+            updated_by: 'user-5',
+            created_at: '2026-06-08T11:00:00.000Z',
+            updated_at: '2026-06-08T11:30:00.000Z'
+          }
+        ]
+      } as any);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy/history?limit=10`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.items).toHaveLength(1);
+    });
+
+    it('400: query invalida', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/resource-groups/${GROUP_ID}/calculation-policy/history?limit=1000`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
     });
   });
 });

@@ -28,6 +28,7 @@ model Tenant {
   resourceGroupResources ResourceGroupResource[]
   resourceGroupTeams   ResourceGroupTeam[]
   resourceGroupMetricSnapshots ResourceGroupMetricSnapshot[]
+  resourceGroupCalculationPolicies ResourceGroupCalculationPolicy[]
 }
 
 enum PlatformRole {
@@ -447,6 +448,12 @@ enum ResourceMetricType {
   health
 }
 
+enum ResourceGroupCalculationPolicyStatus {
+  draft
+  active
+  archived
+}
+
 model ResourceGroup {
   id          String        @id @default(uuid())
   tenantId    String
@@ -463,6 +470,7 @@ model ResourceGroup {
   resources   ResourceGroupResource[]
   teams       ResourceGroupTeam[]
   metricSnapshots ResourceGroupMetricSnapshot[]
+  calculationPolicies ResourceGroupCalculationPolicy[]
 
   @@unique([tenantId, key])
   @@index([tenantId])
@@ -523,6 +531,29 @@ model ResourceGroupMetricSnapshot {
 
   @@index([tenantId, resourceGroupId])
   @@index([metricType, periodKey])
+}
+
+model ResourceGroupCalculationPolicy {
+  id              String                               @id @default(uuid())
+  tenantId        String
+  resourceGroupId String?
+  name            String
+  status          ResourceGroupCalculationPolicyStatus @default(draft)
+  version         Int                                  @default(1)
+  effectiveFrom   DateTime?
+  effectiveTo     DateTime?
+  config          Json
+  createdBy       String
+  updatedBy       String
+  createdAt       DateTime                             @default(now())
+  updatedAt       DateTime                             @updatedAt
+
+  tenant          Tenant                               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  resourceGroup   ResourceGroup?                       @relation(fields: [resourceGroupId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, resourceGroupId, status])
+  @@index([tenantId, status, effectiveFrom, effectiveTo])
+  @@index([tenantId, resourceGroupId, version])
 }
 
 model ProjectSource {
