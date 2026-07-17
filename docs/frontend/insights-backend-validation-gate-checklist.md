@@ -1,4 +1,4 @@
-# Checklist de Validacao Backend - Insights por Resource Group
+# Checklist de Validacao Backend - Insights por Resource Group e Squad
 
 Data de criacao: 2026-06-05
 Status: aprovado para frontend e rollout
@@ -6,7 +6,12 @@ Owner sugerido: Backend + API Governance + Frontend Lead
 
 ## Objetivo
 
-Padronizar o gate de liberacao backend por sprint para o modulo de Insights por Resource Group.
+Padronizar o gate de liberacao backend por sprint para o modulo de Insights por Resource Group e Squad.
+
+Nota de escopo:
+
+1. O frontend e mantido em repositorio/time separado.
+2. Este documento cobre validacao backend, contrato OpenAPI e handoff para consumo no frontend.
 
 Regra principal:
 
@@ -135,11 +140,70 @@ Correcao obrigatoria se reprovado:
 
 ---
 
+## Sprint 6 - Gate de Liberacao (Contratos por Squad)
+
+Pre-condicao:
+
+- [x] Sprint C aprovada e sem pendencias abertas.
+
+Escopo esperado:
+
+1. GET /api/v1/insights/squads/:squad_id/scopes
+2. POST /api/v1/insights/squads/:squad_id/scopes
+3. POST /api/v1/insights/squads/:squad_id/scopes/:scope_id/publish
+4. GET /api/v1/insights/squads/:squad_id/classifiers
+5. POST /api/v1/insights/squads/:squad_id/classifiers
+6. POST /api/v1/insights/squads/:squad_id/classifiers/:classifier_id/publish
+7. GET /api/v1/insights/squads/:squad_id/formulas
+8. POST /api/v1/insights/squads/:squad_id/formulas
+9. POST /api/v1/insights/squads/:squad_id/formulas/:formula_id/publish
+10. POST /api/v1/insights/squads/:squad_id/formulas/simulate
+11. GET /api/v1/insights/squads/:squad_id/materialized
+12. GET /api/v1/insights/squads/:squad_id/materialized/:insight_id/explainability
+13. POST /api/v1/insights/squads/:squad_id/recompute
+14. GET /api/v1/insights/squads/:squad_id/recompute/:run_id
+15. Permissoes insights.policy.read/write/publish, insights.read e insights.recompute
+
+Checklist:
+
+- [x] Contratos de scopes/classifiers conferem com implementacao real.
+- [x] Contratos de formulas/materialized/recompute por squad conferem com implementacao real.
+- [x] Validacoes de params/query/body alinhadas com schemas (UUID, limites e enums).
+- [x] Erros 400/403/404 cobertos em testes de contrato para rotas de configuracao (scopes/classifiers).
+- [x] Fluxos de sucesso 200/201/202 cobertos para configuracao e operacao por squad.
+- [x] Tenant scoping confirmado no backend sem tenant_id vindo do cliente.
+- [x] Route bindings de autorizacao atualizados para os novos endpoints por squad.
+- [x] OpenAPI atualizado com endpoints e schemas de squad (scopes/classifiers/formulas/materialized/recompute).
+- [x] Evidencia de teste e build backend registrada (vitest + tsc).
+
+Evidencias desta sprint:
+
+- commit_revisado: n/a (workspace local)
+- openapi_revisado: docs/openapi/insights-v1.yaml@1.0.0
+- ambiente_validacao: local (apps/api)
+- resultado_testes: 59 testes passando (insights routes + services)
+- resultado_build: tsc -p tsconfig.json sem erros
+
+Decisao:
+
+- [x] Aprovado para frontend
+- [ ] Reprovado (com correcoes)
+
+Correcao obrigatoria se reprovado:
+
+- lista_de_divergencias:
+- plano_de_correcao:
+- novo_commit_validado:
+- nova_data_validacao:
+
+---
+
 ## Criterio final de encerramento do modulo
 
 - [x] Sprint A aprovada
 - [x] Sprint B aprovada
 - [x] Sprint C aprovada
+- [x] Sprint 6 aprovada
 - [x] Sem divergencia aberta entre handoff e implementacao
 - [x] Frontend validou parsing de payload real em todas as rotas
 

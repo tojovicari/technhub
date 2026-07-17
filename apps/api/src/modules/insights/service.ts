@@ -1,7 +1,8 @@
 import crypto from 'node:crypto';
-import type { Prisma } from '@prisma/client';
+import type { IntegrationProvider, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import type {
+  InsightsFieldCatalogQuery,
   InsightsCalculationPolicyConfig,
   InsightsBacklogQualityQuery,
   InsightsIncidentsQuery,
@@ -31,6 +32,31 @@ type PolicyAwareContext = {
     warnings: string[];
   };
   config: InsightsCalculationPolicyConfig | null;
+};
+
+type ObservedFieldCatalogItem = {
+  provider: IntegrationProvider;
+  entity_type: string;
+  fact_type: string;
+  attribute_name: string;
+  occurrence_count: number;
+  multivalue_count: number;
+  total_fact_count: number;
+  facts_with_attribute_count: number;
+  attribute_coverage_ratio: number;
+  group_coverage_ratio: number;
+  value_types: string[];
+  example_values: string[];
+};
+
+type ObservedFieldCatalogProviderSummary = {
+  provider: IntegrationProvider;
+  total_fact_count: number;
+  fact_type_count: number;
+  entity_type_count: number;
+  attribute_count: number;
+  fields_with_coverage: number;
+  coverage_ratio: number;
 };
 
 type DeliveryRuntimeConfig = {
@@ -63,6 +89,21 @@ function hashStateMapping(config: InsightsCalculationPolicyConfig | null) {
   if (!config) return 'legacy-default';
   const serialized = JSON.stringify(config.state_mapping);
   return `sha256:${crypto.createHash('sha256').update(serialized).digest('hex').slice(0, 16)}`;
+}
+
+function stringifyExampleValue(attribute: {
+  valueString: string | null;
+  valueNumber: number | null;
+  valueBoolean: boolean | null;
+  valueDatetime: Date | null;
+  valueJson: Prisma.JsonValue | null;
+}) {
+  if (attribute.valueString !== null) return attribute.valueString;
+  if (attribute.valueNumber !== null) return String(attribute.valueNumber);
+  if (attribute.valueBoolean !== null) return attribute.valueBoolean ? 'true' : 'false';
+  if (attribute.valueDatetime !== null) return attribute.valueDatetime.toISOString();
+  if (attribute.valueJson !== null) return JSON.stringify(attribute.valueJson);
+  return null;
 }
 
 function normalizeWeights(weights: Record<string, number> | undefined) {
@@ -1250,6 +1291,192 @@ export async function recomputeInsightsForResourceGroup(
     status: 'queued' as const,
     resource_group_id: context.group.id,
     submitted_at: submittedAt.toISOString()
+  };
+}
+
+export async function getObservedFieldCatalog(
+  tenantId: string,
+  query: InsightsFieldCatalogQuery
+): Promise<{
+  tenant_id: string;
+  filters: {
+    provider: IntegrationProvider | null;
+    entity_type: string | null;
+    fact_type: string | null;
+    limit: number;
+  };
+  items: ObservedFieldCatalogItem[];
+  provider_summary: ObservedFieldCatalogProviderSummary[];
+}> {
+  const factWhere = {
+    tenantId,
+    ...(query.provider ? { provider: query.provider } : {}),
+    ...(query.entity_type ? { sourceEntityType: query.entity_type } : {}),
+    ...(query.fact_type ? { factType: query.fact_type } : {})
+  };
+
+  const [attributes, facts] = await Promise.all([
+    prisma.canonicalFactAttribute.findMany({
+      where: {
+        tenantId,
+        ...(query.provider ? { fact: { provider: query.provider } } : {}),
+        ...(query.entity_type ? { fact: { sourceEntityType: query.entity_type } } : {}),
+        ...(query.fact_type ? { fact: { factType: query.fact_type } } : {})
+      },
+      select: {
+        factId: true,
+        attributeName: true,
+        valueType: true,
+        isMultivalue: true,
+        valueString: true,
+        valueNumber: true,
+        valueBoolean: true,
+        valueDatetime: true,
+        valueJson: true,
+        fact: {
+          select: {
+            provider: true,
+            sourceEntityType: true,
+            factType: true
+          }
+        }
+      },
+      orderBy: [
+        { fact: { provider: 'asc' } },
+        { fact: { sourceEntityType: 'asc' } },
+        { fact: { factType: 'asc' } },
+        { attributeName: 'asc' },
+        { createdAt: 'asc' }
+      ],
+      take: Math.max(1, query.limit) * 20
+    }),
+    prisma.canonicalFact.findMany({
+      where: factWhere,
+      select: {
+        id: true,
+        provider: true,
+        sourceEntityType: true,
+        factType: true
+      }
+    })
+  ]);
+
+  const totalFactsByGroup = new Map<string, number>();
+  const providerFactTypes = new Map<IntegrationProvider, Set<string>>();
+  const providerEntityTypes = new Map<IntegrationProvider, Set<string>>();
+  for (const fact of facts) {
+    const key = [fact.provider, fact.sourceEntityType, fact.factType].join('::');
+    totalFactsByGroup.set(key, (totalFactsByGroup.get(key) ?? 0) + 1);
+
+    const factTypes = providerFactTypes.get(fact.provider) ?? new Set<string>();
+    factTypes.add(fact.factType);
+    providerFactTypes.set(fact.provider, factTypes);
+
+    const entityTypes = providerEntityTypes.get(fact.provider) ?? new Set<string>();
+    entityTypes.add(fact.sourceEntityType);
+    providerEntityTypes.set(fact.provider, entityTypes);
+  }
+
+  const factIdsWithAttributesByAttribute = new Map<string, Set<string>>();
+  const providerFieldsWithCoverage = new Map<IntegrationProvider, Set<string>>();
+  for (const attribute of attributes) {
+    const key = [attribute.fact.provider, attribute.fact.sourceEntityType, attribute.fact.factType, attribute.attributeName].join('::');
+    const current = factIdsWithAttributesByAttribute.get(key) ?? new Set<string>();
+    current.add(attribute.factId);
+    factIdsWithAttributesByAttribute.set(key, current);
+
+    const providerFieldKey = [attribute.fact.sourceEntityType, attribute.fact.factType, attribute.attributeName].join('::');
+    const fieldsWithCoverage = providerFieldsWithCoverage.get(attribute.fact.provider) ?? new Set<string>();
+    fieldsWithCoverage.add(providerFieldKey);
+    providerFieldsWithCoverage.set(attribute.fact.provider, fieldsWithCoverage);
+  }
+
+  const catalog = new Map<string, ObservedFieldCatalogItem>();
+
+  for (const attribute of attributes) {
+    const key = [attribute.fact.provider, attribute.fact.sourceEntityType, attribute.fact.factType, attribute.attributeName].join('::');
+    const groupKey = [attribute.fact.provider, attribute.fact.sourceEntityType, attribute.fact.factType].join('::');
+    const totalFactCount = totalFactsByGroup.get(groupKey) ?? 0;
+    const factsWithAttributeCount = factIdsWithAttributesByAttribute.get(key)?.size ?? 0;
+    const current = catalog.get(key) ?? {
+      provider: attribute.fact.provider,
+      entity_type: attribute.fact.sourceEntityType,
+      fact_type: attribute.fact.factType,
+      attribute_name: attribute.attributeName,
+      occurrence_count: 0,
+      multivalue_count: 0,
+      total_fact_count: totalFactCount,
+      facts_with_attribute_count: factsWithAttributeCount,
+      attribute_coverage_ratio: totalFactCount === 0 ? 0 : 0,
+      group_coverage_ratio: totalFactCount === 0 ? 0 : factsWithAttributeCount / totalFactCount,
+      value_types: [],
+      example_values: []
+    };
+
+    current.occurrence_count += 1;
+    if (attribute.isMultivalue) current.multivalue_count += 1;
+    if (!current.value_types.includes(attribute.valueType)) current.value_types.push(attribute.valueType);
+
+    const exampleValue = stringifyExampleValue(attribute);
+    if (exampleValue && !current.example_values.includes(exampleValue)) {
+      current.example_values.push(exampleValue);
+    }
+
+    current.total_fact_count = totalFactCount;
+    current.facts_with_attribute_count = factsWithAttributeCount;
+    current.attribute_coverage_ratio = totalFactCount === 0 ? 0 : current.occurrence_count / totalFactCount;
+    current.group_coverage_ratio = totalFactCount === 0 ? 0 : factsWithAttributeCount / totalFactCount;
+
+    catalog.set(key, current);
+  }
+
+  const items = Array.from(catalog.values())
+    .sort((left, right) => {
+      if (right.occurrence_count !== left.occurrence_count) return right.occurrence_count - left.occurrence_count;
+      if (left.provider !== right.provider) return left.provider.localeCompare(right.provider);
+      if (left.entity_type !== right.entity_type) return left.entity_type.localeCompare(right.entity_type);
+      if (left.fact_type !== right.fact_type) return left.fact_type.localeCompare(right.fact_type);
+      return left.attribute_name.localeCompare(right.attribute_name);
+    })
+    .slice(0, query.limit)
+    .map((item) => ({
+      ...item,
+      value_types: item.value_types.sort(),
+      example_values: item.example_values.slice(0, 5)
+    }));
+
+  const provider_summary = Array.from(new Set(facts.map((fact) => fact.provider)))
+    .sort()
+    .map((provider) => {
+      const providerFacts = facts.filter((fact) => fact.provider === provider);
+      const providerKeys = new Set(providerFacts.map((fact) => [fact.sourceEntityType, fact.factType].join('::')));
+      const attributeKeys = attributes.filter((attribute) => attribute.fact.provider === provider)
+        .map((attribute) => [attribute.fact.sourceEntityType, attribute.fact.factType, attribute.attributeName].join('::'));
+      const totalFactCount = providerFacts.length;
+      const fieldsWithCoverage = providerFieldsWithCoverage.get(provider)?.size ?? 0;
+      const coverageRatio = totalFactCount === 0 ? 0 : fieldsWithCoverage / Math.max(1, providerKeys.size);
+
+      return {
+        provider,
+        total_fact_count: totalFactCount,
+        fact_type_count: providerFactTypes.get(provider)?.size ?? 0,
+        entity_type_count: providerEntityTypes.get(provider)?.size ?? 0,
+        attribute_count: new Set(attributeKeys).size,
+        fields_with_coverage: fieldsWithCoverage,
+        coverage_ratio: Number(coverageRatio.toFixed(2))
+      };
+    });
+
+  return {
+    tenant_id: tenantId,
+    filters: {
+      provider: query.provider ?? null,
+      entity_type: query.entity_type ?? null,
+      fact_type: query.fact_type ?? null,
+      limit: query.limit
+    },
+    items,
+    provider_summary
   };
 }
 

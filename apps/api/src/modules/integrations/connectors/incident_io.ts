@@ -1,5 +1,6 @@
 import { prisma } from '../../../lib/prisma.js';
 import type { IntegrationConnector, SyncInput, SyncResult, WebhookConfig } from './base.js';
+import { persistRawSyncObjects } from '../raw-objects.service.js';
 import {
   resolveFieldMapping,
   mapSeverityToPriority,
@@ -247,6 +248,17 @@ export class IncidentIoConnector implements IntegrationConnector {
     }
 
     const incidents = await client.paginate<IncidentIoIncident>('/v2/incidents', 'incidents', queryParams);
+
+    await persistRawSyncObjects({
+      tenantId: input.tenantId,
+      connectionId: input.connectionId,
+      provider: 'incident_io',
+      entityType: 'incident',
+      objects: incidents,
+      mode: input.mode,
+      getExternalId: (incident) => incident.id,
+      getOccurredAt: (incident) => incident.created_at,
+    });
 
     const synced = await upsertIncidentEvents(
       input.tenantId,

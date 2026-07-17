@@ -1,6 +1,8 @@
 import type { IntegrationProvider, Prisma, SecretStrategy } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
+import { dispatchCanonicalizationForSync } from '../insights/canonicalization.service.js';
 import { getConnector } from './connectors/registry.js';
+import { markRawSyncObjectsAsFailed, markRawSyncObjectsAsProcessed } from './raw-objects.service.js';
 import type { CreateConnectionInput, CreateSyncJobInput, RotateSecretInput } from './schema.js';
 
 function inferSecretStrategy(credentials?: unknown): SecretStrategy {
@@ -171,6 +173,17 @@ export async function createSyncJob(input: CreateSyncJobInput) {
     }
   });
 
+  const rawRun = await prisma.rawIngestionRun.create({
+    data: {
+      tenantId: input.tenant_id,
+      connectionId: input.connection_id,
+      provider: connection.provider,
+      mode: input.mode,
+      status: 'running',
+      startedAt: job.startedAt,
+    }
+  });
+
   try {
     // Resolve credentials and scope to pass into the connector
     const secret = await prisma.integrationSecret.findFirst({
@@ -202,15 +215,80 @@ export async function createSyncJob(input: CreateSyncJobInput) {
       }
     });
 
+    const ingestionStart = job.startedAt ?? new Date();
+
+    await prisma.rawIngestionRun.update({
+      where: { id: rawRun.id },
+      data: {
+        status: 'success',
+        finishedAt: updated.finishedAt,
+        objectsReceived: typeof result.synced_entities === 'number' ? result.synced_entities : 0,
+        objectsInserted: typeof result.synced_entities === 'number' ? result.synced_entities : 0,
+      }
+    });
+
+    await markRawSyncObjectsAsProcessed({
+      tenantId: input.tenant_id,
+      connectionId: input.connection_id,
+      provider: connection.provider,
+      sourceChannel: input.mode === 'full' ? 'sync_full' : 'sync_incremental',
+      ingestedAfter: ingestionStart,
+    });
+
+    let canonicalizationResult = { canonicalized: 0, skipped: 0, warnings: [] as string[] };
+    try {
+      canonicalizationResult = await dispatchCanonicalizationForSync({
+        tenantId: input.tenant_id,
+        connectionId: input.connection_id,
+        provider: connection.provider,
+        ingestedAfter: ingestionStart,
+      });
+    } catch (canonicalizationError) {
+      canonicalizationResult = {
+        canonicalized: 0,
+        skipped: 0,
+        warnings: [canonicalizationError instanceof Error ? canonicalizationError.message : 'Canonicalization error'],
+      };
+    }
+
+    await prisma.rawIngestionRun.update({
+      where: { id: rawRun.id },
+      data: {
+        metadata: canonicalizationResult,
+      }
+    });
+
     return updated;
   } catch (error) {
+    const errorSummary = error instanceof Error ? error.message : 'Unknown sync error';
+
     const updated = await prisma.integrationSyncJob.update({
       where: { id: job.id },
       data: {
         status: 'failed',
         finishedAt: new Date(),
-        errorSummary: error instanceof Error ? error.message : 'Unknown sync error'
+        errorSummary
       }
+    });
+
+    await prisma.rawIngestionRun.update({
+      where: { id: rawRun.id },
+      data: {
+        status: 'failed',
+        finishedAt: updated.finishedAt,
+        errorSummary,
+      }
+    });
+
+    const ingestionStart = job.startedAt ?? new Date();
+
+    await markRawSyncObjectsAsFailed({
+      tenantId: input.tenant_id,
+      connectionId: input.connection_id,
+      provider: connection.provider,
+      sourceChannel: input.mode === 'full' ? 'sync_full' : 'sync_incremental',
+      ingestedAfter: ingestionStart,
+      errorSummary,
     });
 
     return updated;

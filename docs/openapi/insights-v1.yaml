@@ -3,16 +3,16 @@ info:
   title: moasy.tech - Insights API
   version: "1.0.0"
   description: |
-    Sprint A, Sprint B e Sprint C do modulo de Insights por Resource Group.
+    Sprint A, Sprint B e Sprint C do modulo de Insights por Resource Group e Squad.
     Inclui overview operacional, insights de incidentes, confianca de planejamento, qualidade de backlog,
-    trends, freshness e recompute assíncrono.
+    trends, freshness, recompute assíncrono e contratos de configuração/consumo por squad.
 
 servers:
   - url: /api/v1
 
 tags:
   - name: Insights
-    description: Insights operacionais por Resource Group
+    description: Insights operacionais por Resource Group e Squad
 
 security:
   - BearerAuth: []
@@ -509,6 +509,294 @@ components:
           items:
             $ref: "#/components/schemas/CalculationPolicyHistoryItem"
 
+    SquadRef:
+      type: object
+      required: [id, key, name]
+      properties:
+        id: { type: string, format: uuid }
+        key: { type: string }
+        name: { type: string }
+
+    SquadScopeVersion:
+      type: object
+      required: [id, name, version, status, config, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        squad_id: { type: string, format: uuid }
+        name: { type: string }
+        version: { type: integer, minimum: 1 }
+        status: { type: string, enum: [draft, active, archived] }
+        config: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    SquadScopeList:
+      type: object
+      required: [squad, items]
+      properties:
+        squad:
+          $ref: "#/components/schemas/SquadRef"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SquadScopeVersion"
+
+    SquadClassifierVersion:
+      type: object
+      required:
+        [
+          id,
+          key,
+          applies_to_fact_type,
+          version,
+          status,
+          config,
+          created_at,
+          updated_at,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        squad_id: { type: string, format: uuid }
+        key: { type: string }
+        applies_to_fact_type: { type: string }
+        version: { type: integer, minimum: 1 }
+        status: { type: string, enum: [draft, active, archived] }
+        config: { type: object, additionalProperties: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    SquadClassifierList:
+      type: object
+      required: [squad, items]
+      properties:
+        squad:
+          $ref: "#/components/schemas/SquadRef"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SquadClassifierVersion"
+
+    MetricFormulaVersion:
+      type: object
+      required:
+        [
+          id,
+          key,
+          name,
+          status,
+          version,
+          unit,
+          window_days,
+          created_at,
+          updated_at,
+          config,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        squad_id: { type: string, format: uuid }
+        key: { type: string }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        status: { type: string, enum: [draft, active, archived] }
+        version: { type: integer, minimum: 1 }
+        unit: { type: string }
+        window_days: { type: integer, minimum: 1, maximum: 365 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        config: { type: object, additionalProperties: true }
+
+    MetricFormulaList:
+      type: object
+      required: [squad, items]
+      properties:
+        squad:
+          $ref: "#/components/schemas/SquadRef"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MetricFormulaVersion"
+
+    MetricFormulaSimulationResult:
+      type: object
+      required: [squad_id, window_start, window_end, sample_row_count, result]
+      properties:
+        squad_id: { type: string, format: uuid }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        sample_row_count: { type: integer, minimum: 0 }
+        result:
+          type: object
+          required: [key, name, unit, version, value]
+          properties:
+            key: { type: string }
+            name: { type: string }
+            unit: { type: string }
+            version: { type: integer, minimum: 1 }
+            value: { type: number }
+
+    MaterializedInsightItem:
+      type: object
+      required:
+        [
+          id,
+          metric_key,
+          metric_name,
+          formula_id,
+          formula_version,
+          value,
+          unit,
+          window_start,
+          window_end,
+          computed_at,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        metric_key: { type: string }
+        metric_name: { type: string }
+        formula_id: { type: string, format: uuid }
+        formula_version: { type: integer, minimum: 1 }
+        value: { type: number }
+        unit: { type: string }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        computed_at: { type: string, format: date-time }
+
+    MaterializedInsightList:
+      type: object
+      required: [squad, items]
+      properties:
+        squad:
+          $ref: "#/components/schemas/SquadRef"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MaterializedInsightItem"
+
+    MaterializedInsightExplainability:
+      type: object
+      required:
+        [
+          id,
+          squad_id,
+          metric_key,
+          metric_name,
+          formula,
+          value,
+          unit,
+          window_start,
+          window_end,
+          computed_at,
+          explanation,
+          source_summary,
+          run,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        squad_id: { type: string, format: uuid }
+        metric_key: { type: string }
+        metric_name: { type: string }
+        formula:
+          type: object
+          required: [id, key, name, version, config]
+          properties:
+            id: { type: string, format: uuid }
+            key: { type: string }
+            name: { type: string }
+            version: { type: integer, minimum: 1 }
+            config: { type: object, additionalProperties: true }
+        value: { type: number }
+        unit: { type: string }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        computed_at: { type: string, format: date-time }
+        explanation:
+          { type: object, additionalProperties: true, nullable: true }
+        source_summary:
+          { type: object, additionalProperties: true, nullable: true }
+        run:
+          anyOf:
+            - type: object
+              required:
+                [
+                  id,
+                  status,
+                  window_start,
+                  window_end,
+                  trigger_reason,
+                  started_at,
+                  finished_at,
+                  input_summary,
+                  result_summary,
+                ]
+              properties:
+                id: { type: string, format: uuid }
+                status:
+                  { type: string, enum: [queued, running, success, failed] }
+                window_start: { type: string, format: date-time }
+                window_end: { type: string, format: date-time }
+                trigger_reason: { type: string, nullable: true }
+                started_at: { type: string, format: date-time, nullable: true }
+                finished_at: { type: string, format: date-time, nullable: true }
+                input_summary:
+                  { type: object, additionalProperties: true, nullable: true }
+                result_summary:
+                  { type: object, additionalProperties: true, nullable: true }
+            - type: "null"
+
+    SquadRecomputeAccepted:
+      type: object
+      required:
+        [
+          squad_id,
+          window_start,
+          window_end,
+          run_id,
+          status,
+          materialized_count,
+          metric_keys,
+        ]
+      properties:
+        squad_id: { type: string, format: uuid }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        run_id: { type: string, format: uuid }
+        status: { type: string, enum: [success] }
+        materialized_count: { type: integer, minimum: 0 }
+        metric_keys:
+          type: array
+          items: { type: string }
+
+    SquadRecomputeRun:
+      type: object
+      required:
+        [
+          id,
+          squad_id,
+          status,
+          window_start,
+          window_end,
+          trigger_reason,
+          started_at,
+          finished_at,
+          input_summary,
+          result_summary,
+          error_summary,
+        ]
+      properties:
+        id: { type: string, format: uuid }
+        squad_id: { type: string, format: uuid }
+        status: { type: string, enum: [queued, running, success, failed] }
+        window_start: { type: string, format: date-time }
+        window_end: { type: string, format: date-time }
+        trigger_reason: { type: string, nullable: true }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+        input_summary:
+          { type: object, additionalProperties: true, nullable: true }
+        result_summary:
+          { type: object, additionalProperties: true, nullable: true }
+        error_summary: { type: string, nullable: true }
+
 paths:
   /insights/resource-groups/{group_id}/overview:
     get:
@@ -964,3 +1252,579 @@ paths:
         "401": { description: Nao autenticado }
         "403": { description: Sem permissao }
         "404": { description: Resource Group nao encontrado }
+
+  /insights/squads/{squad_id}/scopes:
+    get:
+      tags: [Insights]
+      summary: Lista versoes de escopo por squad
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.read
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [draft, active, archived] }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Lista de escopos retornada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/SquadScopeList"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Squad nao encontrado }
+
+    post:
+      tags: [Insights]
+      summary: Cria nova versao draft de escopo por squad
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.write
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, config]
+              properties:
+                name: { type: string, minLength: 3, maxLength: 120 }
+                config: { type: object, additionalProperties: true }
+      responses:
+        "201":
+          description: Draft de escopo criada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/SquadScopeVersion"
+        "400":
+          description: Body invalido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Squad nao encontrado }
+
+  /insights/squads/{squad_id}/scopes/{scope_id}/publish:
+    post:
+      tags: [Insights]
+      summary: Publica uma versao de escopo
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.publish
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: scope_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Escopo publicado com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/SquadScopeVersion"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Escopo ou Squad nao encontrado }
+
+  /insights/squads/{squad_id}/classifiers:
+    get:
+      tags: [Insights]
+      summary: Lista versoes de classificadores por squad
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.read
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [draft, active, archived] }
+        - name: key
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Lista de classificadores retornada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/SquadClassifierList"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Squad nao encontrado }
+
+    post:
+      tags: [Insights]
+      summary: Cria nova versao draft de classificador por squad
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.write
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, applies_to_fact_type, config]
+              properties:
+                key: { type: string, minLength: 1, maxLength: 64 }
+                applies_to_fact_type:
+                  { type: string, minLength: 1, maxLength: 64 }
+                config: { type: object, additionalProperties: true }
+      responses:
+        "201":
+          description: Draft de classificador criada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/SquadClassifierVersion"
+        "400":
+          description: Body invalido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Squad nao encontrado }
+
+  /insights/squads/{squad_id}/classifiers/{classifier_id}/publish:
+    post:
+      tags: [Insights]
+      summary: Publica uma versao de classificador
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.publish
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: classifier_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Classificador publicado com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/SquadClassifierVersion"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Classificador ou Squad nao encontrado }
+
+  /insights/squads/{squad_id}/formulas:
+    get:
+      tags: [Insights]
+      summary: Lista versoes de formulas por squad
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.read
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [draft, active, archived] }
+        - name: key
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Lista de formulas retornada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/MetricFormulaList"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Squad nao encontrado }
+
+    post:
+      tags: [Insights]
+      summary: Cria nova versao draft de formula por squad
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.write
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, name, unit, config]
+              properties:
+                key: { type: string, minLength: 1, maxLength: 64 }
+                name: { type: string, minLength: 3, maxLength: 120 }
+                description: { type: string, maxLength: 500 }
+                unit: { type: string, minLength: 1, maxLength: 32 }
+                window_days:
+                  { type: integer, minimum: 1, maximum: 365, default: 30 }
+                config: { type: object, additionalProperties: true }
+      responses:
+        "201":
+          description: Draft de formula criada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/MetricFormulaVersion"
+        "400":
+          description: Body invalido
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Squad nao encontrado }
+
+  /insights/squads/{squad_id}/formulas/{formula_id}/publish:
+    post:
+      tags: [Insights]
+      summary: Publica uma versao de formula
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.publish
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: formula_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [active], default: active }
+      responses:
+        "200":
+          description: Formula publicada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/MetricFormulaVersion"
+        "400":
+          description: Parametros ou body invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Formula ou Squad nao encontrado }
+
+  /insights/squads/{squad_id}/formulas/simulate:
+    post:
+      tags: [Insights]
+      summary: Simula formula sem persistir
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.policy.write
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, unit, config]
+              properties:
+                key:
+                  {
+                    type: string,
+                    minLength: 1,
+                    maxLength: 64,
+                    default: simulation,
+                  }
+                name: { type: string, minLength: 3, maxLength: 120 }
+                unit: { type: string, minLength: 1, maxLength: 32 }
+                window_days:
+                  { type: integer, minimum: 1, maximum: 365, default: 30 }
+                window_start: { type: string, format: date-time }
+                window_end: { type: string, format: date-time }
+                config: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: Simulacao retornada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/MetricFormulaSimulationResult"
+        "400":
+          description: Parametros ou body invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Squad nao encontrado }
+
+  /insights/squads/{squad_id}/materialized:
+    get:
+      tags: [Insights]
+      summary: Lista insights materializados por squad
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.read
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: metric_key
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 64 }
+        - name: window_start
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: window_end
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Lista materializada retornada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/MaterializedInsightList"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Squad nao encontrado }
+
+  /insights/squads/{squad_id}/materialized/{insight_id}/explainability:
+    get:
+      tags: [Insights]
+      summary: Retorna explainability de insight materializado
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.read
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: insight_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Explainability retornada com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/MaterializedInsightExplainability"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Insight materializado nao encontrado }
+
+  /insights/squads/{squad_id}/recompute:
+    post:
+      tags: [Insights]
+      summary: Dispara recompute de metricas por squad
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.recompute
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                window_days:
+                  { type: integer, minimum: 1, maximum: 365, default: 30 }
+                reason: { type: string, maxLength: 240 }
+      responses:
+        "202":
+          description: Recompute aceito
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/SquadRecomputeAccepted"
+        "400":
+          description: Parametros ou body invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Squad nao encontrado }
+
+  /insights/squads/{squad_id}/recompute/{run_id}:
+    get:
+      tags: [Insights]
+      summary: Consulta status de run de recompute por squad
+      security: [{ BearerAuth: [] }]
+      x-required-permission: insights.read
+      parameters:
+        - name: squad_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: run_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Status de run retornado com sucesso
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiResponse"
+                  - properties:
+                      data:
+                        $ref: "#/components/schemas/SquadRecomputeRun"
+        "400":
+          description: Parametros invalidos
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiError" }
+        "401": { description: Nao autenticado }
+        "403": { description: Sem permissao }
+        "404": { description: Run de recompute nao encontrada }

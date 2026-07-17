@@ -1,5 +1,7 @@
 import { prisma } from '../../../lib/prisma.js';
+import type { SyncMode } from '@prisma/client';
 import type { IntegrationConnector, SyncInput, SyncResult, WebhookConfig } from './base.js';
+import { persistRawSyncObjects } from '../raw-objects.service.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -148,6 +150,8 @@ async function syncUsers(client: JiraClient, tenantId: string): Promise<number> 
 async function syncProjects(
   client: JiraClient,
   tenantId: string,
+  connectionId: string,
+  mode: SyncMode,
   allowlist?: string[],
 ): Promise<Array<{ id: string; jiraKey: string }>> {
   type JiraProject = { id: string; key: string; name: string; projectTypeKey: string };
@@ -156,6 +160,16 @@ async function syncProjects(
   const filtered = allowlist
     ? projects.filter(p => allowlist.includes(p.key))
     : projects;
+
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'jira',
+    entityType: 'project',
+    objects: filtered,
+    mode,
+    getExternalId: (project) => project.key,
+  });
 
   const results: Array<{ id: string; jiraKey: string }> = [];
 
@@ -179,8 +193,10 @@ async function syncProjects(
 async function syncEpics(
   client: JiraClient,
   tenantId: string,
+  connectionId: string,
   projectKey: string,
   projectId: string,
+  mode: SyncMode,
 ): Promise<Map<string, string>> {
   // epicKey → internal epic id
   const epicMap = new Map<string, string>();
@@ -201,6 +217,16 @@ async function syncEpics(
     'issues',
     { jql: `project="${projectKey}" AND issuetype=Epic ORDER BY created ASC`, fields: 'summary,description,status,duedate,resolutiondate' },
   );
+
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'jira',
+    entityType: 'epic',
+    objects: epics,
+    mode,
+    getExternalId: (epic) => epic.key,
+  });
 
   for (const e of epics) {
     const statusCategory = e.fields.status.statusCategory.name;
@@ -239,6 +265,7 @@ async function syncIssues(
   projectId: string,
   epicMap: Map<string, string>,
   connectionId: string,
+  mode: SyncMode,
   typeMapping: Record<string, string> | undefined,
   since?: Date,
 ): Promise<number> {
@@ -271,6 +298,17 @@ async function syncIssues(
   const issues = await client.paginate<JiraIssue>('/search/jql', 'issues', {
     jql,
     fields: 'summary,description,issuetype,priority,status,assignee,reporter,customfield_10016,duedate,created,resolutiondate,customfield_10014,parent,labels,components',
+  });
+
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'jira',
+    entityType: 'issue',
+    objects: issues,
+    mode,
+    getExternalId: (issue) => issue.key,
+    getOccurredAt: (issue) => issue.fields.created,
   });
 
   for (const issue of issues) {
@@ -389,13 +427,13 @@ export class JiraConnector implements IntegrationConnector {
 
     counts.users += await syncUsers(client, input.tenantId);
 
-    const projects = await syncProjects(client, input.tenantId, scope?.project_keys);
+    const projects = await syncProjects(client, input.tenantId, input.connectionId, input.mode, scope?.project_keys);
     counts.projects += projects.length;
 
     for (const { id: projectId, jiraKey } of projects) {
-      const epicMap = await syncEpics(client, input.tenantId, jiraKey, projectId);
+      const epicMap = await syncEpics(client, input.tenantId, input.connectionId, jiraKey, projectId, input.mode);
       counts.epics += epicMap.size;
-      counts.issues += await syncIssues(client, input.tenantId, jiraKey, projectId, epicMap, input.connectionId, typeMapping, input.sinceDate);
+      counts.issues += await syncIssues(client, input.tenantId, jiraKey, projectId, epicMap, input.connectionId, input.mode, typeMapping, input.sinceDate);
     }
 
     return {

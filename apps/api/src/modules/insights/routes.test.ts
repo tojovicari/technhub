@@ -59,7 +59,8 @@ vi.mock('./service.js', () => ({
   getPlanningConfidenceByResourceGroup: vi.fn(),
   getBacklogQualityByResourceGroup: vi.fn(),
   getInsightTrendsByResourceGroup: vi.fn(),
-  recomputeInsightsForResourceGroup: vi.fn()
+  recomputeInsightsForResourceGroup: vi.fn(),
+  getObservedFieldCatalog: vi.fn()
 }));
 
 vi.mock('./policy.service.js', () => ({
@@ -70,9 +71,31 @@ vi.mock('./policy.service.js', () => ({
   listCalculationPolicyHistory: vi.fn()
 }));
 
+vi.mock('./metric-formula.service.js', () => ({
+  listMetricFormulasForSquad: vi.fn(),
+  createDraftMetricFormula: vi.fn(),
+  publishMetricFormula: vi.fn(),
+  simulateMetricFormula: vi.fn(),
+  listMaterializedInsightsForSquad: vi.fn(),
+  getMaterializedInsightExplainability: vi.fn(),
+  recomputeSquadMetrics: vi.fn(),
+  getMetricComputationRun: vi.fn()
+}));
+
+vi.mock('./squad-classification.service.js', () => ({
+  listSquadScopes: vi.fn(),
+  createDraftSquadScope: vi.fn(),
+  publishSquadScope: vi.fn(),
+  listSquadClassifiers: vi.fn(),
+  createDraftSquadClassifier: vi.fn(),
+  publishSquadClassifier: vi.fn()
+}));
+
 import { buildApp } from '../../app.js';
 import * as svc from './service.js';
 import * as policySvc from './policy.service.js';
+import * as formulaSvc from './metric-formula.service.js';
+import * as squadCfgSvc from './squad-classification.service.js';
 import type { FastifyInstance } from 'fastify';
 
 const TENANT = 'ten_test';
@@ -514,6 +537,64 @@ describe('Insights routes', () => {
     });
   });
 
+  describe('GET /api/v1/insights/field-catalog', () => {
+    it('200: retorna catalogo de campos observados', async () => {
+      vi.mocked(svc.getObservedFieldCatalog).mockResolvedValueOnce({
+        tenant_id: TENANT,
+        filters: {
+          provider: 'github',
+          entity_type: 'pull_request',
+          fact_type: 'pull_request',
+          limit: 50
+        },
+        items: [
+          {
+            provider: 'github',
+            entity_type: 'pull_request',
+            fact_type: 'pull_request',
+            attribute_name: 'title',
+            occurrence_count: 2,
+            multivalue_count: 0,
+            value_types: ['string'],
+            example_values: ['Fix release flow']
+          }
+        ]
+      } as any);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/insights/field-catalog?provider=github&entity_type=pull_request&fact_type=pull_request',
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.items).toHaveLength(1);
+      expect(res.json().data.items[0].attribute_name).toBe('title');
+    });
+
+    it('400: query invalida', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/insights/field-catalog?limit=999',
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
+    });
+
+    it('403: sem permissao', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/v1/insights/field-catalog',
+        headers: { authorization: `Bearer ${missingPermissionToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+    });
+  });
+
   describe('GET /api/v1/insights/resource-groups/:group_id/calculation-policy', () => {
     it('200: retorna policy ativa resolvida', async () => {
       vi.mocked(policySvc.getActiveCalculationPolicyForResourceGroup).mockResolvedValueOnce({
@@ -789,6 +870,536 @@ describe('Insights routes', () => {
 
       expect(res.statusCode).toBe(400);
       expect(res.json().error.code).toBe('BAD_REQUEST');
+    });
+  });
+
+  describe('Sprint 6 - squad formulas and materialized routes', () => {
+    const SQUAD_ID = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
+    const INSIGHT_ID = 'cccccccc-cccc-4ccc-cccc-cccccccccccc';
+    const RUN_ID = 'dddddddd-dddd-4ddd-dddd-dddddddddddd';
+
+    it('GET /formulas: retorna lista de formulas', async () => {
+      vi.mocked(formulaSvc.listMetricFormulasForSquad).mockResolvedValueOnce({
+        squad: { id: SQUAD_ID, key: 'payments', name: 'Payments' },
+        items: [
+          {
+            id: 'formula-1',
+            key: 'toil_rate',
+            name: 'Toil Rate',
+            description: null,
+            status: 'active',
+            version: 2,
+            unit: 'percent',
+            window_days: 30,
+            created_at: '2026-07-17T16:00:00.000Z',
+            updated_at: '2026-07-17T16:10:00.000Z',
+            config: { kind: 'ratio', source: 'classification_results' }
+          }
+        ]
+      } as any);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/formulas?status=active`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.items[0].key).toBe('toil_rate');
+    });
+
+    it('GET/POST /scopes e publish: gerencia versoes de escopo', async () => {
+      vi.mocked(squadCfgSvc.listSquadScopes).mockResolvedValueOnce({
+        squad: { id: SQUAD_ID, key: 'payments', name: 'Payments' },
+        items: [
+          {
+            id: 'scope-1',
+            name: 'Payments Scope',
+            version: 2,
+            status: 'active',
+            config: { providers: ['jira'], fact_types: ['work_item'] },
+            created_at: '2026-07-17T16:30:00.000Z',
+            updated_at: '2026-07-17T16:35:00.000Z'
+          }
+        ]
+      } as any);
+
+      let res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes?status=active`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.items[0].status).toBe('active');
+
+      vi.mocked(squadCfgSvc.createDraftSquadScope).mockResolvedValueOnce({
+        id: 'scope-2',
+        squad_id: SQUAD_ID,
+        name: 'Payments Scope v3',
+        version: 3,
+        status: 'draft',
+        config: { providers: ['jira', 'github'], fact_types: ['work_item'] },
+        created_at: '2026-07-17T16:40:00.000Z',
+        updated_at: '2026-07-17T16:40:00.000Z'
+      } as any);
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          name: 'Payments Scope v3',
+          config: { providers: ['jira', 'github'], fact_types: ['work_item'] }
+        }
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().data.version).toBe(3);
+
+      vi.mocked(squadCfgSvc.publishSquadScope).mockResolvedValueOnce({
+        id: 'eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee',
+        squad_id: SQUAD_ID,
+        name: 'Payments Scope v3',
+        version: 3,
+        status: 'active',
+        updated_at: '2026-07-17T16:45:00.000Z'
+      } as any);
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes/eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee/publish`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('GET/POST /classifiers e publish: gerencia versoes de classificador', async () => {
+      vi.mocked(squadCfgSvc.listSquadClassifiers).mockResolvedValueOnce({
+        squad: { id: SQUAD_ID, key: 'payments', name: 'Payments' },
+        items: [
+          {
+            id: 'classifier-1',
+            key: 'toil',
+            applies_to_fact_type: 'work_item',
+            version: 1,
+            status: 'active',
+            config: { rule: { any: [{ field: 'labels', operator: 'contains', value: 'ops-toil' }] } },
+            created_at: '2026-07-17T16:50:00.000Z',
+            updated_at: '2026-07-17T16:50:00.000Z'
+          }
+        ]
+      } as any);
+
+      let res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers?status=active`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.items[0].key).toBe('toil');
+
+      vi.mocked(squadCfgSvc.createDraftSquadClassifier).mockResolvedValueOnce({
+        id: 'classifier-2',
+        squad_id: SQUAD_ID,
+        key: 'toil',
+        applies_to_fact_type: 'work_item',
+        version: 2,
+        status: 'draft',
+        config: { rule: { any: [{ field: 'issue_type', operator: 'equals', value: 'Support' }] } },
+        created_at: '2026-07-17T16:55:00.000Z',
+        updated_at: '2026-07-17T16:55:00.000Z'
+      } as any);
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          key: 'toil',
+          applies_to_fact_type: 'work_item',
+          config: {
+            applies_to: ['work_item'],
+            rule: {
+              any: [{ field: 'issue_type', operator: 'equals', value: 'Support' }]
+            }
+          }
+        }
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().data.version).toBe(2);
+
+      vi.mocked(squadCfgSvc.publishSquadClassifier).mockResolvedValueOnce({
+        id: 'ffffffff-ffff-4fff-ffff-ffffffffffff',
+        squad_id: SQUAD_ID,
+        key: 'toil',
+        applies_to_fact_type: 'work_item',
+        version: 2,
+        status: 'active',
+        updated_at: '2026-07-17T16:56:00.000Z'
+      } as any);
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers/ffffffff-ffff-4fff-ffff-ffffffffffff/publish`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('scopes: valida 400, 403 e 404 nas rotas de configuracao', async () => {
+      let res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes?limit=999`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
+
+      res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes`,
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+
+      vi.mocked(squadCfgSvc.listSquadScopes).mockResolvedValueOnce(null);
+      res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('NOT_FOUND');
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: { name: 'x', config: {} }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes`,
+        headers: { authorization: `Bearer ${fullToken}` },
+        body: { name: 'Payments Scope', config: { providers: ['jira'] } }
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+
+      vi.mocked(squadCfgSvc.createDraftSquadScope).mockResolvedValueOnce(null);
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: { name: 'Payments Scope', config: { providers: ['jira'] } }
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('NOT_FOUND');
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes/scope-2/publish`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes/eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee/publish`,
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+
+      vi.mocked(squadCfgSvc.publishSquadScope).mockResolvedValueOnce(null);
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/scopes/eeeeeeee-eeee-4eee-eeee-eeeeeeeeeeee/publish`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('NOT_FOUND');
+    });
+
+    it('classifiers: valida 400, 403 e 404 nas rotas de configuracao', async () => {
+      let res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers?limit=999`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
+
+      res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers`,
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+
+      vi.mocked(squadCfgSvc.listSquadClassifiers).mockResolvedValueOnce(null);
+      res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('NOT_FOUND');
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          key: 'toil',
+          applies_to_fact_type: 'work_item',
+          config: { applies_to: ['work_item'] }
+        }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers`,
+        headers: { authorization: `Bearer ${fullToken}` },
+        body: {
+          key: 'toil',
+          applies_to_fact_type: 'work_item',
+          config: { applies_to: ['work_item'], rule: { any: [{ field: 'issue_type', operator: 'equals', value: 'Support' }] } }
+        }
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+
+      vi.mocked(squadCfgSvc.createDraftSquadClassifier).mockResolvedValueOnce(null);
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          key: 'toil',
+          applies_to_fact_type: 'work_item',
+          config: { applies_to: ['work_item'], rule: { any: [{ field: 'issue_type', operator: 'equals', value: 'Support' }] } }
+        }
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('NOT_FOUND');
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers/classifier-2/publish`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe('BAD_REQUEST');
+
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers/ffffffff-ffff-4fff-ffff-ffffffffffff/publish`,
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error.code).toBe('FORBIDDEN');
+
+      vi.mocked(squadCfgSvc.publishSquadClassifier).mockResolvedValueOnce(null);
+      res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/classifiers/ffffffff-ffff-4fff-ffff-ffffffffffff/publish`,
+        headers: { authorization: `Bearer ${policyToken}` }
+      });
+
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.code).toBe('NOT_FOUND');
+    });
+
+    it('POST /formulas: cria draft de formula', async () => {
+      vi.mocked(formulaSvc.createDraftMetricFormula).mockResolvedValueOnce({
+        id: 'formula-2',
+        squad_id: SQUAD_ID,
+        key: 'average_score',
+        name: 'Average Score',
+        description: null,
+        status: 'draft',
+        version: 1,
+        unit: 'score',
+        window_days: 30,
+        created_at: '2026-07-17T16:00:00.000Z',
+        updated_at: '2026-07-17T16:00:00.000Z',
+        config: { kind: 'average', source: 'classification_results', field: 'classification_score' }
+      } as any);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/formulas`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          key: 'average_score',
+          name: 'Average Score',
+          unit: 'score',
+          window_days: 30,
+          config: { kind: 'average', source: 'classification_results', field: 'classification_score' }
+        }
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json().data.status).toBe('draft');
+    });
+
+    it('POST /formulas/simulate: simula formula sem persistir', async () => {
+      vi.mocked(formulaSvc.simulateMetricFormula).mockResolvedValueOnce({
+        squad_id: SQUAD_ID,
+        window_start: '2026-07-01T00:00:00.000Z',
+        window_end: '2026-07-17T00:00:00.000Z',
+        sample_row_count: 42,
+        result: { key: 'toil_rate', name: 'Toil Rate', unit: 'percent', version: 1, value: 0.31 }
+      } as any);
+
+      const res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/formulas/simulate`,
+        headers: { authorization: `Bearer ${policyToken}` },
+        body: {
+          name: 'Toil Rate',
+          unit: 'percent',
+          config: {
+            kind: 'ratio',
+            source: 'classification_results',
+            numerator: { kind: 'count', source: 'classification_results' },
+            denominator: { kind: 'count', source: 'classification_results' }
+          }
+        }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.result.key).toBe('toil_rate');
+    });
+
+    it('GET /materialized e /explainability: retorna leitura materializada e explicabilidade', async () => {
+      vi.mocked(formulaSvc.listMaterializedInsightsForSquad).mockResolvedValueOnce({
+        squad: { id: SQUAD_ID, key: 'payments', name: 'Payments' },
+        items: [
+          {
+            id: INSIGHT_ID,
+            metric_key: 'toil_rate',
+            metric_name: 'Toil Rate',
+            formula_id: 'formula-1',
+            formula_version: 2,
+            value: 0.29,
+            unit: 'percent',
+            window_start: '2026-07-01T00:00:00.000Z',
+            window_end: '2026-07-17T00:00:00.000Z',
+            computed_at: '2026-07-17T16:20:00.000Z'
+          }
+        ]
+      } as any);
+
+      let res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/materialized?metric_key=toil_rate`,
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.items[0].id).toBe(INSIGHT_ID);
+
+      vi.mocked(formulaSvc.getMaterializedInsightExplainability).mockResolvedValueOnce({
+        id: INSIGHT_ID,
+        squad_id: SQUAD_ID,
+        metric_key: 'toil_rate',
+        metric_name: 'Toil Rate',
+        formula: { id: 'formula-1', key: 'toil_rate', name: 'Toil Rate', version: 2, config: {} },
+        value: 0.29,
+        unit: 'percent',
+        window_start: '2026-07-01T00:00:00.000Z',
+        window_end: '2026-07-17T00:00:00.000Z',
+        computed_at: '2026-07-17T16:20:00.000Z',
+        explanation: { numerator_value: 9, denominator_value: 31 },
+        source_summary: { row_count: 31 },
+        run: null
+      } as any);
+
+      res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/materialized/${INSIGHT_ID}/explainability`,
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.explanation.numerator_value).toBe(9);
+    });
+
+    it('POST /recompute e GET /recompute/:run_id: dispara e consulta status', async () => {
+      vi.mocked(formulaSvc.recomputeSquadMetrics).mockResolvedValueOnce({
+        squad_id: SQUAD_ID,
+        window_start: '2026-06-17T00:00:00.000Z',
+        window_end: '2026-07-17T00:00:00.000Z',
+        run_id: RUN_ID,
+        status: 'success',
+        materialized_count: 3,
+        metric_keys: ['toil_rate', 'average_score', 'work_item_volume']
+      } as any);
+
+      let res = await app.inject({
+        method: 'POST',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/recompute`,
+        headers: { authorization: `Bearer ${fullToken}` },
+        body: { window_days: 30, reason: 'manual_refresh' }
+      });
+
+      expect(res.statusCode).toBe(202);
+      expect(res.json().data.run_id).toBe(RUN_ID);
+
+      vi.mocked(formulaSvc.getMetricComputationRun).mockResolvedValueOnce({
+        id: RUN_ID,
+        squad_id: SQUAD_ID,
+        status: 'success',
+        window_start: '2026-06-17T00:00:00.000Z',
+        window_end: '2026-07-17T00:00:00.000Z',
+        trigger_reason: 'manual_refresh',
+        started_at: '2026-07-17T16:25:00.000Z',
+        finished_at: '2026-07-17T16:25:10.000Z',
+        input_summary: { formula_count: 3 },
+        result_summary: { metric_keys: ['toil_rate'] },
+        error_summary: null
+      } as any);
+
+      res = await app.inject({
+        method: 'GET',
+        url: `/api/v1/insights/squads/${SQUAD_ID}/recompute/${RUN_ID}`,
+        headers: { authorization: `Bearer ${fullToken}` }
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().data.status).toBe('success');
     });
   });
 });

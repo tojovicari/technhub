@@ -206,6 +206,30 @@ export async function integrationsRoutes(app: FastifyInstance) {
     return reply.status(202).send(ok(request, mapSyncJob(job)));
   });
 
+  app.post('/integrations/connections/:connection_id/sync', {
+    preHandler: [app.authenticate, app.requirePermission('integrations.sync.trigger')]
+  }, async (request, reply) => {
+    const { connection_id: connectionId } = request.params as { connection_id: string };
+    const tenantId = (request.user as { tenant_id: string }).tenant_id;
+    const connection = await getConnection(connectionId, tenantId);
+
+    if (!connection) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+
+    const job = await createSyncJob({
+      tenant_id: tenantId,
+      connection_id: connectionId,
+      mode: 'incremental'
+    });
+
+    if (!job) {
+      return reply.status(404).send(fail(request, 'NOT_FOUND', 'Connection not found'));
+    }
+
+    return reply.status(202).send(ok(request, mapSyncJob(job)));
+  });
+
   app.get('/integrations/sync-jobs/:job_id', {
     preHandler: [app.authenticate, app.requirePermission('integrations.sync.read')]
   }, async (request, reply) => {

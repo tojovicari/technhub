@@ -29,6 +29,20 @@ model Tenant {
   resourceGroupTeams   ResourceGroupTeam[]
   resourceGroupMetricSnapshots ResourceGroupMetricSnapshot[]
   resourceGroupCalculationPolicies ResourceGroupCalculationPolicy[]
+  rawObjects           RawObject[]
+  rawCheckpoints       RawCheckpoint[]
+  rawIngestionRuns     RawIngestionRun[]
+  canonicalFacts       CanonicalFact[]
+  canonicalFactAttributes CanonicalFactAttribute[]
+  canonicalFactRelations  CanonicalFactRelation[]
+  canonicalLineages    CanonicalLineage[]
+  squads               Squad[]
+  squadScopes          SquadScope[]
+  squadClassifiers     SquadClassifier[]
+  classificationResults ClassificationResult[]
+  metricFormulas       MetricFormula[]
+  metricComputationRuns MetricComputationRun[]
+  materializedInsights MaterializedInsight[]
 }
 
 enum PlatformRole {
@@ -233,6 +247,28 @@ enum WebhookEventStatus {
   failed
 }
 
+enum RawSourceChannel {
+  webhook
+  sync_full
+  sync_incremental
+  replay
+}
+
+enum RawProcessingStatus {
+  queued
+  processing
+  processed
+  failed
+  skipped
+}
+
+enum RawIngestionRunStatus {
+  queued
+  running
+  success
+  failed
+}
+
 // ── DORA metrics ──────────────────────────────────────────────────────────────
 
 enum DoraLevel {
@@ -357,6 +393,9 @@ model IntegrationConnection {
   webhookEvents       IntegrationWebhookEvent[]
   tasks               Task[]
   incidentEvents      IncidentEvent[]
+  rawObjects          RawObject[]
+  rawCheckpoints      RawCheckpoint[]
+  rawIngestionRuns    RawIngestionRun[]
 
   @@index([tenantId])
   @@index([provider])
@@ -471,6 +510,7 @@ model ResourceGroup {
   teams       ResourceGroupTeam[]
   metricSnapshots ResourceGroupMetricSnapshot[]
   calculationPolicies ResourceGroupCalculationPolicy[]
+  squads      Squad[]
 
   @@unique([tenantId, key])
   @@index([tenantId])
@@ -739,6 +779,372 @@ model IntegrationWebhookEvent {
   @@unique([provider, externalId])
   @@index([tenantId, status])
   @@index([provider, status])
+}
+
+model RawObject {
+  id               String              @id @default(uuid())
+  tenantId         String
+  connectionId     String?
+  provider         IntegrationProvider
+  entityType       String
+  externalId       String
+  parentExternalId String?
+  eventType        String?
+  sourceChannel    RawSourceChannel
+  payload          Json
+  payloadHash      String
+  occurredAt       DateTime?
+  ingestedAt       DateTime            @default(now())
+  firstSeenAt      DateTime            @default(now())
+  lastSeenAt       DateTime            @default(now())
+  processingStatus RawProcessingStatus @default(queued)
+  processingError  String?
+  schemaHint       String?
+  sequenceCursor   String?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection       IntegrationConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  canonicalLineages CanonicalLineage[]
+
+  @@unique([tenantId, provider, entityType, externalId, payloadHash])
+  @@index([tenantId, provider, entityType])
+  @@index([tenantId, connectionId, entityType])
+  @@index([tenantId, processingStatus, ingestedAt])
+}
+
+model RawCheckpoint {
+  id            String              @id @default(uuid())
+  tenantId      String
+  connectionId  String
+  provider      IntegrationProvider
+  entityType    String
+  cursorValue   String?
+  lastSuccessAt DateTime?
+  lastAttemptAt DateTime?
+  status        RawProcessingStatus @default(queued)
+  metadata      Json?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection    IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, connectionId, provider, entityType])
+  @@index([tenantId, provider, entityType])
+}
+
+model RawIngestionRun {
+  id                String                @id @default(uuid())
+  tenantId          String
+  connectionId      String
+  provider          IntegrationProvider
+  mode              SyncMode              @default(incremental)
+  status            RawIngestionRunStatus @default(queued)
+  startedAt         DateTime?
+  finishedAt        DateTime?
+  objectsReceived   Int                   @default(0)
+  objectsInserted   Int                   @default(0)
+  objectsDeduplicated Int                 @default(0)
+  errorSummary      String?
+  metadata          Json?
+  createdAt         DateTime              @default(now())
+
+  tenant            Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection        IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, provider, status])
+  @@index([tenantId, connectionId, createdAt])
+}
+
+model CanonicalFact {
+  id               String              @id @default(uuid())
+  tenantId         String
+  factType         String
+  factKey          String
+  provider         IntegrationProvider
+  sourceEntityType String
+  sourceExternalId String
+  occurredAt       DateTime?
+  validFrom        DateTime?
+  validTo          DateTime?
+  payload          Json
+  canonicalVersion Int                 @default(1)
+  transformVersion String
+  qualityScore     Float?
+  warnings         Json?
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  attributes       CanonicalFactAttribute[]
+  lineages         CanonicalLineage[]
+  relationsFrom    CanonicalFactRelation[] @relation("CanonicalFactRelationFrom")
+  relationsTo      CanonicalFactRelation[] @relation("CanonicalFactRelationTo")
+  classificationResults ClassificationResult[]
+
+  @@unique([tenantId, factType, factKey, canonicalVersion])
+  @@index([tenantId, factType, occurredAt])
+  @@index([provider, sourceEntityType])
+}
+
+model CanonicalFactAttribute {
+  id             String              @id @default(uuid())
+  tenantId       String
+  factId         String
+  attributeName  String
+  valueType      String
+  valueString    String?
+  valueNumber    Float?
+  valueBoolean   Boolean?
+  valueDatetime  DateTime?
+  valueJson      Json?
+  isMultivalue   Boolean             @default(false)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  tenant         Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fact           CanonicalFact       @relation(fields: [factId], references: [id], onDelete: Cascade)
+
+  @@index([factId, attributeName])
+  @@index([tenantId, attributeName, valueString])
+  @@index([tenantId, attributeName, valueNumber])
+}
+
+model CanonicalFactRelation {
+  id            String          @id @default(uuid())
+  tenantId      String
+  fromFactId    String
+  relationType  String
+  toFactId      String
+  metadata      Json?
+  createdAt     DateTime        @default(now())
+
+  tenant        Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fromFact      CanonicalFact   @relation("CanonicalFactRelationFrom", fields: [fromFactId], references: [id], onDelete: Cascade)
+  toFact        CanonicalFact   @relation("CanonicalFactRelationTo", fields: [toFactId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, relationType])
+  @@index([fromFactId])
+  @@index([toFactId])
+}
+
+model CanonicalLineage {
+  id               String              @id @default(uuid())
+  tenantId         String
+  rawObjectId      String              @unique
+  factId           String
+  transformVersion String
+  extractionPath   String?
+  createdAt        DateTime            @default(now())
+
+  tenant           Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rawObject        RawObject           @relation(fields: [rawObjectId], references: [id], onDelete: Cascade)
+  fact             CanonicalFact       @relation(fields: [factId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, rawObjectId])
+  @@index([tenantId, factId])
+}
+
+enum SquadStatus {
+  active
+  archived
+}
+
+enum SquadRuleStatus {
+  draft
+  active
+  archived
+}
+
+enum ClassificationResultStatus {
+  matched
+  skipped
+  failed
+}
+
+enum MetricFormulaStatus {
+  draft
+  active
+  archived
+}
+
+enum MetricComputationRunStatus {
+  queued
+  running
+  success
+  failed
+}
+
+model Squad {
+  id              String               @id @default(uuid())
+  tenantId        String
+  key             String
+  name            String
+  description     String?
+  status          SquadStatus          @default(active)
+  resourceGroupId String?
+  config          Json?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  tenant          Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  resourceGroup   ResourceGroup?       @relation(fields: [resourceGroupId], references: [id], onDelete: SetNull)
+  scopes          SquadScope[]
+  classifiers     SquadClassifier[]
+  classificationResults ClassificationResult[]
+  metricFormulas  MetricFormula[]
+  metricComputationRuns MetricComputationRun[]
+  materializedInsights MaterializedInsight[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+  @@index([resourceGroupId])
+}
+
+model SquadScope {
+  id          String         @id @default(uuid())
+  tenantId    String
+  squadId     String
+  version     Int            @default(1)
+  status      SquadRuleStatus @default(draft)
+  name        String
+  config      Json
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  squad       Squad          @relation(fields: [squadId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, squadId, version])
+  @@index([tenantId, squadId, status])
+}
+
+model SquadClassifier {
+  id                String          @id @default(uuid())
+  tenantId          String
+  squadId           String
+  version           Int             @default(1)
+  status            SquadRuleStatus @default(draft)
+  key               String
+  appliesToFactType String
+  config            Json
+  createdBy         String?
+  updatedBy         String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  squad             Squad           @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  classificationResults ClassificationResult[]
+
+  @@unique([tenantId, squadId, key, version])
+  @@index([tenantId, squadId, status])
+  @@index([tenantId, appliesToFactType])
+}
+
+model ClassificationResult {
+  id              String                   @id @default(uuid())
+  tenantId        String
+  squadId         String
+  classifierId    String?
+  resultKey       String
+  canonicalFactId  String
+  status          ClassificationResultStatus @default(matched)
+  score           Float?
+  payload         Json
+  explanation     Json?
+  classifiedAt    DateTime                 @default(now())
+  createdAt       DateTime                 @default(now())
+
+  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  squad           Squad                    @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  classifier      SquadClassifier?          @relation(fields: [classifierId], references: [id], onDelete: SetNull)
+  canonicalFact   CanonicalFact             @relation(fields: [canonicalFactId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, squadId, canonicalFactId, resultKey])
+  @@index([tenantId, squadId, status])
+  @@index([tenantId, canonicalFactId])
+}
+
+model MetricFormula {
+  id            String              @id @default(uuid())
+  tenantId      String
+  squadId       String
+  key           String
+  name          String
+  description   String?
+  status        MetricFormulaStatus @default(draft)
+  version       Int                 @default(1)
+  unit          String
+  windowDays    Int                 @default(30)
+  config        Json
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+
+  tenant        Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  squad         Squad               @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  materializedInsights MaterializedInsight[]
+
+  @@unique([tenantId, squadId, key, version])
+  @@index([tenantId, squadId, status])
+  @@index([tenantId, squadId, key])
+}
+
+model MetricComputationRun {
+  id              String                   @id @default(uuid())
+  tenantId        String
+  squadId         String
+  windowStart     DateTime
+  windowEnd       DateTime
+  status          MetricComputationRunStatus @default(queued)
+  triggeredBy     String?
+  triggerReason   String?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  inputSummary    Json?
+  resultSummary   Json?
+  errorSummary    String?
+  createdAt       DateTime                 @default(now())
+
+  tenant          Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  squad           Squad                    @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  materializedInsights MaterializedInsight[]
+
+  @@index([tenantId, squadId, status])
+  @@index([tenantId, squadId, windowStart, windowEnd])
+}
+
+model MaterializedInsight {
+  id              String           @id @default(uuid())
+  tenantId        String
+  squadId         String
+  formulaId       String
+  runId           String?
+  metricKey       String
+  metricName      String
+  formulaVersion  Int
+  windowStart     DateTime
+  windowEnd       DateTime
+  value           Float
+  unit            String
+  explanation     Json?
+  sourceSummary   Json?
+  computedAt      DateTime         @default(now())
+
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  squad           Squad            @relation(fields: [squadId], references: [id], onDelete: Cascade)
+  formula         MetricFormula     @relation(fields: [formulaId], references: [id], onDelete: Cascade)
+  run             MetricComputationRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, squadId, formulaId, windowStart, windowEnd])
+  @@index([tenantId, squadId, metricKey])
+  @@index([tenantId, squadId, computedAt])
 }
 
 // ── COGS Module ───────────────────────────────────────────────────────────────

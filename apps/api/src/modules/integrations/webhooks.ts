@@ -1,4 +1,4 @@
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { IntegrationConnection, IntegrationProvider, Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { getConnector } from './connectors/registry.js';
@@ -18,7 +18,46 @@ type EnqueueInput = {
   payload: unknown;
 };
 
+function hashPayload(payload: unknown): string {
+  const raw = JSON.stringify(payload ?? null);
+  return createHash('sha256').update(raw).digest('hex');
+}
+
+async function persistRawWebhookObject(input: EnqueueInput) {
+  const payloadHash = hashPayload(input.payload);
+
+  return prisma.rawObject.upsert({
+    where: {
+      tenantId_provider_entityType_externalId_payloadHash: {
+        tenantId: input.tenantId,
+        provider: input.provider,
+        entityType: input.eventType || 'unknown',
+        externalId: input.externalId,
+        payloadHash,
+      },
+    },
+    create: {
+      tenantId: input.tenantId,
+      provider: input.provider,
+      entityType: input.eventType || 'unknown',
+      externalId: input.externalId,
+      eventType: input.eventType || 'unknown',
+      sourceChannel: 'webhook',
+      payload: input.payload as Prisma.InputJsonValue,
+      payloadHash,
+      firstSeenAt: new Date(),
+      lastSeenAt: new Date(),
+      processingStatus: 'queued',
+    },
+    update: {
+      lastSeenAt: new Date(),
+    },
+  });
+}
+
 export async function enqueueWebhookEvent(input: EnqueueInput) {
+  await persistRawWebhookObject(input);
+
   const existing = await prisma.integrationWebhookEvent.findUnique({
     where: {
       provider_externalId: {

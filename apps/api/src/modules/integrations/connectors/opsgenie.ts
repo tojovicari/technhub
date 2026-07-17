@@ -1,5 +1,7 @@
+import type { SyncMode } from '@prisma/client';
 import { prisma } from '../../../lib/prisma.js';
 import type { IntegrationConnector, SyncInput, SyncResult, WebhookConfig } from './base.js';
+import { persistRawSyncObjects } from '../raw-objects.service.js';
 import {
   resolveFieldMapping,
   mapSeverityToPriority,
@@ -143,12 +145,23 @@ async function syncViaIncidentApi(
   tenantId: string,
   connectionId: string,
   mapping: ReturnType<typeof resolveFieldMapping>,
+  mode: SyncMode,
   sinceDate?: Date,
 ): Promise<number> {
   const params: Record<string, string | number> = { sort: 'createdAt', order: 'desc' };
   if (sinceDate) params['query'] = `createdAt > ${sinceDate.getTime()}`;
 
   const incidents = await client.paginateIncidents<OpsGenieIncident>('/v1/incidents', params);
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'opsgenie',
+    entityType: 'incident',
+    objects: incidents,
+    mode,
+    getExternalId: (incident) => incident.id,
+    getOccurredAt: (incident) => incident.createdAt,
+  });
   let count = 0;
 
   for (const incident of incidents) {
@@ -226,12 +239,23 @@ async function syncViaAlertApi(
   tenantId: string,
   connectionId: string,
   mapping: ReturnType<typeof resolveFieldMapping>,
+  mode: SyncMode,
   sinceDate?: Date,
 ): Promise<number> {
   const params: Record<string, string | number> = { sort: 'createdAt', order: 'desc' };
   if (sinceDate) params['query'] = `createdAt > ${sinceDate.getTime()}`;
 
   const alerts = await client.paginateAlerts<OpsGenieAlert>('/v2/alerts', params);
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'opsgenie',
+    entityType: 'alert',
+    objects: alerts,
+    mode,
+    getExternalId: (alert) => alert.id,
+    getOccurredAt: (alert) => alert.createdAt,
+  });
   let count = 0;
 
   for (const alert of alerts) {
@@ -334,8 +358,8 @@ export class OpsGenieConnector implements IntegrationConnector {
 
     const useIncidentApi = scope.use_incident_api ?? false;
     const synced = useIncidentApi
-      ? await syncViaIncidentApi(client, input.tenantId, input.connectionId, mapping, input.sinceDate)
-      : await syncViaAlertApi(client, input.tenantId, input.connectionId, mapping, input.sinceDate);
+      ? await syncViaIncidentApi(client, input.tenantId, input.connectionId, mapping, input.mode, input.sinceDate)
+      : await syncViaAlertApi(client, input.tenantId, input.connectionId, mapping, input.mode, input.sinceDate);
 
     return {
       provider: 'opsgenie',

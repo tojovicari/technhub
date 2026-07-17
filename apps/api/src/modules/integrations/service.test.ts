@@ -7,10 +7,15 @@ const mockPrisma = vi.hoisted(() => ({
   tenant: { upsert: vi.fn() },
   integrationConnection: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   integrationSecret: { create: vi.fn(), findFirst: vi.fn() },
-  integrationSyncJob: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() }
+  integrationSyncJob: { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
+  rawObject: { updateMany: vi.fn() },
+  rawIngestionRun: { create: vi.fn(), update: vi.fn() }
 }));
 
 vi.mock('../../lib/prisma.js', () => ({ prisma: mockPrisma }));
+vi.mock('../insights/canonicalization.service.js', () => ({
+  dispatchCanonicalizationForSync: vi.fn().mockResolvedValue({ canonicalized: 0, skipped: 0, warnings: [] })
+}));
 
 // Stub connectors so we don't need real credentials
 vi.mock('./connectors/jira.js', () => ({
@@ -169,6 +174,8 @@ describe('createSyncJob', () => {
   beforeEach(() => {
     mockPrisma.integrationSyncJob.create.mockResolvedValue(makeSyncJob());
     mockPrisma.integrationSyncJob.update.mockResolvedValue(makeSyncJob({ status: 'completed' }));
+    mockPrisma.rawIngestionRun.create.mockResolvedValue({ id: 'raw-run-1' });
+    mockPrisma.rawIngestionRun.update.mockResolvedValue({ id: 'raw-run-1' });
   });
 
   it('returns null when connection is not found', async () => {
@@ -198,6 +205,20 @@ describe('createSyncJob', () => {
         data: expect.objectContaining({ status: 'success' })
       })
     );
+  });
+
+  it('accepts a legacy sync entrypoint through the same orchestration path', async () => {
+    mockPrisma.integrationConnection.findFirst.mockResolvedValue(makeConnection({ provider: 'github' }));
+
+    const result = await createSyncJob({
+      tenant_id: 'ten_test',
+      connection_id: 'conn-1',
+      mode: 'incremental'
+    } as never);
+
+    expect(result).toBeTruthy();
+    expect(mockPrisma.rawIngestionRun.create).toHaveBeenCalled();
+    expect(mockPrisma.rawIngestionRun.update).toHaveBeenCalled();
   });
 });
 

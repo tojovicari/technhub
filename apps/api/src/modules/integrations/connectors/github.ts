@@ -1,7 +1,9 @@
 import { Octokit } from '@octokit/rest';
 import { createAppAuth } from '@octokit/auth-app';
+import type { SyncMode } from '@prisma/client';
 import { prisma } from '../../../lib/prisma.js';
 import type { IntegrationConnector, SyncInput, SyncResult, WebhookConfig } from './base.js';
+import { persistRawSyncObjects } from '../raw-objects.service.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -129,7 +131,9 @@ async function syncMembers(octokit: Octokit, tenantId: string, org: string): Pro
 async function syncRepos(
   octokit: Octokit,
   tenantId: string,
+  connectionId: string,
   org: string,
+  mode: SyncMode,
   authType: 'app' | 'token',
   allowlist?: string[],
 ): Promise<Array<{ id: string; repoName: string }>> {
@@ -165,6 +169,16 @@ async function syncRepos(
     ? allRepos.filter(r => allowlist.includes(r.name))
     : allRepos;
 
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'github',
+    entityType: 'repository',
+    objects: filtered,
+    mode,
+    getExternalId: (repo) => repo.full_name,
+  });
+
   const results: Array<{ id: string; repoName: string }> = [];
 
   for (const repo of filtered) {
@@ -196,15 +210,28 @@ async function syncRepos(
 async function syncMilestones(
   octokit: Octokit,
   tenantId: string,
+  connectionId: string,
   org: string,
   repoName: string,
   projectId: string,
+  mode: SyncMode,
 ): Promise<number> {
   const milestones = await octokit.paginate(octokit.issues.listMilestones, {
     owner: org,
     repo: repoName,
     state: 'all',
     per_page: 100,
+  });
+
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'github',
+    entityType: 'milestone',
+    objects: milestones,
+    mode,
+    getExternalId: (milestone) => `${org}/${repoName}#milestone#${milestone.number}`,
+    getOccurredAt: (milestone) => milestone.created_at,
   });
 
   for (const ms of milestones) {
@@ -242,6 +269,7 @@ async function syncIssues(
   repoName: string,
   projectId: string,
   connectionId: string,
+  mode: SyncMode,
   typeMapping: Record<string, string> | undefined,
   since?: string,
 ): Promise<number> {
@@ -255,6 +283,17 @@ async function syncIssues(
 
   // Filter out pull requests (GitHub issues API returns PRs too)
   const realIssues = issues.filter(i => !i.pull_request);
+
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'github',
+    entityType: 'issue',
+    objects: realIssues,
+    mode,
+    getExternalId: (issue) => `${org}/${repoName}#issue#${issue.number}`,
+    getOccurredAt: (issue) => issue.created_at,
+  });
 
   for (const issue of realIssues) {
     const sourceId = `${org}/${repoName}#issue#${issue.number}`;
@@ -330,6 +369,7 @@ async function syncPullRequests(
   repoName: string,
   projectId: string,
   connectionId: string,
+  mode: SyncMode,
   typeMapping: Record<string, string> | undefined,
   since?: string,
 ): Promise<number> {
@@ -345,6 +385,17 @@ async function syncPullRequests(
   const filtered = since
     ? prs.filter(pr => new Date(pr.updated_at) >= new Date(since))
     : prs;
+
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'github',
+    entityType: 'pull_request',
+    objects: filtered,
+    mode,
+    getExternalId: (pr) => `${org}/${repoName}#pr#${pr.number}`,
+    getOccurredAt: (pr) => pr.created_at,
+  });
 
   for (const pr of filtered) {
     const sourceId = `${org}/${repoName}#pr#${pr.number}`;
@@ -405,9 +456,11 @@ async function syncPullRequests(
 async function syncReleases(
   octokit: Octokit,
   tenantId: string,
+  connectionId: string,
   org: string,
   repoName: string,
   projectId: string,
+  mode: SyncMode,
   since?: string,
 ): Promise<number> {
   const releases = await octokit.paginate(octokit.repos.listReleases, {
@@ -419,6 +472,17 @@ async function syncReleases(
   const filtered = since
     ? releases.filter(r => r.published_at != null && new Date(r.published_at) >= new Date(since))
     : releases.filter(r => r.published_at != null);
+
+  await persistRawSyncObjects({
+    tenantId,
+    connectionId,
+    provider: 'github',
+    entityType: 'release',
+    objects: filtered,
+    mode,
+    getExternalId: (release) => release.node_id,
+    getOccurredAt: (release) => release.published_at,
+  });
 
   for (const release of filtered) {
     await prisma.deployEvent.upsert({
@@ -508,14 +572,14 @@ export class GithubConnector implements IntegrationConnector {
 
     counts.members += await syncMembers(octokit, input.tenantId, org);
 
-    const projects = await syncRepos(octokit, input.tenantId, org, creds.auth_type, scope.repos);
+    const projects = await syncRepos(octokit, input.tenantId, input.connectionId, org, input.mode, creds.auth_type, scope.repos);
     counts.repos += projects.length;
 
     for (const { id: projectId, repoName } of projects) {
-      counts.milestones += await syncMilestones(octokit, input.tenantId, org, repoName, projectId);
-      counts.issues += await syncIssues(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
-      counts.pull_requests += await syncPullRequests(octokit, input.tenantId, org, repoName, projectId, input.connectionId, typeMapping, since);
-      counts.releases += await syncReleases(octokit, input.tenantId, org, repoName, projectId, since);
+      counts.milestones += await syncMilestones(octokit, input.tenantId, input.connectionId, org, repoName, projectId, input.mode);
+      counts.issues += await syncIssues(octokit, input.tenantId, org, repoName, projectId, input.connectionId, input.mode, typeMapping, since);
+      counts.pull_requests += await syncPullRequests(octokit, input.tenantId, org, repoName, projectId, input.connectionId, input.mode, typeMapping, since);
+      counts.releases += await syncReleases(octokit, input.tenantId, input.connectionId, org, repoName, projectId, input.mode, since);
     }
 
     return {
