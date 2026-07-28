@@ -1,0 +1,41 @@
+app            = "cto-ai-api"
+primary_region = "gru"
+
+[env]
+  PORT                        = "3000"
+  NODE_ENV                    = "production"
+  FRONTEND_URL                = "https://app.moasy.tech"
+  PUBLIC_API_URL              = "https://cto-ai-api.fly.dev"
+  GITHUB_OAUTH_CALLBACK_URL   = "https://cto-ai-api.fly.dev/auth/github/callback"
+  AUTH_DEFAULT_LOGIN_PROVIDER = "github"
+  NOTIFICATION_EMAIL_PROVIDER = "resend"
+
+[deploy]
+  release_command = "npm run migrate"
+
+[http_service]
+  internal_port         = 3000
+  force_https           = true
+  auto_stop_machines    = true
+  auto_start_machines   = true
+  min_machines_running  = 0
+
+  [http_service.concurrency]
+    type       = "connections"
+    hard_limit = 500
+    soft_limit = 400
+
+[[vm]]
+  size   = "shared-cpu-1x"
+  memory = "512mb"
+
+[checks]
+  [checks.health]
+    grace_period  = "10s"
+    interval      = "15s"
+    method        = "GET"
+    path          = "/health"
+    port          = 3000
+    timeout       = "5s"
+    type          = "http"
+    restart_limit = 3
