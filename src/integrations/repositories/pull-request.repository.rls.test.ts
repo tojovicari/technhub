@@ -44,6 +44,7 @@ describe('RLS em canonical_pull_requests', () => {
       linesAdded: 1,
       linesDeleted: 0,
       commentsCount: 0,
+      changedFiles: [],
       firstCommitAt: null,
       openedAt: new Date(),
       mergedAt: null,

@@ -68,6 +68,11 @@ interface GitHubPullRequestDetail {
   readonly base: { readonly ref: string; readonly repo: { readonly full_name: string } };
 }
 
+/** Item da resposta de "List pull requests files" — só o caminho do arquivo interessa. */
+interface GitHubPullRequestFile {
+  readonly filename: string;
+}
+
 /**
  * Conector de Version Control para o GitHub (REST API v3 / Search API).
  *
@@ -303,8 +308,11 @@ export class GitHubProvider extends BaseProvider {
       }
 
       try {
-        const detail = await this.fetchPullRequestDetail(item, headers);
-        pullRequests.push(this.mapToCanonicalPullRequest(detail, tenantId));
+        const [detail, changedFiles] = await Promise.all([
+          this.fetchPullRequestDetail(item, headers),
+          this.fetchPullRequestFiles(item, headers),
+        ]);
+        pullRequests.push(this.mapToCanonicalPullRequest(detail, changedFiles, tenantId));
 
         if (detail.user) {
           const identity = this.mapToDiscoveredIdentity(detail.user, tenantId);
@@ -405,8 +413,31 @@ export class GitHubProvider extends BaseProvider {
     return (await response.json()) as GitHubPullRequestDetail;
   }
 
+  /**
+   * Arquivos tocados pelo PR — alimenta a detecção de Retrabalho/Code Churn
+   * (`TeamProfileService`, `ReworkRateMetric`). Só a primeira página
+   * (`per_page=100`, o máximo da API) — PRs com mais arquivos que isso
+   * perdem cobertura nos excedentes, mesma limitação de "só primeira
+   * página" já aceita pro changelog do Jira/Linear.
+   */
+  private async fetchPullRequestFiles(
+    item: GitHubSearchIssueItem,
+    headers: Record<string, string>,
+  ): Promise<readonly string[]> {
+    const filesUrl = `${item.repository_url}/pulls/${item.number}/files?per_page=100`;
+    const response = await fetch(filesUrl, { headers });
+
+    if (!response.ok) {
+      throw new Error(`GET ${filesUrl} retornou ${response.status} ${response.statusText}.`);
+    }
+
+    const files = (await response.json()) as readonly GitHubPullRequestFile[];
+    return files.map((file) => file.filename);
+  }
+
   private mapToCanonicalPullRequest(
     detail: GitHubPullRequestDetail,
+    changedFiles: readonly string[],
     tenantId: string,
   ): CanonicalPullRequest {
     const state: CanonicalPullRequestState = detail.merged_at
@@ -429,6 +460,7 @@ export class GitHubProvider extends BaseProvider {
       linesAdded: detail.additions,
       linesDeleted: detail.deletions,
       commentsCount: detail.comments + detail.review_comments,
+      changedFiles,
       // Requer uma chamada adicional a /pulls/{n}/commits; não coletado nesta versão.
       firstCommitAt: null,
       openedAt: new Date(detail.created_at),

@@ -23,12 +23,21 @@ export interface UnavailableMetric {
   readonly reason: string;
 }
 
+export interface AvailableChangeFailureRateMetric {
+  readonly available: true;
+  readonly totalDeployments: number;
+  readonly failedDeployments: number;
+  /** Fração (0-1), não percentual — mesma convenção de `DeploymentSuccessRateMetric`/`ContributionConcentrationMetric`. */
+  readonly rate: number;
+  readonly scope?: MetricScope;
+}
+
 export interface DoraMetrics {
   readonly period: { readonly from: string; readonly to: string };
   readonly deploymentFrequency: DeploymentFrequencyMetric;
   readonly leadTimeForChanges: AvailableDurationMetric | UnavailableMetric;
   readonly meanTimeToRestore: AvailableDurationMetric | UnavailableMetric;
-  readonly changeFailureRate: UnavailableMetric;
+  readonly changeFailureRate: AvailableChangeFailureRateMetric | UnavailableMetric;
 }
 
 export interface FlowDistributionEntry {
@@ -67,8 +76,19 @@ export interface FlowMetrics {
  */
 const CHANGE_FAILURE_RATE_UNAVAILABLE: UnavailableMetric = {
   available: false,
-  reason: 'Requer correlação deploy→incidente causador, ainda não implementada.',
+  reason: 'Nenhum deploy de produção bem-sucedido neste período.',
 };
+
+/**
+ * Janela de correlação deploy→incidente pro Change Failure Rate: um
+ * incidente conta como "causado por" um deploy se disparar dentro dessa
+ * janela depois do deploy terminar, no mesmo time. Sem link explícito nos
+ * dados (nem GitHub Actions nem Waroom expõem isso) — é sempre inferido por
+ * proximidade de tempo. 1h é o valor confirmado com o usuário: rigoroso o
+ * bastante pra não correlacionar coisas não relacionadas, mesmo sabendo que
+ * subestima falhas que demoram mais que isso pra se manifestar.
+ */
+const CHANGE_FAILURE_RATE_WINDOW = "INTERVAL '1 hour'";
 
 const CYCLE_TIME_UNAVAILABLE: UnavailableMetric = {
   available: false,
@@ -96,10 +116,11 @@ export class DashboardService {
 
   async getDoraMetrics(tenantId: string, from: Date, to: Date, teamId?: string): Promise<DoraMetrics> {
     return withTenantContext(this.pool, tenantId, async (client) => {
-      const [deploymentFrequency, leadTimeForChanges, meanTimeToRestore] = await Promise.all([
+      const [deploymentFrequency, leadTimeForChanges, meanTimeToRestore, changeFailureRate] = await Promise.all([
         this.queryDeploymentFrequency(client, from, to, teamId),
         this.queryLeadTime(client, from, to, teamId),
         this.queryMeanTimeToRestore(client, from, to, teamId),
+        this.queryChangeFailureRate(client, from, to, teamId),
       ]);
 
       return {
@@ -107,7 +128,7 @@ export class DashboardService {
         deploymentFrequency,
         leadTimeForChanges,
         meanTimeToRestore,
-        changeFailureRate: CHANGE_FAILURE_RATE_UNAVAILABLE,
+        changeFailureRate,
       };
     });
   }
@@ -251,6 +272,60 @@ export class DashboardService {
       available: true,
       avgHours: row.avg_hours !== null ? Number(row.avg_hours) : null,
       sampleSize: Number(row.sample_size),
+      ...(teamId ? { scope: 'team' as const } : {}),
+    };
+  }
+
+  /**
+   * Sem link explícito entre deploy e incidente em lugar nenhum dos dados
+   * (nem GitHub Actions nem Waroom expõem isso) — correlação é sempre por
+   * proximidade de tempo + mesmo time: um deploy `SUCCESS`/`PRODUCTION`
+   * "causou falha" se existe um incidente `COUNTS_AS_FAILURE` (campo já
+   * calculado por `evaluateIncidentSeverity`, antes não consumido por
+   * nenhuma métrica) do mesmo time, disparado dentro de
+   * `CHANGE_FAILURE_RATE_WINDOW` depois do deploy terminar. Mesmo padrão de
+   * `queryDeploymentFrequency`: `team_id` direto em `enriched_deployments`/
+   * `enriched_incidents`, sem `team_resource_links` (ambos já passam pela
+   * Enriched Layer, diferente de PRs).
+   */
+  private async queryChangeFailureRate(
+    client: PoolClient,
+    from: Date,
+    to: Date,
+    teamId: string | undefined,
+  ): Promise<AvailableChangeFailureRateMetric | UnavailableMetric> {
+    const result = await client.query<{ total_deployments: string; failed_deployments: string }>(
+      `SELECT
+         count(*) AS total_deployments,
+         count(*) FILTER (WHERE EXISTS (
+           SELECT 1 FROM canonical_incidents ci
+           JOIN enriched_incidents ei ON ei.id = ci.id
+           WHERE ei.failure_classification = 'COUNTS_AS_FAILURE'
+             AND ei.team_id = ed.team_id
+             AND ci.triggered_at BETWEEN cd.finished_at AND cd.finished_at + ${CHANGE_FAILURE_RATE_WINDOW}
+         )) AS failed_deployments
+       FROM canonical_deployments cd
+       JOIN enriched_deployments ed ON ed.id = cd.id
+       WHERE ed.semantic_environment = 'PRODUCTION'
+         AND cd.status = 'SUCCESS'
+         AND cd.finished_at IS NOT NULL
+         AND cd.started_at BETWEEN $1 AND $2
+         ${teamId ? 'AND ed.team_id = $3' : ''}`,
+      teamId ? [from, to, teamId] : [from, to],
+    );
+
+    const totalDeployments = Number(result.rows[0].total_deployments);
+    if (totalDeployments === 0) {
+      return CHANGE_FAILURE_RATE_UNAVAILABLE;
+    }
+
+    const failedDeployments = Number(result.rows[0].failed_deployments);
+
+    return {
+      available: true,
+      totalDeployments,
+      failedDeployments,
+      rate: failedDeployments / totalDeployments,
       ...(teamId ? { scope: 'team' as const } : {}),
     };
   }

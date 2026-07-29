@@ -28,6 +28,35 @@ export interface ContributionConcentrationMetric {
   readonly sampleSize: number;
 }
 
+/**
+ * Horas em cards `TOIL` concluídos no mês corrente / capacidade mensal do
+ * time. Escopado ao mês corrente (não `from`/`to` arbitrário) porque
+ * capacidade é inerentemente mensal (`default_monthly_capacity_hours`) —
+ * um período arbitrário exigiria prorratear a capacidade, mais uma fonte de
+ * imprecisão sem necessidade.
+ */
+export interface ToilRatioMetric {
+  readonly available: true;
+  readonly toilHours: number;
+  readonly capacityHours: number;
+  readonly ratio: number;
+}
+
+/**
+ * % de código "reescrito" — soma de `lines_added` de PRs mergeados cujos
+ * arquivos foram tocados de novo por outro PR do mesmo repositório,
+ * mergeado depois, dentro de `CODE_CHURN_WINDOW_DAYS`. Sem período: mesmo
+ * espírito cumulativo/all-time de `deploymentSuccessRate`/
+ * `pullRequestReviewHealth`/`contributionConcentration`, os outros 3
+ * operacionais baseados em PR desta mesma tabela.
+ */
+export interface ReworkRateMetric {
+  readonly available: true;
+  readonly totalLinesAdded: number;
+  readonly churnedLinesAdded: number;
+  readonly rate: number;
+}
+
 export interface TeamProfile {
   readonly team: Team;
   readonly roster: readonly TeamMembershipWithUser[];
@@ -40,6 +69,8 @@ export interface TeamProfile {
     readonly workItems: ContributionConcentrationMetric | UnavailableMetric;
     readonly pullRequests: ContributionConcentrationMetric | UnavailableMetric;
   };
+  readonly toilRatio: ToilRatioMetric | UnavailableMetric;
+  readonly reworkRate: ReworkRateMetric | UnavailableMetric;
 }
 
 const DEPLOYMENT_SUCCESS_RATE_UNAVAILABLE: UnavailableMetric = {
@@ -65,6 +96,24 @@ function pullRequestConcentrationUnavailable(): UnavailableMetric {
     reason: 'Nenhum PR mergeado com autor resolvido de repositório vinculado a este time ainda.',
   };
 }
+
+const TOIL_RATIO_UNAVAILABLE: UnavailableMetric = {
+  available: false,
+  reason: 'Time sem capacidade configurada (nenhum membro no roster).',
+};
+
+const REWORK_RATE_UNAVAILABLE: UnavailableMetric = {
+  available: false,
+  reason: 'Nenhum PR mergeado com linhas adicionadas de repositório vinculado a este time ainda.',
+};
+
+/**
+ * Janela pra considerar um PR posterior como "reescrita" de um PR anterior
+ * (mesmo arquivo tocado de novo). Valor do meio do range usado por
+ * ferramentas do mercado (LinearB/Swarmia, tipicamente 7-21 dias) — não
+ * confirmado com o usuário, fácil de ajustar aqui se não fizer sentido.
+ */
+const CODE_CHURN_WINDOW_DAYS = 14;
 
 export interface TeamProfileHistoryPoint {
   readonly date: string;
@@ -152,8 +201,17 @@ export class TeamProfileService {
       this.queryAggregates(tenantId, teamId),
     ]);
 
-    const { wipCount, distribution, incidentsBySeverity, deploymentSuccessRate, pullRequestReviewHealth, workItemConcentration, pullRequestConcentration } =
-      aggregates;
+    const {
+      wipCount,
+      distribution,
+      incidentsBySeverity,
+      deploymentSuccessRate,
+      pullRequestReviewHealth,
+      workItemConcentration,
+      pullRequestConcentration,
+      toilHours,
+      reworkRate,
+    } = aggregates;
 
     return {
       team,
@@ -167,7 +225,37 @@ export class TeamProfileService {
         workItems: workItemConcentration,
         pullRequests: pullRequestConcentration,
       },
+      toilRatio: this.computeToilRatio(team, roster, toilHours),
+      reworkRate,
     };
+  }
+
+  /**
+   * Capacidade somada em TypeScript, não SQL — mesmo racional já
+   * documentado em `getProfileHistory`: volume de roster (dezenas de
+   * pessoas) não justifica mover isso pro banco. Cada membro usa a própria
+   * capacidade customizada quando definida, senão a default do time,
+   * escalada pelo % de alocação.
+   */
+  private computeToilRatio(
+    team: Team,
+    roster: readonly TeamMembershipWithUser[],
+    toilHours: number,
+  ): ToilRatioMetric | UnavailableMetric {
+    if (roster.length === 0) {
+      return TOIL_RATIO_UNAVAILABLE;
+    }
+
+    const capacityHours = roster.reduce((sum, { membership }) => {
+      const baseHours = membership.customMonthlyCapacityHours ?? team.defaultMonthlyCapacityHours;
+      return sum + baseHours * (membership.capacityAllocationPercent / 100);
+    }, 0);
+
+    if (capacityHours === 0) {
+      return TOIL_RATIO_UNAVAILABLE;
+    }
+
+    return { available: true, toilHours, capacityHours, ratio: toilHours / capacityHours };
   }
 
   private async queryAggregates(
@@ -181,10 +269,21 @@ export class TeamProfileService {
     readonly pullRequestReviewHealth: PullRequestReviewHealthMetric | UnavailableMetric;
     readonly workItemConcentration: ContributionConcentrationMetric | UnavailableMetric;
     readonly pullRequestConcentration: ContributionConcentrationMetric | UnavailableMetric;
+    readonly toilHours: number;
+    readonly reworkRate: ReworkRateMetric | UnavailableMetric;
   }> {
     return withTenantContext(this.pool, tenantId, async (client) => {
-      const [wipCount, distribution, incidentsBySeverity, deploymentSuccessRate, pullRequestReviewHealth, workItemConcentration, pullRequestConcentration] =
-        await Promise.all([
+      const [
+        wipCount,
+        distribution,
+        incidentsBySeverity,
+        deploymentSuccessRate,
+        pullRequestReviewHealth,
+        workItemConcentration,
+        pullRequestConcentration,
+        toilHours,
+        reworkRate,
+      ] = await Promise.all([
           client
             .query<{ count: string }>(
               `SELECT count(*) AS count FROM enriched_work_items WHERE team_id = $1 AND semantic_state = 'IN_PROGRESS'`,
@@ -297,6 +396,50 @@ export class TeamProfileService {
 
               return { available: true, topContributorShare: counts[0] / sampleSize, sampleSize };
             }),
+          client
+            .query<{ toil_hours: string | null }>(
+              `SELECT SUM(EXTRACT(EPOCH FROM (completed_at - started_working_at)) / 3600) AS toil_hours
+               FROM enriched_work_items
+               WHERE team_id = $1
+                 AND semantic_category = 'TOIL'
+                 AND started_working_at IS NOT NULL
+                 AND completed_at >= date_trunc('month', NOW())`,
+              [teamId],
+            )
+            .then((result) => (result.rows[0].toil_hours !== null ? Number(result.rows[0].toil_hours) : 0)),
+          client
+            .query<{ total_lines: string | null; churned_lines: string | null }>(
+              `WITH merged_prs AS (
+                 SELECT cpr.repository, cpr.changed_files, cpr.lines_added, cpr.merged_at
+                 FROM canonical_pull_requests cpr
+                 JOIN team_resource_links trl
+                   ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+                 WHERE trl.team_id = $1 AND cpr.state = 'MERGED' AND cpr.merged_at IS NOT NULL
+               )
+               SELECT
+                 SUM(mp.lines_added) AS total_lines,
+                 SUM(mp.lines_added) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM canonical_pull_requests later
+                   WHERE later.repository = mp.repository
+                     AND later.state = 'MERGED'
+                     AND later.merged_at > mp.merged_at
+                     AND later.merged_at <= mp.merged_at + (${CODE_CHURN_WINDOW_DAYS} || ' days')::interval
+                     AND later.changed_files && mp.changed_files
+                 )) AS churned_lines
+               FROM merged_prs mp`,
+              [teamId],
+            )
+            .then((result): ReworkRateMetric | UnavailableMetric => {
+              const totalLinesAdded = Number(result.rows[0].total_lines ?? 0);
+
+              if (totalLinesAdded === 0) {
+                return REWORK_RATE_UNAVAILABLE;
+              }
+
+              const churnedLinesAdded = Number(result.rows[0].churned_lines ?? 0);
+
+              return { available: true, totalLinesAdded, churnedLinesAdded, rate: churnedLinesAdded / totalLinesAdded };
+            }),
         ]);
 
       return {
@@ -307,6 +450,8 @@ export class TeamProfileService {
         pullRequestReviewHealth,
         workItemConcentration,
         pullRequestConcentration,
+        toilHours,
+        reworkRate,
       };
     });
   }

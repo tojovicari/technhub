@@ -195,6 +195,13 @@ export interface CanonicalPullRequest {
   readonly linesAdded: number;
   readonly linesDeleted: number;
   readonly commentsCount: number;
+  /**
+   * Caminhos dos arquivos tocados pelo PR — alimenta a detecção de
+   * Retrabalho/Code Churn (arquivo tocado de novo por um PR posterior).
+   * Só a primeira página da API (até 100 arquivos) — PRs maiores que isso
+   * perdem cobertura nos excedentes, limitação conhecida.
+   */
+  readonly changedFiles: readonly string[];
   /** Timestamp do primeiro commit, usado como possível marco de Lead Time. */
   readonly firstCommitAt?: Date | null;
   readonly openedAt: Date;

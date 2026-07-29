@@ -6,14 +6,14 @@ const UPSERT_SQL = `
   INSERT INTO canonical_pull_requests (
     tenant_id, provider, external_id, repository, title, state,
     author_external_id, reviewer_external_ids, source_branch, target_branch,
-    lines_added, lines_deleted, comments_count,
+    lines_added, lines_deleted, comments_count, changed_files,
     first_commit_at, opened_at, merged_at, closed_at, updated_at, synced_at
   )
   VALUES (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10,
-    $11, $12, $13,
-    $14, $15, $16, $17, $18, NOW()
+    $11, $12, $13, $14,
+    $15, $16, $17, $18, $19, NOW()
   )
   ON CONFLICT ON CONSTRAINT unique_tenant_provider_repository_pull_request DO UPDATE SET
     title = EXCLUDED.title,
@@ -25,6 +25,7 @@ const UPSERT_SQL = `
     lines_added = EXCLUDED.lines_added,
     lines_deleted = EXCLUDED.lines_deleted,
     comments_count = EXCLUDED.comments_count,
+    changed_files = EXCLUDED.changed_files,
     first_commit_at = EXCLUDED.first_commit_at,
     opened_at = EXCLUDED.opened_at,
     merged_at = EXCLUDED.merged_at,
@@ -48,6 +49,7 @@ function toQueryParams(pullRequest: CanonicalPullRequest): unknown[] {
     pullRequest.linesAdded,
     pullRequest.linesDeleted,
     pullRequest.commentsCount,
+    pullRequest.changedFiles,
     pullRequest.firstCommitAt ?? null,
     pullRequest.openedAt,
     pullRequest.mergedAt ?? null,
