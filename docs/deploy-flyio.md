@@ -230,7 +230,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      # `superfly/flyctl-actions/setup-flyctl@master` parou de exportar o
+      # PATH corretamente pro passo seguinte — instala direto via script
+      # oficial em vez de depender do addPath da action de terceiros.
+      - name: Install flyctl
+        run: |
+          curl -L https://fly.io/install.sh | sh
+          echo "$HOME/.fly/bin" >> "$GITHUB_PATH"
 
       - name: Deploy
         run: fly deploy --remote-only --app cto-ai-api
