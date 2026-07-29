@@ -62,4 +62,18 @@ export class UserProviderAliasRepository {
       return mapRowToAlias(result.rows[0]);
     });
   }
+
+  /** Todas as identidades externas vinculadas a um usuário — alimenta `PersonProfileService`. */
+  async findByUserId(tenantId: string, userId: string): Promise<readonly UserProviderAlias[]> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<UserProviderAliasRow>(
+        `SELECT id, tenant_id, user_id, provider, external_user_id, external_username, external_email, is_active, created_at
+         FROM user_provider_aliases
+         WHERE tenant_id = $1 AND user_id = $2`,
+        [tenantId, userId],
+      );
+
+      return result.rows.map(mapRowToAlias);
+    });
+  }
 }
