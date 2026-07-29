@@ -45,4 +45,18 @@ export class TenantRepository {
 
     return mapRowToTenant(result.rows[0]);
   }
+
+  /** Usado pelo login SSO-first pra mostrar nome dos tenants candidatos (ver `auth.routes.ts`). */
+  async findManyByIds(ids: readonly string[]): Promise<readonly Tenant[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+
+    const result = await this.pool.query<TenantRow>(
+      `SELECT id, name, status, created_at, updated_at FROM tenants WHERE id = ANY($1::uuid[])`,
+      [ids],
+    );
+
+    return result.rows.map(mapRowToTenant);
+  }
 }

@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { getPool, withTenantContext } from '../database/pool';
 import type { SystemRole, User, UserStatus } from './identity.types';
+import { UserEmailDirectoryRepository } from './user-email-directory.repository';
 
 interface UserRow {
   readonly id: string;
@@ -51,8 +52,18 @@ export interface CreateUserInput {
  * @see .spec/spec-engineering-intelligence.md — Seção 4.1.
  */
 export class UserRepository {
-  constructor(private readonly pool: Pool = getPool()) {}
+  constructor(
+    private readonly pool: Pool = getPool(),
+    private readonly emailDirectoryRepository: UserEmailDirectoryRepository = new UserEmailDirectoryRepository(),
+  ) {}
 
+  /**
+   * Além de `INSERT INTO users`, grava também em `user_email_directory`
+   * (mesma transação/`client` — uma falha em qualquer um dos dois reverte
+   * ambos) — é o dual-write que mantém o índice cross-tenant usado pelo
+   * login SSO-first (`auth.routes.ts`) sempre em dia. Único call site de
+   * `INSERT INTO users` do projeto, então não há outro ponto a sincronizar.
+   */
   async create(tenantId: string, input: CreateUserInput): Promise<User> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<UserRow>(
@@ -69,7 +80,14 @@ export class UserRepository {
         ],
       );
 
-      return mapRowToUser(result.rows[0]);
+      const user = mapRowToUser(result.rows[0]);
+      await this.emailDirectoryRepository.create(client, {
+        email: user.primaryEmail,
+        tenantId,
+        userId: user.id,
+      });
+
+      return user;
     });
   }
 
