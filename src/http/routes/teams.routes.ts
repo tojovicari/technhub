@@ -9,6 +9,7 @@ import {
 import { PullRequestRepository } from '../../integrations/repositories/pull-request.repository';
 import { IncidentRepository } from '../../integrations/repositories/incident.repository';
 import { WorkItemRepository } from '../../integrations/repositories/work-item.repository';
+import { DeploymentRepository } from '../../integrations/repositories/deployment.repository';
 import type { PlanningCycle } from '../../identity/identity.types';
 import { getPgErrorCode } from '../pg-error';
 import { requireAuth } from '../middleware/require-auth';
@@ -17,12 +18,19 @@ import { requireSameTenant } from '../middleware/require-same-tenant';
 
 const requireAdminOrManager = requireRole('ADMIN', 'GESTOR');
 const VALID_PLANNING_CYCLES: readonly PlanningCycle[] = ['MONTHLY', 'WEEKLY', 'BIWEEKLY_SPRINT'];
-const VALID_RESOURCE_PROVIDERS: readonly ExternalResourceProvider[] = ['waroom', 'github', 'jira', 'linear'];
+const VALID_RESOURCE_PROVIDERS: readonly ExternalResourceProvider[] = [
+  'waroom',
+  'github',
+  'jira',
+  'linear',
+  'argocd',
+];
 const VALID_RESOURCE_TYPES: readonly ExternalResourceType[] = [
   'waroom_team',
   'github_repository',
   'jira_project',
   'linear_team',
+  'argocd_project',
 ];
 
 interface TenantParams {
@@ -100,6 +108,7 @@ export function registerTeamRoutes(
   pullRequestRepository: PullRequestRepository = new PullRequestRepository(),
   incidentRepository: IncidentRepository = new IncidentRepository(),
   workItemRepository: WorkItemRepository = new WorkItemRepository(),
+  deploymentRepository: DeploymentRepository = new DeploymentRepository(),
 ): void {
   /**
    * Candidatos a vínculo: recursos externos (time do Waroom, repositório do
@@ -124,7 +133,14 @@ export function registerTeamRoutes(
         return reply.status(200).send(candidates);
       }
       if (provider === 'github' && resourceType === 'github_repository') {
-        const candidates = await pullRequestRepository.findUnlinkedRepositories(tenantId);
+        // União de duas fontes: repositório pode ter só PR, só deploy
+        // (GitHub Actions), ou os dois — qualquer um dos dois já vinculado
+        // resolve o outro também (mesmo par provider/resourceType).
+        const [prCandidates, deploymentCandidates] = await Promise.all([
+          pullRequestRepository.findUnlinkedRepositories(tenantId),
+          deploymentRepository.findUnlinkedExternalGroups(tenantId, 'github_actions', 'github_repository'),
+        ]);
+        const candidates = [...new Set([...prCandidates, ...deploymentCandidates])].sort();
         return reply.status(200).send(candidates);
       }
       if (provider === 'jira' && resourceType === 'jira_project') {
@@ -133,6 +149,10 @@ export function registerTeamRoutes(
       }
       if (provider === 'linear' && resourceType === 'linear_team') {
         const candidates = await workItemRepository.findUnlinkedExternalGroups(tenantId, 'linear');
+        return reply.status(200).send(candidates);
+      }
+      if (provider === 'argocd' && resourceType === 'argocd_project') {
+        const candidates = await deploymentRepository.findUnlinkedExternalGroups(tenantId, 'argocd', 'argocd_project');
         return reply.status(200).send(candidates);
       }
 

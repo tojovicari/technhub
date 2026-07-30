@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { getPool, withTenantContext } from '../../database/pool';
 import type { CanonicalDeployment } from '../core/canonical.types';
+import type { ExternalResourceType } from '../../identity/team-resource-link.repository';
 
 /** Um `CanonicalDeployment` já persistido, com o `id` gerado pelo banco (necessário pra Enriched Layer). */
 export interface PersistedDeployment extends CanonicalDeployment {
@@ -19,6 +20,7 @@ interface DeploymentRow {
   readonly triggered_by_external_id: string | null;
   readonly started_at: Date;
   readonly finished_at: Date | null;
+  readonly external_group_key: string | null;
 }
 
 function mapRowToPersistedDeployment(row: DeploymentRow): PersistedDeployment {
@@ -34,17 +36,20 @@ function mapRowToPersistedDeployment(row: DeploymentRow): PersistedDeployment {
     triggeredByExternalId: row.triggered_by_external_id,
     startedAt: row.started_at,
     finishedAt: row.finished_at,
+    externalGroupKey: row.external_group_key,
   };
 }
 
 const UPSERT_SQL = `
   INSERT INTO canonical_deployments (
     tenant_id, provider, external_id, environment, status,
-    service_name, commit_sha, triggered_by_external_id, started_at, finished_at, synced_at, provider_integration_id
+    service_name, commit_sha, triggered_by_external_id, started_at, finished_at,
+    external_group_key, synced_at, provider_integration_id
   )
   VALUES (
     $1, $2, $3, $4, $5,
-    $6, $7, $8, $9, $10, NOW(), $11
+    $6, $7, $8, $9, $10,
+    $11, NOW(), $12
   )
   ON CONFLICT ON CONSTRAINT unique_tenant_integration_deployment DO UPDATE SET
     environment = EXCLUDED.environment,
@@ -53,6 +58,7 @@ const UPSERT_SQL = `
     commit_sha = EXCLUDED.commit_sha,
     triggered_by_external_id = EXCLUDED.triggered_by_external_id,
     finished_at = EXCLUDED.finished_at,
+    external_group_key = EXCLUDED.external_group_key,
     synced_at = NOW();
 `;
 
@@ -68,6 +74,7 @@ function toQueryParams(deployment: CanonicalDeployment, providerIntegrationId: s
     deployment.triggeredByExternalId ?? null,
     deployment.startedAt,
     deployment.finishedAt ?? null,
+    deployment.externalGroupKey ?? null,
     providerIntegrationId,
   ];
 }
@@ -143,13 +150,72 @@ export class DeploymentRepository {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<DeploymentRow>(
         `SELECT id, tenant_id, provider, external_id, environment, status, service_name,
-                commit_sha, triggered_by_external_id, started_at, finished_at
+                commit_sha, triggered_by_external_id, started_at, finished_at, external_group_key
          FROM canonical_deployments
          WHERE tenant_id = $1 AND provider_integration_id = $2`,
         [tenantId, providerIntegrationId],
       );
 
       return result.rows.map(mapRowToPersistedDeployment);
+    });
+  }
+
+  /**
+   * Lista todos os deploys canônicos de um provider inteiro (não só uma
+   * integração) — usado pela Enriched Layer quando a resolução de time é
+   * por registro (`team_resource_links`), não por integração inteira: se o
+   * tenant tiver mais de uma integração ArgoCD, processar tudo de uma vez é
+   * seguro e idempotente. Mesmo racional de `IncidentRepository.findByProvider`.
+   */
+  async findByProvider(tenantId: string, provider: string): Promise<readonly PersistedDeployment[]> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<DeploymentRow>(
+        `SELECT id, tenant_id, provider, external_id, environment, status, service_name,
+                commit_sha, triggered_by_external_id, started_at, finished_at, external_group_key
+         FROM canonical_deployments
+         WHERE tenant_id = $1 AND provider = $2`,
+        [tenantId, provider],
+      );
+
+      return result.rows.map(mapRowToPersistedDeployment);
+    });
+  }
+
+  /**
+   * "Grupos de origem" (`external_group_key` — projeto do ArgoCD,
+   * repositório do GitHub Actions) já vistos em deploys sincronizados que
+   * ainda não estão vinculados a nenhum time da plataforma — alimenta
+   * `GET /team-resource-links/candidates`. Mesmo padrão de
+   * `WorkItemRepository.findUnlinkedExternalGroups`.
+   *
+   * `resourceType` é parâmetro (não fixo) porque o `trl.provider` do
+   * vínculo nem sempre é igual ao `cd.provider` do deploy: GitHub Actions
+   * reaproveita o vínculo `(provider: 'github', resourceType: 'github_repository')`
+   * já usado pelos PRs, não um `(github_actions, ...)` próprio.
+   */
+  async findUnlinkedExternalGroups(
+    tenantId: string,
+    provider: string,
+    resourceType: ExternalResourceType,
+  ): Promise<readonly string[]> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{ external_group_key: string }>(
+        `SELECT DISTINCT external_group_key
+         FROM canonical_deployments cd
+         WHERE cd.tenant_id = $1
+           AND cd.provider = $2
+           AND cd.external_group_key IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM team_resource_links trl
+             WHERE trl.tenant_id = cd.tenant_id
+               AND trl.resource_type = $3
+               AND trl.external_resource_id = cd.external_group_key
+           )
+         ORDER BY external_group_key`,
+        [tenantId, provider, resourceType],
+      );
+
+      return result.rows.map((row) => row.external_group_key);
     });
   }
 }

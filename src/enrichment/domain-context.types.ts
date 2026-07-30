@@ -96,7 +96,8 @@ export interface EnrichedWorkItem {
 export interface EnrichedDeployment {
   readonly id: string;
   readonly tenantId: string;
-  readonly teamId: string;
+  /** Nullable desde o conector ArgoCD (resolução por deployment via `team_resource_links`, não mais só por integração inteira — mesmo espírito de `EnrichedIncident.teamId`). */
+  readonly teamId: string | null;
   readonly semanticEnvironment: SemanticEnvironment;
   readonly processedAt: Date;
   readonly appliedRuleVersion: Date;

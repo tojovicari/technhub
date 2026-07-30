@@ -198,23 +198,77 @@ export class EnrichmentService {
     return null;
   }
 
+  /**
+   * GitHub Actions reaproveita o mesmo par `(github, github_repository)` já
+   * usado pro vínculo de PRs (`resolveGroupResource` não existe pro lado de
+   * deployment, mas o `resourceType` é o mesmo) — um repositório já
+   * vinculado pra PRs resolve deployment também, sem vincular de novo.
+   * `integration.teamId` continua servindo de fallback pra integrações cujo
+   * repo ainda não foi vinculado via `team_resource_links`.
+   */
+  private resolveDeploymentGroupResource(
+    provider: string,
+  ): { readonly provider: ExternalResourceProvider; readonly resourceType: ExternalResourceType } | null {
+    if (provider === 'argocd') return { provider: 'argocd', resourceType: 'argocd_project' };
+    if (provider === 'github_actions') return { provider: 'github', resourceType: 'github_repository' };
+    return null;
+  }
+
+  /**
+   * Sem gate `no_team` fixo: o ArgoCD não segue o modelo "1 integração = 1
+   * time" (mesma decisão já tomada pro Waroom/incidentes) — cada deployment
+   * pode ter seu próprio `externalGroupKey` (projeto do ArgoCD), resolvido
+   * via `team_resource_links`. GitHub Actions continua no modelo simples:
+   * `resolveDeploymentGroupResource` devolve `null` pra ele, então
+   * `externalGroupMap` fica vazio e todo deployment cai direto no
+   * `fallbackTeamId` (`integration.teamId`) — comportamento idêntico a hoje.
+   *
+   * Agrega por provider (não só a integração que disparou o
+   * enriquecimento), mesmo racional de `runIncidentEnrichment`: se o tenant
+   * tiver mais de uma integração do mesmo provider, resolução de time já é
+   * por registro, processar tudo de uma vez é seguro e idempotente.
+   */
   private async runDeploymentEnrichment(
     tenantId: string,
     integration: IntegrationSummary,
   ): Promise<EnrichmentResult> {
-    if (!integration.teamId) {
+    const fallbackTeamId = integration.teamId ?? null;
+    const groupResource = this.resolveDeploymentGroupResource(integration.provider);
+
+    if (!groupResource && !fallbackTeamId) {
       return { outcome: 'no_team' };
     }
 
-    const { teamId } = integration;
-    const [deployments, effectiveRules] = await Promise.all([
-      this.deploymentRepository.findByIntegration(tenantId, integration.id),
-      this.mappingRulesRepository.getEffectiveRules(tenantId, teamId),
+    const [deployments, externalGroupMap] = await Promise.all([
+      this.deploymentRepository.findByProvider(tenantId, integration.provider),
+      groupResource
+        ? this.teamResourceLinkRepository.findMapByProviderAndType(tenantId, groupResource.provider, groupResource.resourceType)
+        : Promise.resolve(new Map<string, string>()),
     ]);
 
-    const enrichedDeployments = deployments.map((deployment) =>
-      this.enrichDeployment(deployment, teamId, effectiveRules),
+    const resolvedTeamIds = deployments.map(
+      (deployment) => externalGroupMap.get(deployment.externalGroupKey ?? '') ?? fallbackTeamId,
     );
+
+    const distinctTeamIds = [...new Set(resolvedTeamIds)];
+    const effectiveRulesByTeamId = new Map(
+      await Promise.all(
+        distinctTeamIds.map(
+          async (teamId) => [teamId, await this.mappingRulesRepository.getEffectiveRules(tenantId, teamId)] as const,
+        ),
+      ),
+    );
+
+    const enrichedDeployments = deployments.map((deployment, index) => {
+      const resolvedTeamId = resolvedTeamIds[index];
+      const effectiveRules = effectiveRulesByTeamId.get(resolvedTeamId);
+      if (!effectiveRules) {
+        // Inalcançável: `resolvedTeamId` vem de `resolvedTeamIds`, cujos valores distintos
+        // são exatamente as chaves usadas para popular `effectiveRulesByTeamId`.
+        throw new Error(`[enrichment] Regras não resolvidas para o time "${resolvedTeamId}".`);
+      }
+      return this.enrichDeployment(deployment, resolvedTeamId, effectiveRules);
+    });
     await this.enrichedDeploymentRepository.upsertMany(enrichedDeployments);
 
     return {
@@ -327,7 +381,7 @@ export class EnrichmentService {
 
   private enrichDeployment(
     deployment: PersistedDeployment,
-    teamId: string,
+    teamId: string | null,
     effective: EffectiveRules,
   ): EnrichedDeployment {
     return {

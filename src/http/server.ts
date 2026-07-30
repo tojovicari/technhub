@@ -11,6 +11,8 @@ import '../integrations/providers/linear/linear.provider';
 import '../integrations/providers/waroom/waroom.provider';
 // Efeito colateral: registra GitHubActionsProvider no ProviderFactory.
 import '../integrations/providers/github-actions/github-actions.provider';
+// Efeito colateral: registra ArgoCDProvider no ProviderFactory.
+import '../integrations/providers/argocd/argocd.provider';
 // Efeito colateral: registra GitHubAuthProvider no AuthProviderFactory (login).
 import '../auth/providers/github/github-auth.provider';
 // Efeito colateral: registra ResendEmailProvider no NotificationProviderFactory.

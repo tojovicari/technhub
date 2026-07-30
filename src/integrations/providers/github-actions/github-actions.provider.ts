@@ -255,6 +255,10 @@ export class GitHubActionsProvider extends BaseProvider {
       startedAt: new Date(deployment.created_at),
       finishedAt:
         latestStatus && this.isTerminalState(latestStatus.state) ? new Date(latestStatus.created_at) : null,
+      // Mesmo repositório já usado pro vínculo de time dos PRs
+      // (`team_resource_links`, `resourceType: 'github_repository'`) — um
+      // repo já vinculado pra PRs resolve deployment também, sem vincular de novo.
+      externalGroupKey: repository,
     };
   }
 

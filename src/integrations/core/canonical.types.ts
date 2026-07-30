@@ -237,6 +237,14 @@ export interface CanonicalDeployment {
   readonly triggeredByExternalId?: string | null;
   readonly startedAt: Date;
   readonly finishedAt?: Date | null;
+  /**
+   * "Grupo de origem" do deploy no provedor — projeto do ArgoCD
+   * (`spec.project` da Application). Nome neutro de propósito, mesmo
+   * padrão de `CanonicalWorkItem.externalGroupKey`: alimenta o vínculo
+   * pós-sync via `team_resource_links` (`resourceType: 'argocd_project'`).
+   * Sempre `null` pro GitHub Actions (modelo simples de sempre, 1 integração = 1 time).
+   */
+  readonly externalGroupKey?: string | null;
 }
 
 /** Severidade canônica de um incidente. */
