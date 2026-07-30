@@ -59,4 +59,13 @@ export class TenantRepository {
 
     return result.rows.map(mapRowToTenant);
   }
+
+  /** Usado pelo scheduler de sync (`POST /internal/sync`) — só tenants ativos entram no loop automático. */
+  async findAllActive(): Promise<readonly Tenant[]> {
+    const result = await this.pool.query<TenantRow>(
+      `SELECT id, name, status, created_at, updated_at FROM tenants WHERE status = 'ACTIVE'`,
+    );
+
+    return result.rows.map(mapRowToTenant);
+  }
 }

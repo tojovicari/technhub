@@ -25,6 +25,7 @@ import { registerEnrichmentRoutes } from './routes/enrichment.routes';
 import { registerDashboardRoutes } from './routes/dashboard.routes';
 import { registerTeamProfileRoutes } from './routes/team-profile.routes';
 import { registerPersonProfileRoutes } from './routes/person-profile.routes';
+import { registerInternalRoutes } from './routes/internal.routes';
 import { registerBillingRoutes } from './routes/billing.routes';
 import { registerBillingWebhookRoutes } from './routes/billing-webhook.routes';
 
@@ -50,6 +51,7 @@ registerEnrichmentRoutes(server);
 registerDashboardRoutes(server);
 registerTeamProfileRoutes(server);
 registerPersonProfileRoutes(server);
+registerInternalRoutes(server);
 registerBillingRoutes(server);
 registerBillingWebhookRoutes(server);
 

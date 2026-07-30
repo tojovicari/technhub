@@ -124,6 +124,7 @@ fly secrets set \
   RESEND_FROM_EMAIL="..." \
   STRIPE_SECRET_KEY="..." \
   STRIPE_WEBHOOK_SECRET="..." \
+  INTERNAL_SYNC_TOKEN="..." \
   --app cto-ai-api
 ```
 
@@ -148,8 +149,9 @@ O Fly redeploya automaticamente após `fly secrets set`.
 | `RESEND_FROM_EMAIL`           | ✅          | Remetente usado nos e-mails enviados via Resend                                                                               |
 | `STRIPE_SECRET_KEY`           | ✅          | Chave secreta do Stripe (`sk_live_...` em produção)                                                                           |
 | `STRIPE_WEBHOOK_SECRET`       | ✅          | Signing secret do endpoint de webhook do Stripe (Dashboard → Webhooks)                                                        |
+| `INTERNAL_SYNC_TOKEN`         | ✅          | Segredo compartilhado do scheduler de sync (`POST /internal/sync`, header `X-Internal-Token`) — mesmo valor precisa estar setado como secret do repositório no GitHub (`gh secret set INTERNAL_SYNC_TOKEN`), usado pelo `.github/workflows/sync.yml` |
 
-**Diferença importante em relação ao `technhub`**: este projeto não recebe webhooks de GitHub/Jira/incident tools — a ingestão é sempre por *batch assíncrono* (`POST .../integrations/:id/sync`, disparado por cron/manual), não em tempo real (Princípio 2 do CLAUDE.md). Não há `GITHUB_WEBHOOK_TOKEN`/`JIRA_WEBHOOK_TOKEN`/`INCIDENT_IO_WEBHOOK_TOKEN`/`OPSGENIE_WEBHOOK_TOKEN` aqui — o único webhook real é o do Stripe (billing).
+**Diferença importante em relação ao `technhub`**: este projeto não recebe webhooks de GitHub/Jira/incident tools — a ingestão é sempre por *batch assíncrono* (`POST .../integrations/:id/sync`), não em tempo real (Princípio 2 do CLAUDE.md). Não há `GITHUB_WEBHOOK_TOKEN`/`JIRA_WEBHOOK_TOKEN`/`INCIDENT_IO_WEBHOOK_TOKEN`/`OPSGENIE_WEBHOOK_TOKEN` aqui — o único webhook real é o do Stripe (billing). O disparo periódico desses batches é o `.github/workflows/sync.yml` (agendado, a cada 10 minutos) chamando `POST /internal/sync` — não depende mais de alguém clicar em "sincronizar" manualmente pra os dados avançarem.
 
 ---
 
@@ -246,9 +248,10 @@ jobs:
 
 **Secrets GitHub necessários:**
 
-| Secret          | Como obter                                                 |
-| --------------- | ----------------------------------------------------------- |
-| `FLY_API_TOKEN` | `fly tokens create deploy --expiry 8760h --app cto-ai-api` |
+| Secret               | Como obter                                                                                    |
+| -------------------- | ----------------------------------------------------------------------------------------------- |
+| `FLY_API_TOKEN`      | `fly tokens create deploy --expiry 8760h --app cto-ai-api`                                     |
+| `INTERNAL_SYNC_TOKEN` | Mesmo valor setado como secret do Fly (`openssl rand -hex 32`) — usado pelo `sync.yml`, não pelo `deploy.yml` |
 
 ---
 

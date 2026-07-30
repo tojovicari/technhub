@@ -1,0 +1,22 @@
+name: Sync
+
+on:
+  schedule:
+    # A cada 10 minutos — GitHub Actions não garante o horário exato sob
+    # carga, é um "pelo menos a cada N minutos", suficiente pra avançar o
+    # backfill/incremental de cada integração ativa aos poucos.
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    name: Trigger scheduled sync
+    runs-on: ubuntu-latest
+    # Evita rodar 2 execuções em paralelo se uma demorar mais que o intervalo do cron.
+    concurrency: scheduled-sync
+
+    steps:
+      - name: POST /internal/sync
+        run: |
+          curl -sf -X POST https://cto-ai-api.fly.dev/internal/sync \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_SYNC_TOKEN }}"
