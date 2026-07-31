@@ -115,10 +115,34 @@ const REWORK_RATE_UNAVAILABLE: UnavailableMetric = {
  */
 const CODE_CHURN_WINDOW_DAYS = 14;
 
+/**
+ * Trabalho concluído (`completed_at`) dentro da janela do ponto — ao
+ * contrário de `distribution` (cumulativo, ver `getProfileHistory`), isso
+ * pode cair de um ponto pro seguinte.
+ *
+ * `count` conta todo item com `completed_at` na janela, **sem** depender de
+ * `started_working_at` — testando ao vivo, achamos tenants reais onde
+ * nenhum item tem `started_working_at` preenchido (nunca passou por uma
+ * transição de status marcada `isActiveTime` nas mapping rules), o que
+ * zerava `count` inteiro se ele dependesse disso, como a convenção de
+ * `DashboardService.queryCycleTime`/`toilRatio` faz. O tempo de vida é um
+ * sub-conjunto à parte: só os itens com `started_working_at` entram no
+ * cálculo, então `lifetimeSampleSize` pode ser menor que `count` (inclusive
+ * 0 — nesse caso `avgLifetimeHours`/`medianLifetimeHours` vêm `null`).
+ */
+export interface TeamProfileHistoryCompletedEntry {
+  readonly category: string;
+  readonly count: number;
+  readonly lifetimeSampleSize: number;
+  readonly avgLifetimeHours: number | null;
+  readonly medianLifetimeHours: number | null;
+}
+
 export interface TeamProfileHistoryPoint {
   readonly date: string;
   readonly wip: number;
   readonly distribution: readonly FlowDistributionEntry[];
+  readonly completed: readonly TeamProfileHistoryCompletedEntry[];
 }
 
 export interface TeamProfileHistory {
@@ -132,9 +156,20 @@ interface HistoryWorkItemRow {
   readonly raw_issue_type: string;
   readonly raw_labels: readonly string[] | null;
   readonly raw_status: string;
+  readonly completed_at: Date | null;
+  readonly started_working_at: Date | null;
+  readonly semantic_category: string;
 }
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Mediana de um array já ordenado ascendentemente — sem dependência nova, volume por categoria/semana é baixo. */
+function medianOfSorted(sortedAscValues: readonly number[]): number {
+  const mid = Math.floor(sortedAscValues.length / 2);
+  return sortedAscValues.length % 2 !== 0
+    ? sortedAscValues[mid]
+    : (sortedAscValues[mid - 1] + sortedAscValues[mid]) / 2;
+}
 
 export interface TeamContributor {
   readonly identity: {
@@ -474,6 +509,14 @@ export class TeamProfileService {
    * (categoria semântica vem de `rawIssueType`/`rawLabels`, que não mudam
    * ao longo do tempo), só filtra por `createdAt <= data`; `wip` é o único
    * que precisa da reconstrução de fato.
+   *
+   * `completed`, ao contrário de `distribution`, **não é cumulativo** —
+   * escopado à janela `(ponto anterior, este ponto]` por `completed_at`,
+   * então pode cair de uma semana pra outra (ex: menos toil concluído essa
+   * semana vs a passada). `count` não depende de `started_working_at`
+   * (achamos tenants reais onde isso vem sempre `null`); o tempo de vida
+   * (mesma fórmula de `DashboardService.queryCycleTime`) é um sub-conjunto
+   * à parte, `lifetimeSampleSize` <= `count`.
    */
   async getProfileHistory(tenantId: string, teamId: string, weeks: number): Promise<TeamProfileHistory | null> {
     const team = await this.teamRepository.findById(tenantId, teamId);
@@ -485,7 +528,8 @@ export class TeamProfileService {
       const [workItemsResult, effectiveRules] = await Promise.all([
         client.query<HistoryWorkItemRow>(
           `SELECT cwi.provider_integration_id, cwi.external_id, cwi.created_at,
-                  cwi.raw_issue_type, cwi.raw_labels, cwi.raw_status
+                  cwi.raw_issue_type, cwi.raw_labels, cwi.raw_status,
+                  ewi.completed_at, ewi.started_working_at, ewi.semantic_category
            FROM canonical_work_items cwi
            JOIN enriched_work_items ewi ON ewi.id = cwi.id
            WHERE ewi.team_id = $1`,
@@ -532,11 +576,32 @@ export class TeamProfileService {
         pointDates.push(new Date(now.getTime() - i * ONE_WEEK_MS));
       }
 
-      const points = pointDates.map((date) => {
+      const points = pointDates.map((date, index) => {
+        const windowStart = index === 0 ? new Date(date.getTime() - ONE_WEEK_MS) : pointDates[index - 1];
+
         let wip = 0;
         const categoryCounts: Record<string, number> = {};
+        const completedCountByCategory = new Map<string, number>();
+        const completedLifetimeHoursByCategory = new Map<string, number[]>();
 
         for (const item of workItems) {
+          if (item.completed_at !== null && item.completed_at > windowStart && item.completed_at <= date) {
+            completedCountByCategory.set(
+              item.semantic_category,
+              (completedCountByCategory.get(item.semantic_category) ?? 0) + 1,
+            );
+
+            if (item.started_working_at !== null) {
+              const lifetimeHours = (item.completed_at.getTime() - item.started_working_at.getTime()) / (60 * 60 * 1000);
+              const existing = completedLifetimeHoursByCategory.get(item.semantic_category);
+              if (existing) {
+                existing.push(lifetimeHours);
+              } else {
+                completedLifetimeHoursByCategory.set(item.semantic_category, [lifetimeHours]);
+              }
+            }
+          }
+
           if (item.created_at > date) {
             continue;
           }
@@ -564,7 +629,21 @@ export class TeamProfileService {
           .map(([category, count]) => ({ category, count }))
           .sort((a, b) => a.category.localeCompare(b.category));
 
-        return { date: date.toISOString().slice(0, 10), wip, distribution };
+        const completed: TeamProfileHistoryCompletedEntry[] = [...completedCountByCategory.entries()]
+          .map(([category, count]) => {
+            const hours = completedLifetimeHoursByCategory.get(category);
+            const sorted = hours ? [...hours].sort((a, b) => a - b) : [];
+            return {
+              category,
+              count,
+              lifetimeSampleSize: sorted.length,
+              avgLifetimeHours: sorted.length > 0 ? sorted.reduce((sum, h) => sum + h, 0) / sorted.length : null,
+              medianLifetimeHours: sorted.length > 0 ? medianOfSorted(sorted) : null,
+            };
+          })
+          .sort((a, b) => a.category.localeCompare(b.category));
+
+        return { date: date.toISOString().slice(0, 10), wip, distribution, completed };
       });
 
       return { points };
