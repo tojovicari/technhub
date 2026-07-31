@@ -1,12 +1,13 @@
 name: Sync
 
 on:
-  schedule:
-    # 1x/dia por enquanto (06:00 UTC) — GitHub Actions não garante o horário
-    # exato sob carga, é um "pelo menos 1x/dia". Era */10 min; reduzido de
-    # propósito enquanto o volume de integrações ativas não justifica mais
-    # frequência. Fácil de aumentar de novo depois, é só trocar o cron.
-    - cron: '0 6 * * *'
+  # Cron desligado de propósito — o disparo automático de /internal/sync
+  # processa toda integração ACTIVE de todo tenant ACTIVE num Promise.all só,
+  # e o pool de conexões do Postgres não tem `max` configurado (default da
+  # lib `pg` é 10) — não escala além de poucos tenants sem ajuste antes. Ver
+  # docs/BACKLOG.md. Pra reativar, descomente o bloco `schedule` abaixo.
+  # schedule:
+  #   - cron: '0 6 * * *'
   workflow_dispatch: {}
 
 jobs:
