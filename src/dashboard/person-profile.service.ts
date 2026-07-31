@@ -6,6 +6,7 @@ import { TeamRepository } from '../identity/team.repository';
 import type { User } from '../identity/identity.types';
 
 export interface PersonProfileAlias {
+  readonly id: string;
   readonly provider: string;
   readonly externalUserId: string;
   readonly externalUsername: string | null;
@@ -108,6 +109,7 @@ export class PersonProfileService {
         status: user.status,
       },
       aliases: aliases.map((alias) => ({
+        id: alias.id,
         provider: alias.provider,
         externalUserId: alias.externalUserId,
         externalUsername: alias.externalUsername,
