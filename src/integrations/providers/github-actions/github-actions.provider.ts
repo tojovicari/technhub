@@ -36,6 +36,33 @@ interface GitHubDeploymentStatus {
   readonly created_at: string;
 }
 
+/** Subconjunto tipado de `GET /orgs/{org}/repos`. */
+interface GitHubRepo {
+  readonly full_name: string;
+}
+
+/**
+ * Cursor do modo "org inteira" (`credentials.extra.repository` omitido) —
+ * a lista de repos é descoberta uma única vez (primeira chamada, sem
+ * `context.cursor`) e viaja dentro do próprio cursor daí em diante, já que
+ * `syncIncremental` só processa uma página de um repo por vez (mesmo
+ * contrato de todo provider incremental: uma chamada, um passo, retomado no
+ * próximo tick do scheduler — ver `.github/workflows/sync.yml`).
+ */
+interface OrgWideCursorState {
+  readonly repos: readonly string[];
+  readonly repoIndex: number;
+  readonly page: number;
+}
+
+/** Resultado de processar uma página de deployments de um único repositório. */
+interface RepositoryPageResult {
+  readonly deployments: CanonicalDeployment[];
+  readonly discoveredIdentities: Map<string, CanonicalDiscoveredIdentity>;
+  readonly errors: string[];
+  readonly hasMorePages: boolean;
+}
+
 /**
  * Conector de CI/CD para o GitHub Actions (Deployments API).
  *
@@ -49,6 +76,15 @@ interface GitHubDeploymentStatus {
  * seria hardcoded o gatilho de deploy no conector (proibido pela spec —
  * ver comentário em `CanonicalDeployment`, Seção 6).
  *
+ * `credentials.extra.repository` é **opcional**: se informado, sincroniza só
+ * aquele repo (comportamento original). Se omitido, sincroniza **todos os
+ * repos** de `credentials.extra.organization` (esse vira obrigatório nesse
+ * caso) — mesma lógica de `projectKey`/`teamKey` opcionais no Jira/Linear.
+ * Diferente deles, porém, a Deployments API não tem busca cross-repo, então
+ * o modo "org inteira" primeiro descobre a lista de repos (`GET
+ * /orgs/{org}/repos`) e depois itera um repo por vez — ver
+ * `OrgWideCursorState`.
+ *
  * @see .spec/spec-engineering-intelligence.md — Seções 2 e 7.
  */
 export class GitHubActionsProvider extends BaseProvider {
@@ -60,7 +96,10 @@ export class GitHubActionsProvider extends BaseProvider {
   ): Promise<{ success: boolean; message?: string }> {
     try {
       const token = this.resolveApiToken(credentials);
-      this.resolveRepository(credentials);
+      const repository = this.resolveRepository(credentials);
+      if (!repository) {
+        this.resolveOrganization(credentials);
+      }
       const baseUrl = credentials.baseUrl ?? GITHUB_DEFAULT_BASE_URL;
 
       const response = await fetch(`${baseUrl}/user`, {
@@ -86,54 +125,24 @@ export class GitHubActionsProvider extends BaseProvider {
       const repository = this.resolveRepository(context.credentials);
       const baseUrl = context.credentials.baseUrl ?? GITHUB_DEFAULT_BASE_URL;
       const headers = this.buildHeaders(token);
-
-      const page = context.cursor ? Number.parseInt(context.cursor, 10) : 1;
       const perPage = Math.min(context.pageSize ?? DEFAULT_PAGE_SIZE, MAX_PER_PAGE);
 
-      const listUrl = this.buildDeploymentsUrl(baseUrl, repository, page, perPage);
-      const listResponse = await fetch(listUrl, { headers });
+      if (repository) {
+        const page = context.cursor ? Number.parseInt(context.cursor, 10) : 1;
+        const result = await this.fetchRepositoryPage(baseUrl, repository, page, perPage, headers, context.tenantId);
 
-      if (!listResponse.ok) {
         return {
-          success: false,
-          fetchedCount: 0,
-          errors: [
-            `[${this.providerName}] Falha ao buscar deployments: ${listResponse.status} ${listResponse.statusText}.`,
-          ],
+          success: true,
+          nextCursor: result.hasMorePages ? String(page + 1) : null,
+          fetchedCount: result.deployments.length,
+          deployments: result.deployments,
+          discoveredIdentities:
+            result.discoveredIdentities.size > 0 ? [...result.discoveredIdentities.values()] : undefined,
+          errors: result.errors.length > 0 ? result.errors : undefined,
         };
       }
 
-      const deploymentsList = (await listResponse.json()) as readonly GitHubDeployment[];
-      const errors: string[] = [];
-      const deployments: CanonicalDeployment[] = [];
-      const discoveredIdentities = new Map<string, CanonicalDiscoveredIdentity>();
-
-      for (const item of deploymentsList) {
-        try {
-          const latestStatus = await this.fetchLatestStatus(baseUrl, repository, item.id, headers);
-          deployments.push(this.mapToCanonicalDeployment(item, latestStatus, repository, context.tenantId));
-
-          if (item.creator) {
-            const identity = this.mapToDiscoveredIdentity(item.creator, context.tenantId);
-            discoveredIdentities.set(identity.externalUserId, identity);
-          }
-        } catch (itemError) {
-          errors.push(
-            `[${this.providerName}] Falha ao processar deployment #${item.id}: ${this.describeError(itemError)}`,
-          );
-        }
-      }
-
-      const hasMorePages = deploymentsList.length === perPage;
-
-      return {
-        success: true,
-        nextCursor: hasMorePages ? String(page + 1) : null,
-        fetchedCount: deployments.length,
-        deployments,
-        discoveredIdentities: discoveredIdentities.size > 0 ? [...discoveredIdentities.values()] : undefined,
-        errors: errors.length > 0 ? errors : undefined,
-      };
+      return await this.syncOrgWide(context, baseUrl, headers, perPage);
     } catch (error) {
       return {
         success: false,
@@ -141,6 +150,164 @@ export class GitHubActionsProvider extends BaseProvider {
         errors: [`[${this.providerName}] Falha na sincronização: ${this.describeError(error)}`],
       };
     }
+  }
+
+  /**
+   * Modo "org inteira": descobre a lista de repos na primeira chamada (sem
+   * `context.cursor`) e a carrega dentro do próprio cursor dali em diante,
+   * processando um repo por vez, uma página por chamada — mesmo contrato de
+   * todo provider incremental (uma chamada = um passo, retomado no próximo
+   * tick do scheduler).
+   */
+  private async syncOrgWide(
+    context: SyncContext,
+    baseUrl: string,
+    headers: Record<string, string>,
+    perPage: number,
+  ): Promise<SyncResult> {
+    const organization = this.resolveOrganization(context.credentials);
+
+    const state: OrgWideCursorState = context.cursor
+      ? (JSON.parse(context.cursor) as OrgWideCursorState)
+      : { repos: await this.fetchAllOrgRepositories(baseUrl, organization, headers), repoIndex: 0, page: 1 };
+
+    if (state.repos.length === 0) {
+      return { success: true, nextCursor: null, fetchedCount: 0 };
+    }
+
+    const repository = state.repos[state.repoIndex];
+    const result = await this.fetchRepositoryPageSafely(
+      baseUrl,
+      repository,
+      state.page,
+      perPage,
+      headers,
+      context.tenantId,
+    );
+
+    const nextState: OrgWideCursorState = result.hasMorePages
+      ? { ...state, page: state.page + 1 }
+      : { ...state, repoIndex: state.repoIndex + 1, page: 1 };
+    const isDone = nextState.repoIndex >= nextState.repos.length;
+
+    return {
+      success: true,
+      nextCursor: isDone ? null : JSON.stringify(nextState),
+      fetchedCount: result.deployments.length,
+      deployments: result.deployments,
+      discoveredIdentities:
+        result.discoveredIdentities.size > 0 ? [...result.discoveredIdentities.values()] : undefined,
+      errors: result.errors.length > 0 ? result.errors : undefined,
+    };
+  }
+
+  /**
+   * Mesma coisa que `fetchRepositoryPage`, mas nunca lança — usada só pelo
+   * modo "org inteira". Um repo com deployments desabilitados/sem permissão
+   * (403/404 pontual, já visto ao vivo: repo de outro time sem `deployments`
+   * habilitado pro token) não pode travar o cursor pra sempre — vira erro
+   * suave e o cursor avança pro próximo repo mesmo assim, igual o
+   * tratamento já existente por-deployment dentro de `fetchRepositoryPage`.
+   */
+  private async fetchRepositoryPageSafely(
+    baseUrl: string,
+    repository: string,
+    page: number,
+    perPage: number,
+    headers: Record<string, string>,
+    tenantId: string,
+  ): Promise<RepositoryPageResult> {
+    try {
+      return await this.fetchRepositoryPage(baseUrl, repository, page, perPage, headers, tenantId);
+    } catch (error) {
+      return {
+        deployments: [],
+        discoveredIdentities: new Map(),
+        errors: [this.describeError(error)],
+        hasMorePages: false,
+      };
+    }
+  }
+
+  /** Busca e mapeia uma única página de deployments de um único repositório. */
+  private async fetchRepositoryPage(
+    baseUrl: string,
+    repository: string,
+    page: number,
+    perPage: number,
+    headers: Record<string, string>,
+    tenantId: string,
+  ): Promise<RepositoryPageResult> {
+    const listUrl = this.buildDeploymentsUrl(baseUrl, repository, page, perPage);
+    const listResponse = await fetch(listUrl, { headers });
+
+    if (!listResponse.ok) {
+      throw new Error(
+        `[${this.providerName}] Falha ao buscar deployments de "${repository}": ${listResponse.status} ${listResponse.statusText}.`,
+      );
+    }
+
+    const deploymentsList = (await listResponse.json()) as readonly GitHubDeployment[];
+    const errors: string[] = [];
+    const deployments: CanonicalDeployment[] = [];
+    const discoveredIdentities = new Map<string, CanonicalDiscoveredIdentity>();
+
+    for (const item of deploymentsList) {
+      try {
+        const latestStatus = await this.fetchLatestStatus(baseUrl, repository, item.id, headers);
+        deployments.push(this.mapToCanonicalDeployment(item, latestStatus, repository, tenantId));
+
+        if (item.creator) {
+          const identity = this.mapToDiscoveredIdentity(item.creator, tenantId);
+          discoveredIdentities.set(identity.externalUserId, identity);
+        }
+      } catch (itemError) {
+        errors.push(
+          `[${this.providerName}] Falha ao processar deployment #${item.id} de "${repository}": ${this.describeError(itemError)}`,
+        );
+      }
+    }
+
+    return { deployments, discoveredIdentities, errors, hasMorePages: deploymentsList.length === perPage };
+  }
+
+  /**
+   * Pagina `GET /orgs/{org}/repos` até esgotar — custo pago uma vez só, na
+   * primeira chamada do modo "org inteira" (sem cursor ainda). Pra orgs com
+   * milhares de repos isso pode ser lento nessa primeira chamada; fora de
+   * escopo otimizar agora (mesmo tipo de trade-off já assumido no conector
+   * do ArgoCD pra `GET /api/v1/applications`).
+   */
+  private async fetchAllOrgRepositories(
+    baseUrl: string,
+    organization: string,
+    headers: Record<string, string>,
+  ): Promise<readonly string[]> {
+    const repos: string[] = [];
+    let page = 1;
+
+    for (;;) {
+      const url = new URL(`${baseUrl}/orgs/${organization}/repos`);
+      url.searchParams.set('page', String(page));
+      url.searchParams.set('per_page', String(MAX_PER_PAGE));
+
+      const response = await fetch(url, { headers });
+      if (!response.ok) {
+        throw new Error(
+          `[${this.providerName}] Falha ao listar repos de "${organization}": ${response.status} ${response.statusText}.`,
+        );
+      }
+
+      const items = (await response.json()) as readonly GitHubRepo[];
+      repos.push(...items.map((item) => item.full_name));
+
+      if (items.length < MAX_PER_PAGE) {
+        break;
+      }
+      page += 1;
+    }
+
+    return repos;
   }
 
   /**
@@ -161,22 +328,37 @@ export class GitHubActionsProvider extends BaseProvider {
   }
 
   /**
-   * A Deployments API do GitHub não tem busca cross-repo (diferente da
-   * Search API usada pelo conector de PRs, escopado por `organization`) —
-   * só existe por repositório. Por isso a integração é escopada a um único
-   * `owner/repo`, mesmo padrão já usado em Jira (`projectKey`) e Linear
-   * (`teamKey`).
+   * `undefined` quando omitido — dispara o modo "org inteira"
+   * (`syncOrgWide`), já que a Deployments API do GitHub não tem busca
+   * cross-repo (diferente da Search API usada pelo conector de PRs).
    */
-  private resolveRepository(credentials: ProviderCredentials): string {
+  private resolveRepository(credentials: ProviderCredentials): string | undefined {
     const repository = credentials.extra?.repository;
 
-    if (!repository || typeof repository !== 'string') {
+    if (repository === undefined) {
+      return undefined;
+    }
+
+    if (typeof repository !== 'string' || repository.length === 0) {
       throw new Error(
-        `[${this.providerName}] credentials.extra.repository ausente — obrigatório, formato "owner/repo".`,
+        `[${this.providerName}] credentials.extra.repository, quando informado, precisa ser uma string não vazia, formato "owner/repo".`,
       );
     }
 
     return repository;
+  }
+
+  /** Só é chamado (e exigido) quando `credentials.extra.repository` foi omitido. */
+  private resolveOrganization(credentials: ProviderCredentials): string {
+    const organization = credentials.extra?.organization;
+
+    if (!organization || typeof organization !== 'string') {
+      throw new Error(
+        `[${this.providerName}] credentials.extra.organization ausente — obrigatório quando credentials.extra.repository não é informado (modo "toda a org").`,
+      );
+    }
+
+    return organization;
   }
 
   private buildHeaders(token: string): Record<string, string> {
