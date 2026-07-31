@@ -328,24 +328,15 @@ export class GitHubActionsProvider extends BaseProvider {
   }
 
   /**
-   * `undefined` quando omitido — dispara o modo "org inteira"
+   * `undefined` quando omitido (ou string vazia — formulário de front
+   * manda `""`, não ausência do campo) dispara o modo "org inteira"
    * (`syncOrgWide`), já que a Deployments API do GitHub não tem busca
-   * cross-repo (diferente da Search API usada pelo conector de PRs).
+   * cross-repo (diferente da Search API usada pelo conector de PRs). Mesma
+   * lógica de `JiraProvider.resolveProjectKey`.
    */
   private resolveRepository(credentials: ProviderCredentials): string | undefined {
     const repository = credentials.extra?.repository;
-
-    if (repository === undefined) {
-      return undefined;
-    }
-
-    if (typeof repository !== 'string' || repository.length === 0) {
-      throw new Error(
-        `[${this.providerName}] credentials.extra.repository, quando informado, precisa ser uma string não vazia, formato "owner/repo".`,
-      );
-    }
-
-    return repository;
+    return typeof repository === 'string' && repository.length > 0 ? repository : undefined;
   }
 
   /** Só é chamado (e exigido) quando `credentials.extra.repository` foi omitido. */
