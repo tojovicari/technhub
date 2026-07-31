@@ -5,10 +5,16 @@ import { requireSelfOrRole } from '../middleware/require-self-or-role';
 import { requireSameTenant } from '../middleware/require-same-tenant';
 
 const requireSelfOrAdminOrManager = requireSelfOrRole('ADMIN', 'GESTOR');
+const DEFAULT_HISTORY_WEEKS = 12;
+const MAX_HISTORY_WEEKS = 52;
 
 interface TenantUserParams {
   readonly tenantId: string;
   readonly userId: string;
+}
+
+interface ProfileHistoryQuery {
+  readonly weeks?: string;
 }
 
 /**
@@ -35,6 +41,33 @@ export function registerPersonProfileRoutes(
       }
 
       return reply.status(200).send(profile);
+    },
+  );
+
+  /**
+   * Trabalho concluído/incidentes por semana, não cumulativo — mesmo
+   * espírito de `.../teams/:teamId/profile/history`. Mesmo RBAC do
+   * `/profile`.
+   */
+  server.get<{ Params: TenantUserParams; Querystring: ProfileHistoryQuery }>(
+    '/tenants/:tenantId/users/:userId/profile/history',
+    { preHandler: [requireAuth, requireSelfOrAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, userId } = request.params;
+      const parsedWeeks = request.query.weeks ? Number(request.query.weeks) : DEFAULT_HISTORY_WEEKS;
+
+      if (!Number.isInteger(parsedWeeks) || parsedWeeks < 1 || parsedWeeks > MAX_HISTORY_WEEKS) {
+        return reply
+          .status(400)
+          .send({ error: `"weeks" precisa ser um inteiro entre 1 e ${MAX_HISTORY_WEEKS}.` });
+      }
+
+      const history = await personProfileService.getProfileHistory(tenantId, userId, parsedWeeks);
+      if (!history) {
+        return reply.status(404).send({ error: 'Usuário não encontrado.' });
+      }
+
+      return reply.status(200).send(history);
     },
   );
 }

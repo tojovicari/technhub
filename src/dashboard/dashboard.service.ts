@@ -69,6 +69,24 @@ export interface FlowMetrics {
 }
 
 /**
+ * DORA como série temporal — mesmo espírito de `TeamProfileHistoryPoint`
+ * (`team-profile.service.ts`): pontos semanais rolantes, cada um escopado à
+ * sua própria janela `(ponto anterior, este ponto]`, não cumulativo. Só
+ * `deploymentFrequency`/`changeFailureRate` (o par que forma o "quadrante"
+ * DORA clássico) — Lead Time/MTTR são distribuições de duração, menos
+ * naturais como barra semanal; se fizer falta depois, é a mesma extensão.
+ */
+export interface DoraHistoryPoint {
+  readonly date: string;
+  readonly deploymentFrequency: DeploymentFrequencyMetric;
+  readonly changeFailureRate: AvailableChangeFailureRateMetric | UnavailableMetric;
+}
+
+export interface DoraHistory {
+  readonly points: readonly DoraHistoryPoint[];
+}
+
+/**
  * `available: false` são gaps reais e já conhecidos, não esquecidos — cada
  * um documentado no plano desta rodada. Devolver isso explícito na resposta
  * (em vez de omitir o campo) reduz a necessidade de documentação externa
@@ -94,6 +112,8 @@ const CYCLE_TIME_UNAVAILABLE: UnavailableMetric = {
   available: false,
   reason: 'Nenhum work item concluído (completed_at) neste período ainda.',
 };
+
+const DORA_HISTORY_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
  * Primeira camada de leitura agregada (DORA + Flow) — Seção 6 da spec.
@@ -130,6 +150,40 @@ export class DashboardService {
         meanTimeToRestore,
         changeFailureRate,
       };
+    });
+  }
+
+  /**
+   * `deploymentFrequency`/`changeFailureRate` recalculados por semana, cada
+   * um escopado só à sua própria janela (não cumulativo) — reaproveita as
+   * mesmas queries de `getDoraMetrics` sem alterá-las, só chamadas várias
+   * vezes com `from`/`to` estreitos. Nenhuma das duas tem CTE pesada nem
+   * subquery por linha custosa (`queryChangeFailureRate` é uma varredura +
+   * `EXISTS` correlacionado simples), então rodar até 52x numa chamada não é
+   * motivo de preocupação de performance.
+   */
+  async getDoraHistory(tenantId: string, teamId: string | undefined, weeks: number): Promise<DoraHistory> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const now = new Date();
+      const pointDates: Date[] = [];
+      for (let i = weeks - 1; i >= 0; i -= 1) {
+        pointDates.push(new Date(now.getTime() - i * DORA_HISTORY_WEEK_MS));
+      }
+
+      const points = await Promise.all(
+        pointDates.map(async (date, index) => {
+          const windowStart = index === 0 ? new Date(date.getTime() - DORA_HISTORY_WEEK_MS) : pointDates[index - 1];
+
+          const [deploymentFrequency, changeFailureRate] = await Promise.all([
+            this.queryDeploymentFrequency(client, windowStart, date, teamId),
+            this.queryChangeFailureRate(client, windowStart, date, teamId),
+          ]);
+
+          return { date: date.toISOString().slice(0, 10), deploymentFrequency, changeFailureRate };
+        }),
+      );
+
+      return { points };
     });
   }
 

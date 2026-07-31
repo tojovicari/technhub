@@ -30,6 +30,23 @@ export interface PersonProfile {
   readonly byTeam: readonly PersonProfileTeamBreakdown[];
 }
 
+/**
+ * Trabalho concluído/incidentes por semana, não cumulativo — mesmo espírito
+ * de `TeamProfileHistoryPoint`/`DoraHistoryPoint`: janela `(ponto anterior,
+ * este ponto]`. Sem tempo de vida por enquanto (ver plano desta rodada) —
+ * só contagem, pra não reabrir a mesma decisão de `started_working_at`
+ * ausente sem necessidade confirmada pro caso de pessoa.
+ */
+export interface PersonProfileHistoryPoint {
+  readonly date: string;
+  readonly completedWorkItems: readonly { readonly category: string; readonly count: number }[];
+  readonly incidentsAssigned: number;
+}
+
+export interface PersonProfileHistory {
+  readonly points: readonly PersonProfileHistoryPoint[];
+}
+
 /** Acumulador mutável interno, chaveado por `team_id` (ou `'unlinked'`) — vira `PersonProfileTeamBreakdown` na montagem final. */
 interface TeamAccumulator {
   teamId: string | null;
@@ -41,6 +58,7 @@ interface TeamAccumulator {
 }
 
 const UNLINKED_KEY = 'unlinked';
+const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 function emptyBreakdown(): PersonWorkBreakdown {
   return {
@@ -137,6 +155,86 @@ export class PersonProfileService {
     );
 
     return { ...baseProfile, summary, byTeam };
+  }
+
+  /**
+   * `completedWorkItems`/`incidentsAssigned` por semana, não cumulativo —
+   * mesmo padrão de janela rolante de `TeamProfileService.getProfileHistory`.
+   * Busca tudo de uma vez (2 queries, uma por fonte) e bucketiza em JS por
+   * ponto, mesmo espírito da resolução em memória do time (volume por
+   * pessoa é ainda menor que por time, não justifica SQL com bucket nativo).
+   */
+  async getProfileHistory(tenantId: string, userId: string, weeks: number): Promise<PersonProfileHistory | null> {
+    const user = await this.userRepository.findById(tenantId, userId);
+    if (!user) {
+      return null;
+    }
+
+    const aliases = await this.userProviderAliasRepository.findByUserId(tenantId, userId);
+
+    const now = new Date();
+    const pointDates: Date[] = [];
+    for (let i = weeks - 1; i >= 0; i -= 1) {
+      pointDates.push(new Date(now.getTime() - i * ONE_WEEK_MS));
+    }
+
+    // Sem alias nenhum, não tem como achar nada nas fontes canônicas — mesmo
+    // caso já tratado em `getProfile` (usuário existe, só não foi vinculado
+    // a nenhuma identidade externa ainda).
+    if (aliases.length === 0) {
+      const emptyPoints = pointDates.map((date) => ({
+        date: date.toISOString().slice(0, 10),
+        completedWorkItems: [],
+        incidentsAssigned: 0,
+      }));
+      return { points: emptyPoints };
+    }
+
+    const providers = aliases.map((alias) => alias.provider);
+    const externalIds = aliases.map((alias) => alias.externalUserId);
+
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const [workItemRows, incidentRows] = await Promise.all([
+        client.query<{ completed_at: Date | null; semantic_category: string }>(
+          `SELECT ewi.completed_at, ewi.semantic_category
+           FROM canonical_work_items cwi
+           JOIN enriched_work_items ewi ON ewi.id = cwi.id
+           JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
+             ON pa.provider = cwi.provider AND pa.external_id = cwi.assignee_external_id`,
+          [providers, externalIds],
+        ),
+        client.query<{ triggered_at: Date }>(
+          `SELECT ci.triggered_at
+           FROM canonical_incidents ci
+           JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
+             ON pa.provider = ci.provider AND pa.external_id = ci.assignee_external_id`,
+          [providers, externalIds],
+        ),
+      ]);
+
+      const points = pointDates.map((date, index) => {
+        const windowStart = index === 0 ? new Date(date.getTime() - ONE_WEEK_MS) : pointDates[index - 1];
+
+        const categoryCounts = new Map<string, number>();
+        for (const row of workItemRows.rows) {
+          if (row.completed_at !== null && row.completed_at > windowStart && row.completed_at <= date) {
+            categoryCounts.set(row.semantic_category, (categoryCounts.get(row.semantic_category) ?? 0) + 1);
+          }
+        }
+
+        const incidentsAssigned = incidentRows.rows.filter(
+          (row) => row.triggered_at > windowStart && row.triggered_at <= date,
+        ).length;
+
+        const completedWorkItems = [...categoryCounts.entries()]
+          .map(([category, count]) => ({ category, count }))
+          .sort((a, b) => a.category.localeCompare(b.category));
+
+        return { date: date.toISOString().slice(0, 10), completedWorkItems, incidentsAssigned };
+      });
+
+      return { points };
+    });
   }
 
   /**
