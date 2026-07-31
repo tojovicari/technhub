@@ -61,8 +61,8 @@ primary_region = "gru"
   PORT                        = "3000"
   NODE_ENV                    = "production"
   FRONTEND_URL                = "https://app.moasy.tech"
-  PUBLIC_API_URL              = "https://cto-ai-api.fly.dev"
-  GITHUB_OAUTH_CALLBACK_URL   = "https://cto-ai-api.fly.dev/auth/github/callback"
+  PUBLIC_API_URL              = "https://api.moasy.tech"
+  GITHUB_OAUTH_CALLBACK_URL   = "https://api.moasy.tech/auth/github/callback"
   AUTH_DEFAULT_LOGIN_PROVIDER = "github"
   NOTIFICATION_EMAIL_PROVIDER = "resend"
 
@@ -151,7 +151,7 @@ O Fly redeploya automaticamente após `fly secrets set`.
 | `STRIPE_WEBHOOK_SECRET`       | ✅          | Signing secret do endpoint de webhook do Stripe (Dashboard → Webhooks)                                                        |
 | `INTERNAL_SYNC_TOKEN`         | ✅          | Segredo compartilhado do scheduler de sync (`POST /internal/sync`, header `X-Internal-Token`) — mesmo valor precisa estar setado como secret do repositório no GitHub (`gh secret set INTERNAL_SYNC_TOKEN`), usado pelo `.github/workflows/sync.yml` |
 
-**Diferença importante em relação ao `technhub`**: este projeto não recebe webhooks de GitHub/Jira/incident tools — a ingestão é sempre por *batch assíncrono* (`POST .../integrations/:id/sync`), não em tempo real (Princípio 2 do CLAUDE.md). Não há `GITHUB_WEBHOOK_TOKEN`/`JIRA_WEBHOOK_TOKEN`/`INCIDENT_IO_WEBHOOK_TOKEN`/`OPSGENIE_WEBHOOK_TOKEN` aqui — o único webhook real é o do Stripe (billing). O disparo periódico desses batches é o `.github/workflows/sync.yml` (agendado, a cada 10 minutos) chamando `POST /internal/sync` — não depende mais de alguém clicar em "sincronizar" manualmente pra os dados avançarem.
+**Diferença importante em relação ao `technhub`**: este projeto não recebe webhooks de GitHub/Jira/incident tools — a ingestão é sempre por *batch assíncrono* (`POST .../integrations/:id/sync`), não em tempo real (Princípio 2 do CLAUDE.md). Não há `GITHUB_WEBHOOK_TOKEN`/`JIRA_WEBHOOK_TOKEN`/`INCIDENT_IO_WEBHOOK_TOKEN`/`OPSGENIE_WEBHOOK_TOKEN` aqui — o único webhook real é o do Stripe (billing). O disparo periódico desses batches é o `.github/workflows/sync.yml` (agendado, 1x/dia por enquanto — era a cada 10 minutos, reduzido enquanto o volume de integrações ativas não justifica mais frequência) chamando `POST /internal/sync` — não depende mais de alguém clicar em "sincronizar" manualmente pra os dados avançarem.
 
 ---
 
@@ -207,7 +207,7 @@ fly deploy --app cto-ai-api
 # 6. Verificar
 fly status --app cto-ai-api
 fly logs --app cto-ai-api
-curl https://cto-ai-api.fly.dev/health
+curl https://api.moasy.tech/health
 ```
 
 ---

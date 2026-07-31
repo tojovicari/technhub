@@ -2,10 +2,11 @@ name: Sync
 
 on:
   schedule:
-    # A cada 10 minutos — GitHub Actions não garante o horário exato sob
-    # carga, é um "pelo menos a cada N minutos", suficiente pra avançar o
-    # backfill/incremental de cada integração ativa aos poucos.
-    - cron: '*/10 * * * *'
+    # 1x/dia por enquanto (06:00 UTC) — GitHub Actions não garante o horário
+    # exato sob carga, é um "pelo menos 1x/dia". Era */10 min; reduzido de
+    # propósito enquanto o volume de integrações ativas não justifica mais
+    # frequência. Fácil de aumentar de novo depois, é só trocar o cron.
+    - cron: '0 6 * * *'
   workflow_dispatch: {}
 
 jobs:
@@ -18,5 +19,5 @@ jobs:
     steps:
       - name: POST /internal/sync
         run: |
-          curl -sf -X POST https://cto-ai-api.fly.dev/internal/sync \
+          curl -sf -X POST https://api.moasy.tech/internal/sync \
             -H "X-Internal-Token: ${{ secrets.INTERNAL_SYNC_TOKEN }}"
