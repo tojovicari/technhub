@@ -42,6 +42,9 @@ interface TenantParams {
 interface TenantUserParams extends TenantParams {
   readonly userId: string;
 }
+interface TenantUserAliasParams extends TenantUserParams {
+  readonly aliasId: string;
+}
 
 function isSystemRole(value: string): value is SystemRole {
   return (VALID_SYSTEM_ROLES as readonly string[]).includes(value);
@@ -293,6 +296,28 @@ export function registerUserRoutes(
 
         throw error;
       }
+    },
+  );
+
+  /**
+   * Desfaz um vínculo pessoa↔identidade externa criado errado (mescla
+   * acidental em `POST .../aliases` ou em `POST .../discovered-users/materialize`).
+   * Mesmo RBAC do `POST`. Não apaga dado canônico/enriquecido nenhum, só a
+   * ponte — dado histórico já processado com essa identidade fica como
+   * estava até o próximo enriquecimento.
+   */
+  server.delete<{ Params: TenantUserAliasParams }>(
+    '/tenants/:tenantId/users/:userId/aliases/:aliasId',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, userId, aliasId } = request.params;
+
+      const deleted = await aliasRepository.delete(tenantId, userId, aliasId);
+      if (!deleted) {
+        return reply.status(404).send({ error: 'Alias não encontrado para este usuário.' });
+      }
+
+      return reply.status(204).send();
     },
   );
 }

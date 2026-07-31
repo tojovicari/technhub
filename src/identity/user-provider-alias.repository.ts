@@ -76,4 +76,25 @@ export class UserProviderAliasRepository {
       return result.rows.map(mapRowToAlias);
     });
   }
+
+  /**
+   * Desfaz um vínculo pessoa↔identidade externa criado errado (mescla
+   * acidental via `materialize`/`POST .../aliases`). Não apaga nada da
+   * Camada Canônica/Enriquecida — só a ponte; dado histórico já
+   * enriquecido com essa identidade permanece como estava até o próximo
+   * enriquecimento.
+   *
+   * @returns `false` se o alias não existe (ou já pertence a outro
+   * usuário) neste tenant — não lança.
+   */
+  async delete(tenantId: string, userId: string, aliasId: string): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `DELETE FROM user_provider_aliases WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
+        [aliasId, tenantId, userId],
+      );
+
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
 }
