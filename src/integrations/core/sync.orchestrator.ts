@@ -7,6 +7,9 @@ import { DiscoveredIdentityRepository } from '../repositories/discovered-identit
 import { WorkItemStatusTransitionRepository } from '../repositories/work-item-status-transition.repository';
 import type { SyncContext, SyncResult } from './canonical.types';
 
+/** Quantas integrações `runBatch` processa em paralelo por vez — ver `runBatch`. */
+const SYNC_BATCH_CONCURRENCY = 10;
+
 /**
  * Orquestra a execução de sincronizações incrementais sobre os provedores
  * registrados em `ProviderFactory`, persistindo os lotes canônicos
@@ -68,13 +71,26 @@ export class SyncOrchestrator {
   }
 
   /**
-   * Executa `runSyncForIntegration` para múltiplas integrações em paralelo,
-   * isolando a falha de uma integração das demais (resiliência em lote).
+   * Executa `runSyncForIntegration` para múltiplas integrações, isolando a
+   * falha de uma integração das demais (resiliência em lote).
    *
-   * A ordem dos resultados corresponde à ordem de `contexts`.
+   * Em lotes de `SYNC_BATCH_CONCURRENCY`, não tudo de uma vez: cada integração
+   * abre sua própria conexão de banco (`withTenantContext`) — sem limitar isso,
+   * uma base com muitos tenants/integrações ativos satura o pool do Postgres
+   * (ver `docs/BACKLOG.md`, item resolvido nesta rodada, e `DATABASE_POOL_MAX`
+   * em `src/database/pool.ts`). A ordem dos resultados corresponde à ordem de
+   * `contexts` mesmo em lotes.
    */
   async runBatch(contexts: readonly SyncContext[]): Promise<readonly SyncResult[]> {
-    return Promise.all(contexts.map((context) => this.runSyncForIntegration(context)));
+    const results: SyncResult[] = [];
+
+    for (let i = 0; i < contexts.length; i += SYNC_BATCH_CONCURRENCY) {
+      const batch = contexts.slice(i, i + SYNC_BATCH_CONCURRENCY);
+      const batchResults = await Promise.all(batch.map((context) => this.runSyncForIntegration(context)));
+      results.push(...batchResults);
+    }
+
+    return results;
   }
 
   /**

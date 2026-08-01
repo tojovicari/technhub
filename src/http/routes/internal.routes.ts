@@ -44,34 +44,43 @@ export function registerInternalRoutes(
   server.post('/internal/sync', { preHandler: [requireInternalToken] }, async (_request, reply) => {
     const tenants = await tenantRepository.findAllActive();
 
-    const targets: ScheduledSyncTarget[] = [];
-    for (const tenant of tenants) {
-      const integrations = await integrationRepository.listByTenant(tenant.id);
+    // Um tenant de cada vez era sequencial (só SELECT+decrypt, bem mais
+    // barato que a sync em si) — em paralelo agora, com o pool de conexões
+    // já dimensionado (`DATABASE_POOL_MAX`) pra dar a contrapressão certa
+    // sem precisar de lote manual aqui também (diferente de `runBatch`, que
+    // sim dispara chamada de rede por integração).
+    const targetsByTenant = await Promise.all(
+      tenants.map(async (tenant): Promise<readonly ScheduledSyncTarget[]> => {
+        const integrations = await integrationRepository.listByTenant(tenant.id);
+        const activeIntegrations = integrations.filter((integration) => integration.status === 'ACTIVE');
 
-      for (const integration of integrations) {
-        if (integration.status !== 'ACTIVE') {
-          continue;
-        }
+        const resolved = await Promise.all(
+          activeIntegrations.map(async (integration): Promise<ScheduledSyncTarget | null> => {
+            const stored = await integrationRepository.getDecryptedCredentialsById(tenant.id, integration.id);
+            if (!stored) {
+              return null;
+            }
 
-        const stored = await integrationRepository.getDecryptedCredentialsById(tenant.id, integration.id);
-        if (!stored) {
-          continue;
-        }
+            return {
+              provider: integration.provider,
+              context: {
+                providerName: integration.provider,
+                tenantId: tenant.id,
+                integrationId: integration.id,
+                teamId: integration.teamId ?? undefined,
+                credentials: stored.credentials,
+                cursor: stored.lastCursor,
+                since: stored.lastSyncedAt ?? undefined,
+              },
+            };
+          }),
+        );
 
-        targets.push({
-          provider: integration.provider,
-          context: {
-            providerName: integration.provider,
-            tenantId: tenant.id,
-            integrationId: integration.id,
-            teamId: integration.teamId ?? undefined,
-            credentials: stored.credentials,
-            cursor: stored.lastCursor,
-            since: stored.lastSyncedAt ?? undefined,
-          },
-        });
-      }
-    }
+        return resolved.filter((target): target is ScheduledSyncTarget => target !== null);
+      }),
+    );
+
+    const targets: ScheduledSyncTarget[] = targetsByTenant.flat();
 
     const results = await syncOrchestrator.runBatch(targets.map((target) => target.context));
 

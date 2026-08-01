@@ -1,12 +1,17 @@
 import type Stripe from 'stripe';
 import { getStripeClient } from './stripe-client';
 import { PlanRepository } from './plan.repository';
+import type { CreatePlanInput, UpdatePlanInput } from './plan.repository';
 import { SubscriptionRepository } from './subscription.repository';
 import { SubscriptionHistoryRepository } from './subscription-history.repository';
 import { BillingEventRepository } from './billing-event.repository';
 import { StripeSubscriptionIndexRepository } from './stripe-subscription-index.repository';
 import { BillingError } from './billing-errors';
 import type { Plan, Subscription } from './billing.types';
+
+/** `stripePriceId` não entra aqui — sempre calculado internamente (`createPlan`/`updatePlan`), nunca aceito de fora. */
+export type CreatePlanServiceInput = Omit<CreatePlanInput, 'stripePriceId'>;
+export type UpdatePlanServiceInput = Omit<UpdatePlanInput, 'stripePriceId'>;
 
 export interface CheckoutSessionResult {
   readonly url: string;
@@ -55,6 +60,75 @@ export class BillingService {
 
   async listPlans(): Promise<readonly Plan[]> {
     return this.planRepository.findPublicActive();
+  }
+
+  /** Todos os planos (inclusive privados/inativos) — só o gestor do SaaS vê isso, não o checkout do tenant. */
+  async listAllPlans(): Promise<readonly Plan[]> {
+    return this.planRepository.findAll();
+  }
+
+  /**
+   * Cria um plano novo, criando o Price no Stripe automaticamente quando o
+   * plano é pago (`priceCents > 0`) — usa `product_data` inline
+   * (`stripe.prices.create`) em vez de gerenciar um Product separado: o
+   * schema de `plans` só tem `stripe_price_id`, não `stripe_product_id`, e
+   * não vale a pena rastrear os dois só pra isso. Plano gratuito nunca cria
+   * Price, mesma convenção do seed do plano Free (`stripe_price_id` fica `null`).
+   */
+  async createPlan(input: CreatePlanServiceInput): Promise<Plan> {
+    const stripePriceId =
+      input.priceCents > 0 ? await this.createStripePrice(input.displayName, input) : null;
+
+    return this.planRepository.create({ ...input, stripePriceId });
+  }
+
+  /**
+   * Edita um plano existente. Se algum campo que afeta preço mudar
+   * (`priceCents`/`currency`/`billingPeriod`), cria um Price **novo** no
+   * Stripe — Price é imutável lá, não dá pra "editar" o valor de um já
+   * existente. Assinaturas já ativas no Price antigo continuam nele até
+   * upgrade/renovação; o antigo só para de ser oferecido em checkouts novos
+   * (não é arquivado/deletado aqui, fora de escopo desta rodada).
+   */
+  async updatePlan(id: string, patch: UpdatePlanServiceInput): Promise<Plan | null> {
+    const priceFieldsChanged =
+      patch.priceCents !== undefined || patch.currency !== undefined || patch.billingPeriod !== undefined;
+
+    if (!priceFieldsChanged) {
+      return this.planRepository.update(id, patch);
+    }
+
+    const current = await this.planRepository.findById(id);
+    if (!current) {
+      return null;
+    }
+
+    const priceCents = patch.priceCents ?? current.priceCents;
+    const merged = {
+      priceCents,
+      currency: patch.currency ?? current.currency,
+      billingPeriod: patch.billingPeriod ?? current.billingPeriod,
+    };
+
+    const stripePriceId =
+      priceCents > 0 ? await this.createStripePrice(patch.displayName ?? current.displayName, merged) : null;
+
+    return this.planRepository.update(id, { ...patch, stripePriceId });
+  }
+
+  private async createStripePrice(
+    displayName: string,
+    priced: { readonly priceCents: number; readonly currency: string; readonly billingPeriod: string },
+  ): Promise<string> {
+    const stripe = getStripeClient();
+    const price = await stripe.prices.create({
+      unit_amount: priced.priceCents,
+      currency: priced.currency,
+      recurring: { interval: priced.billingPeriod === 'annual' ? 'year' : 'month' },
+      product_data: { name: displayName },
+    });
+
+    return price.id;
   }
 
   async getSubscription(tenantId: string): Promise<Subscription | null> {

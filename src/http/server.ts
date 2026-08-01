@@ -30,6 +30,7 @@ import { registerPersonProfileRoutes } from './routes/person-profile.routes';
 import { registerInternalRoutes } from './routes/internal.routes';
 import { registerBillingRoutes } from './routes/billing.routes';
 import { registerBillingWebhookRoutes } from './routes/billing-webhook.routes';
+import { registerAdminRoutes } from './routes/admin.routes';
 
 const server = Fastify({ logger: true });
 
@@ -56,6 +57,7 @@ registerPersonProfileRoutes(server);
 registerInternalRoutes(server);
 registerBillingRoutes(server);
 registerBillingWebhookRoutes(server);
+registerAdminRoutes(server);
 
 const port = Number(process.env.PORT ?? 3000);
 

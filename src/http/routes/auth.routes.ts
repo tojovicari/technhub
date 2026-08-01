@@ -4,15 +4,18 @@ import {
   signAuthToken,
   signOAuthState,
   signPendingTenantSelection,
+  signPlatformOperatorToken,
   verifyOAuthState,
   verifyPendingTenantSelection,
 } from '../../auth/core/jwt';
 import { RefreshTokenRepository } from '../../auth/core/refresh-token.repository';
+import { isPlatformOperator } from '../../auth/core/platform-operator-allowlist';
 import { UserRepository } from '../../identity/user.repository';
 import { UserEmailDirectoryRepository } from '../../identity/user-email-directory.repository';
 import { TenantRepository } from '../../identity/tenant.repository';
 import type { Tenant, User } from '../../identity/identity.types';
 import { getFrontendUrl } from '../../config/frontend-url';
+import { getPlatformAdminRoutePrefix } from '../../config/platform-admin-route-prefix';
 
 const ACCESS_TOKEN_EXPIRES_IN_SECONDS = 60 * 60;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -95,6 +98,25 @@ function redirectToFrontendWithPendingSelection(
     pending: 'true',
     pendingToken,
     tenants: JSON.stringify(tenants.map((tenant) => ({ id: tenant.id, name: tenant.name }))),
+  });
+  return reply.redirect(`${url.toString()}#${fragment.toString()}`);
+}
+
+/**
+ * Sessão do gestor do SaaS — redireciona pra uma rota de front **diferente**
+ * de `/auth/callback` (o prefixo não-óbvio de `admin.routes.ts`, mesmo valor
+ * de `PLATFORM_ADMIN_ROUTE_PREFIX`), sem nenhum `User`/`tenantId` no payload
+ * (não existe nenhum dos dois pra essa identidade).
+ */
+function redirectToFrontendWithPlatformOperatorSession(
+  reply: FastifyReply,
+  accessToken: string,
+  routePrefix: string,
+): FastifyReply {
+  const url = new URL(`${routePrefix}/callback`, getFrontendUrl());
+  const fragment = new URLSearchParams({
+    accessToken,
+    expiresIn: String(ACCESS_TOKEN_EXPIRES_IN_SECONDS),
   });
   return reply.redirect(`${url.toString()}#${fragment.toString()}`);
 }
@@ -230,6 +252,21 @@ export function registerAuthRoutes(
 
       const authProvider = AuthProviderFactory.create(provider);
       const identity = await authProvider.resolveIdentity(code);
+
+      // Gestor do SaaS: identidade alowlisted, sem tenant nenhum envolvido —
+      // checado antes de qualquer resolução de tenant, de propósito. Só
+      // possível se PLATFORM_ADMIN_ROUTE_PREFIX estiver configurado (senão
+      // não tem pra onde redirecionar, e as rotas nem existem mesmo).
+      const platformAdminRoutePrefix = getPlatformAdminRoutePrefix();
+      if (platformAdminRoutePrefix && isPlatformOperator(identity.externalUserId)) {
+        const token = signPlatformOperatorToken({
+          purpose: 'platform-operator',
+          externalUserId: identity.externalUserId,
+          primaryEmail: identity.email,
+          name: identity.name,
+        });
+        return redirectToFrontendWithPlatformOperatorSession(reply, token, platformAdminRoutePrefix);
+      }
 
       // Atalho de deep-link: state já sabia o tenant (ex: link de convite).
       if (statePayload.tenantId) {

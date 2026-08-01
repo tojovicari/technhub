@@ -13,7 +13,13 @@ let pool: Pool | undefined;
  */
 export function getPool(): Pool {
   if (!pool) {
-    pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    // Default da lib `pg` é 10 — explícito aqui porque o `/internal/sync` e o
+    // painel de administração do SaaS (`admin.routes.ts`) disparam uma
+    // chamada por tenant/integração via `Promise.all`; sem `max` configurável,
+    // isso trava em 10 conexões simultâneas conforme a base cresce (ver
+    // docs/BACKLOG.md, item já resolvido nesta rodada).
+    const max = Number(process.env.DATABASE_POOL_MAX ?? 20);
+    pool = new Pool({ connectionString: process.env.DATABASE_URL, max });
   }
 
   return pool;

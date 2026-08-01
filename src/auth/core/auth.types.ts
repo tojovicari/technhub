@@ -45,3 +45,22 @@ export interface PendingTenantSelectionPayload {
   readonly email: string;
   readonly provider: string;
 }
+
+/**
+ * Payload do token do "gestor do SaaS" (platform operator) — dono da
+ * plataforma, não um `User` de tenant nenhum. Emitido no callback OAuth
+ * quando `identity.externalUserId` bate com `PLATFORM_OPERATOR_GITHUB_IDS`
+ * (`platform-operator-allowlist.ts`), em vez de resolver tenant.
+ *
+ * Propositalmente **não** é um `AuthTokenPayload` com `tenantId`/`systemRole`
+ * fictícios — é um tipo à parte, verificado por um middleware à parte
+ * (`requirePlatformOperator`), pra nunca ser confundido com/aceito no lugar
+ * de um token tenant-scoped (mesmo `purpose`-discriminador de
+ * `PendingTenantSelectionPayload`, mesmo `AUTH_JWT_SECRET` compartilhado).
+ */
+export interface PlatformOperatorTokenPayload {
+  readonly purpose: 'platform-operator';
+  readonly externalUserId: string;
+  readonly primaryEmail: string;
+  readonly name?: string;
+}

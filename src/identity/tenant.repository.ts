@@ -68,4 +68,25 @@ export class TenantRepository {
 
     return result.rows.map(mapRowToTenant);
   }
+
+  /** Todos os tenants, qualquer status — usado pelo painel do gestor do SaaS (`admin.routes.ts`), diferente de `findAllActive`. */
+  async findAll(): Promise<readonly Tenant[]> {
+    const result = await this.pool.query<TenantRow>(
+      `SELECT id, name, status, created_at, updated_at FROM tenants ORDER BY name`,
+    );
+
+    return result.rows.map(mapRowToTenant);
+  }
+
+  /** Suspender/reativar tenant pelo painel do gestor do SaaS. `null` se o tenant não existe. */
+  async updateStatus(tenantId: string, status: TenantStatus): Promise<Tenant | null> {
+    const result = await this.pool.query<TenantRow>(
+      `UPDATE tenants SET status = $2, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, name, status, created_at, updated_at`,
+      [tenantId, status],
+    );
+
+    return result.rows[0] ? mapRowToTenant(result.rows[0]) : null;
+  }
 }

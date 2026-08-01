@@ -1,5 +1,10 @@
 import jwt from 'jsonwebtoken';
-import type { AuthTokenPayload, OAuthStatePayload, PendingTenantSelectionPayload } from './auth.types';
+import type {
+  AuthTokenPayload,
+  OAuthStatePayload,
+  PendingTenantSelectionPayload,
+  PlatformOperatorTokenPayload,
+} from './auth.types';
 
 /** TTL curto: reduz a janela de exposição caso o access token vaze. */
 const ACCESS_TOKEN_TTL = '1h';
@@ -101,4 +106,30 @@ export function verifyPendingTenantSelection(token: string): PendingTenantSelect
   }
 
   return { purpose, email, provider };
+}
+
+/** Assina o access token do gestor do SaaS — mesmo TTL do token normal. Sem refresh token (ver `PlatformOperatorTokenPayload`). */
+export function signPlatformOperatorToken(payload: PlatformOperatorTokenPayload): string {
+  return jwt.sign(payload, requireJwtSecret(), { expiresIn: ACCESS_TOKEN_TTL });
+}
+
+/**
+ * Verifica e decodifica um token de gestor do SaaS. Exige `purpose` exato,
+ * mesma razão de `verifyPendingTenantSelection`.
+ *
+ * @throws {Error} Se o token for inválido, expirado, de propósito errado, ou tiver payload incompleto.
+ */
+export function verifyPlatformOperatorToken(token: string): PlatformOperatorTokenPayload {
+  const decoded = jwt.verify(token, requireJwtSecret());
+
+  if (typeof decoded === 'string') {
+    throw new Error('Token de gestor do SaaS malformado.');
+  }
+
+  const { purpose, externalUserId, primaryEmail, name } = decoded as Partial<PlatformOperatorTokenPayload>;
+  if (purpose !== 'platform-operator' || !externalUserId || !primaryEmail) {
+    throw new Error('Token de gestor do SaaS com payload incompleto ou de propósito errado.');
+  }
+
+  return { purpose, externalUserId, primaryEmail, name };
 }
