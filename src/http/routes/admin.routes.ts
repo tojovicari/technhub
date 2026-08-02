@@ -1,10 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { TenantRepository } from '../../identity/tenant.repository';
+import { UserRepository } from '../../identity/user.repository';
+import { TeamRepository } from '../../identity/team.repository';
+import { ProviderIntegrationRepository } from '../../integrations/repositories/provider-integration.repository';
 import { PlanRepository } from '../../billing/plan.repository';
 import { SubscriptionRepository } from '../../billing/subscription.repository';
 import { BillingService } from '../../billing/billing.service';
 import type { CreatePlanServiceInput, UpdatePlanServiceInput } from '../../billing/billing.service';
 import { BillingError } from '../../billing/billing-errors';
+import type { Tenant } from '../../identity/identity.types';
+import type { Subscription, Plan } from '../../billing/billing.types';
 import { requirePlatformOperator } from '../middleware/require-platform-operator';
 import { getPlatformAdminRoutePrefix } from '../../config/platform-admin-route-prefix';
 
@@ -43,6 +48,31 @@ const BILLING_ERROR_STATUS: Record<BillingError['code'], number> = {
 };
 
 /**
+ * Monta o mesmo formato de tenant+plano+assinatura usado tanto na listagem
+ * (`GET {prefix}/tenants`) quanto no detalhe de um só (`GET {prefix}/tenants/:tenantId`)
+ * — extraído pra não duplicar a resolução de plano.
+ */
+function buildTenantOverview(tenant: Tenant, subscription: Subscription | null, planById: Map<string, Plan>) {
+  const plan = subscription ? (planById.get(subscription.planId) ?? null) : null;
+
+  return {
+    id: tenant.id,
+    name: tenant.name,
+    status: tenant.status,
+    plan: plan ? { id: plan.id, displayName: plan.displayName } : null,
+    subscription: subscription
+      ? {
+          status: subscription.status,
+          currentPeriodEnd: subscription.currentPeriodEnd.toISOString(),
+          trialEndsAt: subscription.trialEndsAt?.toISOString() ?? null,
+          cancelledAt: subscription.cancelledAt?.toISOString() ?? null,
+          providerCustomerId: subscription.providerCustomerId,
+        }
+      : null,
+  };
+}
+
+/**
  * Rotas do gestor do SaaS — cross-tenant, fora do namespace `/tenants/:tenantId/*`.
  * Prefixo vem de `PLATFORM_ADMIN_ROUTE_PREFIX` (ver
  * `config/platform-admin-route-prefix.ts`), não-óbvio de propósito. Se não
@@ -59,6 +89,9 @@ export function registerAdminRoutes(
   planRepository: PlanRepository = new PlanRepository(),
   subscriptionRepository: SubscriptionRepository = new SubscriptionRepository(),
   billingService: BillingService = new BillingService(),
+  userRepository: UserRepository = new UserRepository(),
+  teamRepository: TeamRepository = new TeamRepository(),
+  integrationRepository: ProviderIntegrationRepository = new ProviderIntegrationRepository(),
 ): void {
   const prefix = getPlatformAdminRoutePrefix();
   if (!prefix) {
@@ -82,28 +115,76 @@ export function registerAdminRoutes(
     const overview = await Promise.all(
       tenants.map(async (tenant) => {
         const subscription = await subscriptionRepository.findByTenantId(tenant.id);
-        const plan = subscription ? (planById.get(subscription.planId) ?? null) : null;
-
-        return {
-          id: tenant.id,
-          name: tenant.name,
-          status: tenant.status,
-          plan: plan ? { id: plan.id, displayName: plan.displayName } : null,
-          subscription: subscription
-            ? {
-                status: subscription.status,
-                currentPeriodEnd: subscription.currentPeriodEnd.toISOString(),
-                trialEndsAt: subscription.trialEndsAt?.toISOString() ?? null,
-                cancelledAt: subscription.cancelledAt?.toISOString() ?? null,
-                providerCustomerId: subscription.providerCustomerId,
-              }
-            : null,
-        };
+        return buildTenantOverview(tenant, subscription, planById);
       }),
     );
 
     return reply.status(200).send(overview);
   });
+
+  /**
+   * Detalhe de um tenant só — mesmo formato do item da lista acima. `404`
+   * se o `tenantId` não existir (a lista nunca precisou checar isso, já que
+   * só itera o que `findAll` já devolveu; aqui é o único ponto que valida
+   * existência de verdade).
+   */
+  server.get<{ Params: TenantIdParams }>(
+    `${prefix}/tenants/:tenantId`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const [tenants, plans] = await Promise.all([
+        tenantRepository.findManyByIds([request.params.tenantId]),
+        planRepository.findAll(),
+      ]);
+      const tenant = tenants[0];
+      if (!tenant) {
+        return reply.status(404).send({ error: 'Tenant não encontrado.' });
+      }
+
+      const planById = new Map(plans.map((plan) => [plan.id, plan]));
+      const subscription = await subscriptionRepository.findByTenantId(tenant.id);
+
+      return reply.status(200).send(buildTenantOverview(tenant, subscription, planById));
+    },
+  );
+
+  /**
+   * Drilldown de leitura — reaproveita os mesmos repositórios já usados
+   * pelas rotas tenant-scoped equivalentes (`GET /tenants/:tenantId/users`
+   * etc.), só chamados com o `tenantId` da URL em vez de vir do token (não
+   * existe "o tenant do token" pro gestor do SaaS). De propósito **não**
+   * aceita o token de operador nas rotas tenant-scoped normais — mantém o
+   * isolamento entre os dois mecanismos de auth, só cria o espelho de
+   * leitura aqui. `tenantId` inexistente devolve lista vazia (RLS não acha
+   * nada), mesmo comportamento das rotas tenant-scoped — sem checagem de
+   * existência extra, só o `GET .../tenants/:tenantId` acima faz isso.
+   */
+  server.get<{ Params: TenantIdParams }>(
+    `${prefix}/tenants/:tenantId/users`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const users = await userRepository.findAllByTenant(request.params.tenantId);
+      return reply.status(200).send(users);
+    },
+  );
+
+  server.get<{ Params: TenantIdParams }>(
+    `${prefix}/tenants/:tenantId/teams`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const teams = await teamRepository.findAllByTenant(request.params.tenantId);
+      return reply.status(200).send(teams);
+    },
+  );
+
+  server.get<{ Params: TenantIdParams }>(
+    `${prefix}/tenants/:tenantId/integrations`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const integrations = await integrationRepository.listByTenant(request.params.tenantId);
+      return reply.status(200).send(integrations);
+    },
+  );
 
   server.post<{ Params: TenantIdParams }>(
     `${prefix}/tenants/:tenantId/suspend`,
