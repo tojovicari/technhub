@@ -8,6 +8,8 @@ import type {
 
 /** TTL curto: reduz a janela de exposição caso o access token vaze. */
 const ACCESS_TOKEN_TTL = '1h';
+/** Mais curto que o token normal de propósito — sessão de impersonation, exposição precisa ser bem menor. */
+const IMPERSONATION_TOKEN_TTL = '15m';
 /**
  * TTL curto o bastante pra cobrir o round-trip do redirect OAuth, nada além
  * disso — reaproveitado também pelo token de seleção de tenant (mesma
@@ -33,6 +35,15 @@ export function signAuthToken(payload: AuthTokenPayload): string {
 }
 
 /**
+ * Assina um access token de impersonation — mesma forma de `AuthTokenPayload`
+ * (`impersonatedBy` precisa vir preenchido), TTL bem mais curto que o normal.
+ * Reaproveita `verifyAuthToken` pra verificar, já que a forma é a mesma.
+ */
+export function signImpersonationToken(payload: AuthTokenPayload & { readonly impersonatedBy: string }): string {
+  return jwt.sign(payload, requireJwtSecret(), { expiresIn: IMPERSONATION_TOKEN_TTL });
+}
+
+/**
  * Verifica e decodifica um access token.
  *
  * @throws {Error} Se o token for inválido, expirado ou tiver payload incompleto.
@@ -44,12 +55,12 @@ export function verifyAuthToken(token: string): AuthTokenPayload {
     throw new Error('Token de acesso malformado.');
   }
 
-  const { userId, tenantId, systemRole, primaryEmail } = decoded as Partial<AuthTokenPayload>;
+  const { userId, tenantId, systemRole, primaryEmail, impersonatedBy } = decoded as Partial<AuthTokenPayload>;
   if (!userId || !tenantId || !systemRole || !primaryEmail) {
     throw new Error('Token de acesso com payload incompleto.');
   }
 
-  return { userId, tenantId, systemRole, primaryEmail };
+  return { userId, tenantId, systemRole, primaryEmail, ...(impersonatedBy ? { impersonatedBy } : {}) };
 }
 
 /** Assina o `state` do fluxo OAuth: protege contra CSRF, carrega provider (e tenant, só no atalho de deep-link). */

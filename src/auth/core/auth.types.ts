@@ -17,6 +17,14 @@ export interface AuthTokenPayload {
   readonly tenantId: string;
   readonly systemRole: SystemRole;
   readonly primaryEmail: string;
+  /**
+   * Presente só em sessão de impersonation (gestor do SaaS "vestindo" este
+   * usuário) — ID externo (GitHub) do operador. `requireAuth` usa isso pra
+   * bloquear qualquer escrita (`POST`/`PATCH`/`DELETE`) nessa sessão,
+   * mesmo que o `systemRole` do usuário-alvo permitisse — impersonation é
+   * somente leitura, decisão deliberada (ver `admin.routes.ts`).
+   */
+  readonly impersonatedBy?: string;
 }
 
 /**
