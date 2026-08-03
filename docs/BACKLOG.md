@@ -44,17 +44,28 @@ do seguinte):
    existente ou futura escapa disso. `POST {prefix}/end-impersonation`
    grava o encerramento deliberado (sem revogar o JWT — TTL curto já limita
    a exposição); "voltar a ser operador" é local no front.
-4. **Histórico de sync/enrichment por tenant — não feito.** Mesma lacuna já
-   registrada no spec do front (Seção 5.2, "não construa achando que depois
-   troca") — hoje não existe registro histórico de execução em lugar nenhum
-   do sistema, só o estado mais recente (`provider_integrations.status`/
-   `last_synced_at`). Resolver isso ajudaria tanto o back office normal
-   quanto esse painel. Próximo item real da lista.
+4. **Histórico de sync/enrichment por tenant — feito.** Tabela
+   `integration_run_history` (`db/migrations/0039`, RLS por tenant — dado de
+   tenant, não de plataforma). Uma linha por execução de sync
+   (`SyncOrchestrator.runSyncForIntegration`, tanto `.../sync` manual quanto
+   `/internal/sync` do cron — `triggeredBy: 'manual'|'cron'` via
+   `SyncContext.triggeredBy`) ou enrichment (`EnrichmentService.runForIntegration`,
+   sempre `'manual'` hoje), sucesso ou falha, com `summary` (contagens) e
+   `errorMessage` quando aplicável. `IntegrationRunHistoryRepository.record`
+   nunca lança (mesmo espírito do `SyncOrchestrator`: falha ao logar não pode
+   derrubar a sync/enrichment que já rodou). Leitura: `GET
+   /tenants/:tenantId/integrations/:integrationId/run-history` (tenant-scoped)
+   e `GET {prefix}/tenants/:tenantId/integrations/:integrationId/run-history`
+   (painel do gestor, cross-tenant, mesmo espelho de leitura do resto do
+   drilldown).
 - **MRR + funil de conversão — feito.** `GET {prefix}/metrics`, ver
   `.spec/api-reference/platform-admin.md`. Sem série temporal ainda (só
-  retrato do agora); funil histórico de inadimplência/recuperação não é
-  confiável hoje (`invoice.payment_failed`/`invoice.paid` não gravam
-  `subscription_history`, só atualizam o status atual).
+  retrato do agora). **Funil de inadimplência/recuperação — feito**:
+  `onInvoicePaymentFailed`/`onInvoicePaid` (`billing.service.ts`) agora
+  gravam `subscription_history` (`reason: 'payment_failed'`/
+  `'payment_recovered'`) na transição de verdade pra/de `past_due` (não em
+  toda falha/pagamento repetido do mesmo ciclo) — `funnel.delinquency` no
+  `/metrics`. Deixou de ser o gap documentado antes aqui.
 - **Deletar/arquivar plano** — só `create`/`update` hoje, ainda não pedido.
 - **Trocar de plano de um tenant diretamente pelo painel** (sem passar pelo
   checkout normal do tenant) — não pedido ainda.

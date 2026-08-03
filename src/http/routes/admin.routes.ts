@@ -3,6 +3,7 @@ import { TenantRepository } from '../../identity/tenant.repository';
 import { UserRepository } from '../../identity/user.repository';
 import { TeamRepository } from '../../identity/team.repository';
 import { ProviderIntegrationRepository } from '../../integrations/repositories/provider-integration.repository';
+import { IntegrationRunHistoryRepository } from '../../integrations/repositories/integration-run-history.repository';
 import { PlanRepository } from '../../billing/plan.repository';
 import { SubscriptionRepository } from '../../billing/subscription.repository';
 import { SubscriptionHistoryRepository } from '../../billing/subscription-history.repository';
@@ -33,6 +34,10 @@ interface PlanIdParams {
 interface ImpersonateParams {
   readonly tenantId: string;
   readonly userId: string;
+}
+interface TenantIntegrationIdParams {
+  readonly tenantId: string;
+  readonly integrationId: string;
 }
 interface AuditLogQuery {
   readonly tenantId?: string;
@@ -113,6 +118,7 @@ export function registerAdminRoutes(
   integrationRepository: ProviderIntegrationRepository = new ProviderIntegrationRepository(),
   auditLogRepository: PlatformOperatorAuditLogRepository = new PlatformOperatorAuditLogRepository(),
   subscriptionHistoryRepository: SubscriptionHistoryRepository = new SubscriptionHistoryRepository(),
+  runHistoryRepository: IntegrationRunHistoryRepository = new IntegrationRunHistoryRepository(),
 ): void {
   const prefix = getPlatformAdminRoutePrefix();
   if (!prefix) {
@@ -204,6 +210,17 @@ export function registerAdminRoutes(
     async (request, reply) => {
       const integrations = await integrationRepository.listByTenant(request.params.tenantId);
       return reply.status(200).send(integrations);
+    },
+  );
+
+  /** Mesmo espelho de leitura do drilldown acima, um nível mais fundo — histórico de execução (sync/enrichment) de uma integração específica. */
+  server.get<{ Params: TenantIntegrationIdParams }>(
+    `${prefix}/tenants/:tenantId/integrations/:integrationId/run-history`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const { tenantId, integrationId } = request.params;
+      const history = await runHistoryRepository.findByIntegration(tenantId, integrationId);
+      return reply.status(200).send(history);
     },
   );
 
@@ -442,11 +459,19 @@ export function registerAdminRoutes(
    * pra mensal (`priceCents / 12`) — senão infla 12x. Agrupado por moeda
    * (`plans.currency` permite mais de uma, mesmo só existindo `USD` hoje).
    *
-   * **`funnel.tenantsCreated`/`everConvertedToPaid`** vêm de
-   * `subscription_history.reason` (`tenant_created`/`checkout_completed`,
-   * gravados em `billing.service.ts`), contando tenants distintos — não
-   * `COUNT(*)` de linhas nem de `tenants` (esse último incluiria tenant
-   * antigo/fixture que nunca passou pelo provisionamento de verdade).
+   * **`funnel.tenantsCreated`/`everConvertedToPaid`/`delinquency.*`** vêm de
+   * `subscription_history.reason` (`tenant_created`/`checkout_completed`/
+   * `payment_failed`/`payment_recovered`, gravados em `billing.service.ts`),
+   * contando tenants distintos — não `COUNT(*)` de linhas nem de `tenants`
+   * (esse último incluiria tenant antigo/fixture que nunca passou pelo
+   * provisionamento de verdade).
+   *
+   * **`delinquency`**: `payment_failed`/`payment_recovered` só gravam uma
+   * linha na transição de verdade (primeira falha do ciclo / primeira
+   * recuperação depois de `past_due`), não em toda falha/pagamento repetido
+   * — ver os handlers `onInvoicePaymentFailed`/`onInvoicePaid`. Isso deixou
+   * de ser um gap conhecido (era, quando só o status atual era atualizado
+   * sem histórico).
    */
   server.get(`${prefix}/metrics`, { preHandler: [requirePlatformOperator] }, async (_request, reply) => {
     const [tenants, plans] = await Promise.all([tenantRepository.findAll(), planRepository.findAll()]);
@@ -510,6 +535,8 @@ export function registerAdminRoutes(
 
     const tenantsCreatedIds = new Set<string>();
     const everConvertedIds = new Set<string>();
+    const everWentPastDueIds = new Set<string>();
+    const everRecoveredIds = new Set<string>();
     for (const { tenant, history } of perTenant) {
       for (const entry of history) {
         if (entry.reason === 'tenant_created') {
@@ -517,6 +544,12 @@ export function registerAdminRoutes(
         }
         if (entry.reason === 'checkout_completed') {
           everConvertedIds.add(tenant.id);
+        }
+        if (entry.reason === 'payment_failed') {
+          everWentPastDueIds.add(tenant.id);
+        }
+        if (entry.reason === 'payment_recovered') {
+          everRecoveredIds.add(tenant.id);
         }
       }
     }
@@ -542,6 +575,8 @@ export function registerAdminRoutes(
 
     const tenantsCreated = tenantsCreatedIds.size;
     const everConvertedToPaid = everConvertedIds.size;
+    const everWentPastDue = everWentPastDueIds.size;
+    const everRecoveredFromPastDue = everRecoveredIds.size;
 
     const funnel = {
       tenantsCreated,
@@ -549,6 +584,11 @@ export function registerAdminRoutes(
       conversionRate: tenantsCreated > 0 ? everConvertedToPaid / tenantsCreated : 0,
       currentByStatus: ALL_SUBSCRIPTION_STATUSES.map((status) => ({ status, count: statusCounts.get(status) ?? 0 })),
       currentByTier: { free: freeCount, paid: paidCount },
+      delinquency: {
+        everWentPastDue,
+        everRecoveredFromPastDue,
+        recoveryRate: everWentPastDue > 0 ? everRecoveredFromPastDue / everWentPastDue : 0,
+      },
     };
 
     return reply.status(200).send({ mrr, funnel });

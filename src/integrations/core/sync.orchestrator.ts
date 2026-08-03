@@ -5,6 +5,7 @@ import { IncidentRepository } from '../repositories/incident.repository';
 import { DeploymentRepository } from '../repositories/deployment.repository';
 import { DiscoveredIdentityRepository } from '../repositories/discovered-identity.repository';
 import { WorkItemStatusTransitionRepository } from '../repositories/work-item-status-transition.repository';
+import { IntegrationRunHistoryRepository } from '../repositories/integration-run-history.repository';
 import type { SyncContext, SyncResult } from './canonical.types';
 
 /** Quantas integrações `runBatch` processa em paralelo por vez — ver `runBatch`. */
@@ -33,6 +34,7 @@ export class SyncOrchestrator {
     private readonly deploymentRepository: DeploymentRepository = new DeploymentRepository(),
     private readonly discoveredIdentityRepository: DiscoveredIdentityRepository = new DiscoveredIdentityRepository(),
     private readonly workItemStatusTransitionRepository: WorkItemStatusTransitionRepository = new WorkItemStatusTransitionRepository(),
+    private readonly integrationRunHistoryRepository: IntegrationRunHistoryRepository = new IntegrationRunHistoryRepository(),
   ) {}
 
   /**
@@ -45,6 +47,7 @@ export class SyncOrchestrator {
    */
   async runSyncForIntegration(context: SyncContext): Promise<SyncResult> {
     const startedAt = performance.now();
+    const startedAtDate = new Date();
 
     try {
       const provider = ProviderFactory.create(context.providerName);
@@ -53,6 +56,16 @@ export class SyncOrchestrator {
       const result = await this.persist(syncResult, context.integrationId);
 
       this.logOutcome(context.providerName, result, performance.now() - startedAt);
+      await this.integrationRunHistoryRepository.record(context.tenantId, {
+        integrationId: context.integrationId,
+        runType: 'sync',
+        triggeredBy: context.triggeredBy ?? 'manual',
+        success: result.success,
+        summary: { fetchedCount: result.fetchedCount },
+        errorMessage: result.errors?.join('; ') ?? null,
+        startedAt: startedAtDate,
+        finishedAt: new Date(),
+      });
       return result;
     } catch (error) {
       const durationMs = performance.now() - startedAt;
@@ -61,6 +74,16 @@ export class SyncOrchestrator {
       console.error(
         `[SyncOrchestrator] Falha em "${context.providerName}" após ${durationMs.toFixed(0)}ms: ${message}`,
       );
+
+      await this.integrationRunHistoryRepository.record(context.tenantId, {
+        integrationId: context.integrationId,
+        runType: 'sync',
+        triggeredBy: context.triggeredBy ?? 'manual',
+        success: false,
+        errorMessage: message,
+        startedAt: startedAtDate,
+        finishedAt: new Date(),
+      });
 
       return {
         success: false,

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { ProviderFactory } from '../../integrations/core/provider.factory';
 import { SyncOrchestrator } from '../../integrations/core/sync.orchestrator';
 import { ProviderIntegrationRepository } from '../../integrations/repositories/provider-integration.repository';
+import { IntegrationRunHistoryRepository } from '../../integrations/repositories/integration-run-history.repository';
 import type { ProviderCredentials } from '../../integrations/core/canonical.types';
 import { getPgErrorCode } from '../pg-error';
 import { isValidUuid } from '../uuid';
@@ -44,6 +45,7 @@ export function registerIntegrationRoutes(
   server: FastifyInstance,
   integrationRepository: ProviderIntegrationRepository = new ProviderIntegrationRepository(),
   syncOrchestrator: SyncOrchestrator = new SyncOrchestrator(),
+  runHistoryRepository: IntegrationRunHistoryRepository = new IntegrationRunHistoryRepository(),
 ): void {
   server.post<{ Params: TenantParams; Body: RegisterIntegrationBody }>(
     '/tenants/:tenantId/integrations',
@@ -210,6 +212,26 @@ export function registerIntegrationRoutes(
       });
 
       return reply.status(200).send(result);
+    },
+  );
+
+  server.get<{ Params: TenantIntegrationParams }>(
+    '/tenants/:tenantId/integrations/:integrationId/run-history',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, integrationId } = request.params;
+
+      if (!isValidUuid(integrationId)) {
+        return reply.status(404).send({ error: 'Integração não encontrada para este tenant.' });
+      }
+
+      const integration = await integrationRepository.getById(tenantId, integrationId);
+      if (!integration) {
+        return reply.status(404).send({ error: 'Integração não encontrada para este tenant.' });
+      }
+
+      const history = await runHistoryRepository.findByIntegration(tenantId, integrationId);
+      return reply.status(200).send(history);
     },
   );
 }

@@ -337,8 +337,23 @@ export class BillingService {
     if (!tenantId) return;
     if (await this.alreadyProcessed(tenantId, event.id)) return;
 
+    const current = await this.subscriptionRepository.findByTenantId(tenantId);
+    const wasPastDue = current?.status === 'past_due';
+
     const updated = await this.subscriptionRepository.update(tenantId, { status: 'active', pastDueSince: null });
     if (!updated) return;
+
+    // Só grava histórico na recuperação de uma inadimplência de verdade — uma
+    // renovação normal (status já 'active') dispara `invoice.paid` todo mês e
+    // não deveria virar uma linha nova em `subscription_history` a cada vez.
+    if (wasPastDue) {
+      await this.subscriptionHistoryRepository.create(tenantId, {
+        subscriptionId: updated.id,
+        planId: updated.planId,
+        status: updated.status,
+        reason: 'payment_recovered',
+      });
+    }
 
     await this.billingEventRepository.create(tenantId, {
       eventType: 'invoice.paid',
@@ -356,11 +371,25 @@ export class BillingService {
     const current = await this.subscriptionRepository.findByTenantId(tenantId);
     if (!current) return;
 
+    const isFirstFailure = current.pastDueSince === null;
+
     // Só seta na primeira falha — não reseta o relógio de graça numa falha repetida.
-    await this.subscriptionRepository.update(tenantId, {
+    const updated = await this.subscriptionRepository.update(tenantId, {
       status: 'past_due',
       pastDueSince: current.pastDueSince ?? new Date(),
     });
+
+    // Mesma lógica do `wasPastDue` acima, espelhada: só grava histórico na
+    // transição de verdade pra past_due, não em toda falha repetida do
+    // mesmo ciclo de cobrança.
+    if (isFirstFailure && updated) {
+      await this.subscriptionHistoryRepository.create(tenantId, {
+        subscriptionId: updated.id,
+        planId: updated.planId,
+        status: updated.status,
+        reason: 'payment_failed',
+      });
+    }
 
     await this.billingEventRepository.create(tenantId, {
       eventType: 'invoice.payment_failed',

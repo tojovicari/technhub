@@ -71,6 +71,7 @@ export function registerInternalRoutes(
                 credentials: stored.credentials,
                 cursor: stored.lastCursor,
                 since: stored.lastSyncedAt ?? undefined,
+                triggeredBy: 'cron',
               },
             };
           }),

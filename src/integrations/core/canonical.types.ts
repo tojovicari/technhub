@@ -123,6 +123,8 @@ export interface SyncContext {
    * inline (GitHub, Linear, GitHub Actions, Waroom) podem ignorar.
    */
   readonly knownExternalUserIds?: ReadonlySet<string>;
+  /** Quem disparou esta sync — `'manual'` (rota `.../sync`) ou `'cron'` (`/internal/sync`). Usado só para o histórico de execução (`integration_run_history`); default `'manual'` se omitido. */
+  readonly triggeredBy?: 'manual' | 'cron';
 }
 
 /**

@@ -19,6 +19,7 @@ import {
 import { EnrichedWorkItemRepository } from './enriched-work-item.repository';
 import { EnrichedDeploymentRepository } from './enriched-deployment.repository';
 import { EnrichedIncidentRepository } from './enriched-incident.repository';
+import { IntegrationRunHistoryRepository } from '../integrations/repositories/integration-run-history.repository';
 import {
   evaluateDeploymentEnvironment,
   evaluateIncidentSeverity,
@@ -86,6 +87,7 @@ export class EnrichmentService {
     private readonly enrichedDeploymentRepository: EnrichedDeploymentRepository = new EnrichedDeploymentRepository(),
     private readonly enrichedIncidentRepository: EnrichedIncidentRepository = new EnrichedIncidentRepository(),
     private readonly teamResourceLinkRepository: TeamResourceLinkRepository = new TeamResourceLinkRepository(),
+    private readonly integrationRunHistoryRepository: IntegrationRunHistoryRepository = new IntegrationRunHistoryRepository(),
   ) {}
 
   async runForIntegration(tenantId: string, integrationId: string): Promise<EnrichmentResult> {
@@ -94,16 +96,34 @@ export class EnrichmentService {
       return { outcome: 'no_integration' };
     }
 
+    const startedAt = new Date();
+    let result: EnrichmentResult;
     switch (integration.category) {
       case 'issue_tracker':
-        return this.runWorkItemEnrichment(tenantId, integration);
+        result = await this.runWorkItemEnrichment(tenantId, integration);
+        break;
       case 'cicd':
-        return this.runDeploymentEnrichment(tenantId, integration);
+        result = await this.runDeploymentEnrichment(tenantId, integration);
+        break;
       case 'incident':
-        return this.runIncidentEnrichment(tenantId, integration);
+        result = await this.runIncidentEnrichment(tenantId, integration);
+        break;
       default:
-        return { outcome: 'unsupported_category' };
+        result = { outcome: 'unsupported_category' };
     }
+
+    await this.integrationRunHistoryRepository.record(tenantId, {
+      integrationId,
+      runType: 'enrichment',
+      triggeredBy: 'manual',
+      success: result.outcome === 'success',
+      summary: result.outcome === 'success' ? result.summary : undefined,
+      errorMessage: result.outcome === 'success' ? null : result.outcome,
+      startedAt,
+      finishedAt: new Date(),
+    });
+
+    return result;
   }
 
   /**
