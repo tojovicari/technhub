@@ -32,7 +32,8 @@ do seguinte):
 3. **Impersonation (operador "vira" um usuário de um tenant) — feito,
    acesso completo de `ADMIN`.** `POST {prefix}/tenants/:tenantId/impersonate/:userId`
    emite um `AuthTokenPayload` normal com `impersonatedBy` preenchido (TTL
-   de 15min, contra os 60min do token normal) e **`systemRole` sempre
+   de 60min, mesmo do token normal — era 15min quando impersonation ainda
+   era read-only) e **`systemRole` sempre
    `'ADMIN'`, independente do papel real da pessoa impersonada** (decisão
    revista nesta rodada — começou read-only, virou acesso completo por
    pedido explícito). Reaproveita 100% das rotas tenant-scoped existentes,

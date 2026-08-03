@@ -8,8 +8,14 @@ import type {
 
 /** TTL curto: reduz a janela de exposição caso o access token vaze. */
 const ACCESS_TOKEN_TTL = '1h';
-/** Mais curto que o token normal de propósito — sessão de impersonation, exposição precisa ser bem menor. */
-const IMPERSONATION_TOKEN_TTL = '15m';
+/**
+ * Mesmo TTL do token normal (`ACCESS_TOKEN_TTL`) — era `15m` (bem mais
+ * curto, decisão original de quando impersonation era read-only); ajustado
+ * pra `60m` por pedido explícito depois que impersonation passou a dar
+ * acesso completo de `ADMIN` (a compensação de segurança pra isso é o
+ * audit log de toda escrita, não mais um TTL curto — ver `admin.routes.ts`).
+ */
+const IMPERSONATION_TOKEN_TTL = '60m';
 /**
  * TTL curto o bastante pra cobrir o round-trip do redirect OAuth, nada além
  * disso — reaproveitado também pelo token de seleção de tenant (mesma

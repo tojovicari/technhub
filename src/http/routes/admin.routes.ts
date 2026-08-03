@@ -18,7 +18,8 @@ import { getPlatformAdminRoutePrefix } from '../../config/platform-admin-route-p
 
 const BEARER_PREFIX = 'Bearer ';
 
-const ACCESS_TOKEN_EXPIRES_IN_SECONDS = 15 * 60;
+/** Precisa bater com `IMPERSONATION_TOKEN_TTL` em `auth/core/jwt.ts` — só reportado aqui pro front, o TTL real já está embutido no JWT assinado por `signImpersonationToken`. */
+const IMPERSONATION_TOKEN_EXPIRES_IN_SECONDS = 60 * 60;
 
 /** Ordem fixa em `funnel.currentByStatus` — todo status aparece, mesmo com `count: 0`, pro front não ter que inventar os que faltam. */
 const ALL_SUBSCRIPTION_STATUSES: readonly SubscriptionStatus[] = ['trialing', 'active', 'past_due', 'cancelled', 'expired'];
@@ -366,14 +367,14 @@ export function registerAdminRoutes(
         targetUserId: user.id,
       });
 
-      return reply.status(200).send({ accessToken, expiresIn: ACCESS_TOKEN_EXPIRES_IN_SECONDS, user });
+      return reply.status(200).send({ accessToken, expiresIn: IMPERSONATION_TOKEN_EXPIRES_IN_SECONDS, user });
     },
   );
 
   /**
-   * Encerramento deliberado — não invalida o JWT de verdade (sem revogação,
-   * o TTL de 15min já limita a exposição), só deixa registrado no audit log
-   * que foi um "saiu" e não um "expirou sozinho". "Voltar a ser operador" é
+   * Encerramento deliberado — não invalida o JWT de verdade (sem revogação),
+   * só deixa registrado no audit log que foi um "saiu" e não um "expirou
+   * sozinho". "Voltar a ser operador" é
    * local no front (descarta este token, volta a usar o de operador que já
    * tinha guardado) — não depende de mais nada daqui.
    *
