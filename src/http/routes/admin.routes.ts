@@ -5,11 +5,12 @@ import { TeamRepository } from '../../identity/team.repository';
 import { ProviderIntegrationRepository } from '../../integrations/repositories/provider-integration.repository';
 import { PlanRepository } from '../../billing/plan.repository';
 import { SubscriptionRepository } from '../../billing/subscription.repository';
+import { SubscriptionHistoryRepository } from '../../billing/subscription-history.repository';
 import { BillingService } from '../../billing/billing.service';
 import type { CreatePlanServiceInput, UpdatePlanServiceInput } from '../../billing/billing.service';
 import { BillingError } from '../../billing/billing-errors';
 import type { Tenant, User } from '../../identity/identity.types';
-import type { Subscription, Plan } from '../../billing/billing.types';
+import type { Subscription, Plan, SubscriptionStatus } from '../../billing/billing.types';
 import { PlatformOperatorAuditLogRepository } from '../../platform-admin/platform-operator-audit-log.repository';
 import { requirePlatformOperator } from '../middleware/require-platform-operator';
 import { signImpersonationToken, verifyAuthToken } from '../../auth/core/jwt';
@@ -18,6 +19,9 @@ import { getPlatformAdminRoutePrefix } from '../../config/platform-admin-route-p
 const BEARER_PREFIX = 'Bearer ';
 
 const ACCESS_TOKEN_EXPIRES_IN_SECONDS = 15 * 60;
+
+/** Ordem fixa em `funnel.currentByStatus` — todo status aparece, mesmo com `count: 0`, pro front não ter que inventar os que faltam. */
+const ALL_SUBSCRIPTION_STATUSES: readonly SubscriptionStatus[] = ['trialing', 'active', 'past_due', 'cancelled', 'expired'];
 
 interface TenantIdParams {
   readonly tenantId: string;
@@ -107,6 +111,7 @@ export function registerAdminRoutes(
   teamRepository: TeamRepository = new TeamRepository(),
   integrationRepository: ProviderIntegrationRepository = new ProviderIntegrationRepository(),
   auditLogRepository: PlatformOperatorAuditLogRepository = new PlatformOperatorAuditLogRepository(),
+  subscriptionHistoryRepository: SubscriptionHistoryRepository = new SubscriptionHistoryRepository(),
 ): void {
   const prefix = getPlatformAdminRoutePrefix();
   if (!prefix) {
@@ -421,4 +426,126 @@ export function registerAdminRoutes(
       return reply.status(200).send(entries);
     },
   );
+
+  /**
+   * MRR + funil de conversão, cross-tenant — retrato do agora, não série
+   * temporal (ver `docs/BACKLOG.md` pra extensão futura). Mesmo padrão de
+   * `Promise.all` por tenant já usado em `GET {prefix}/tenants`.
+   *
+   * **MRR só conta `status: 'active'`** (`trialing`/`past_due`/`cancelled`/
+   * `expired` não são receita recorrente confiável) e normaliza plano anual
+   * pra mensal (`priceCents / 12`) — senão infla 12x. Agrupado por moeda
+   * (`plans.currency` permite mais de uma, mesmo só existindo `USD` hoje).
+   *
+   * **`funnel.tenantsCreated`/`everConvertedToPaid`** vêm de
+   * `subscription_history.reason` (`tenant_created`/`checkout_completed`,
+   * gravados em `billing.service.ts`), contando tenants distintos — não
+   * `COUNT(*)` de linhas nem de `tenants` (esse último incluiria tenant
+   * antigo/fixture que nunca passou pelo provisionamento de verdade).
+   */
+  server.get(`${prefix}/metrics`, { preHandler: [requirePlatformOperator] }, async (_request, reply) => {
+    const [tenants, plans] = await Promise.all([tenantRepository.findAll(), planRepository.findAll()]);
+    const planById = new Map(plans.map((plan) => [plan.id, plan]));
+
+    const perTenant = await Promise.all(
+      tenants.map(async (tenant) => {
+        const [subscription, history] = await Promise.all([
+          subscriptionRepository.findByTenantId(tenant.id),
+          subscriptionHistoryRepository.findAllByTenant(tenant.id),
+        ]);
+        return { tenant, subscription, history };
+      }),
+    );
+
+    interface PlanMrrBucket {
+      readonly planId: string;
+      readonly name: string;
+      readonly displayName: string;
+      subscriberCount: number;
+      mrrCents: number;
+    }
+    const mrrByCurrency = new Map<string, { totalCents: number; byPlan: Map<string, PlanMrrBucket> }>();
+
+    for (const { subscription } of perTenant) {
+      if (!subscription || subscription.status !== 'active') {
+        continue;
+      }
+      const plan = planById.get(subscription.planId);
+      if (!plan) {
+        continue;
+      }
+
+      const monthlyEquivalentCents =
+        plan.billingPeriod === 'annual' ? Math.round(plan.priceCents / 12) : plan.priceCents;
+
+      const currencyBucket = mrrByCurrency.get(plan.currency) ?? { totalCents: 0, byPlan: new Map() };
+      currencyBucket.totalCents += monthlyEquivalentCents;
+
+      const planBucket = currencyBucket.byPlan.get(plan.id) ?? {
+        planId: plan.id,
+        name: plan.name,
+        displayName: plan.displayName,
+        subscriberCount: 0,
+        mrrCents: 0,
+      };
+      planBucket.subscriberCount += 1;
+      planBucket.mrrCents += monthlyEquivalentCents;
+      currencyBucket.byPlan.set(plan.id, planBucket);
+
+      mrrByCurrency.set(plan.currency, currencyBucket);
+    }
+
+    const mrr = {
+      byCurrency: [...mrrByCurrency.entries()].map(([currency, bucket]) => ({
+        currency,
+        totalCents: bucket.totalCents,
+        byPlan: [...bucket.byPlan.values()].sort((a, b) => b.mrrCents - a.mrrCents),
+      })),
+    };
+
+    const tenantsCreatedIds = new Set<string>();
+    const everConvertedIds = new Set<string>();
+    for (const { tenant, history } of perTenant) {
+      for (const entry of history) {
+        if (entry.reason === 'tenant_created') {
+          tenantsCreatedIds.add(tenant.id);
+        }
+        if (entry.reason === 'checkout_completed') {
+          everConvertedIds.add(tenant.id);
+        }
+      }
+    }
+
+    const statusCounts = new Map<SubscriptionStatus, number>(ALL_SUBSCRIPTION_STATUSES.map((status) => [status, 0]));
+    let freeCount = 0;
+    let paidCount = 0;
+    for (const { subscription } of perTenant) {
+      if (!subscription) {
+        continue;
+      }
+      statusCounts.set(subscription.status, (statusCounts.get(subscription.status) ?? 0) + 1);
+
+      const plan = planById.get(subscription.planId);
+      if (plan) {
+        if (plan.priceCents > 0) {
+          paidCount += 1;
+        } else {
+          freeCount += 1;
+        }
+      }
+    }
+
+    const tenantsCreated = tenantsCreatedIds.size;
+    const everConvertedToPaid = everConvertedIds.size;
+
+    const funnel = {
+      tenantsCreated,
+      everConvertedToPaid,
+      conversionRate: tenantsCreated > 0 ? everConvertedToPaid / tenantsCreated : 0,
+      currentByStatus: ALL_SUBSCRIPTION_STATUSES.map((status) => ({ status, count: statusCounts.get(status) ?? 0 })),
+      currentByTier: { free: freeCount, paid: paidCount },
+    };
+
+    return reply.status(200).send({ mrr, funnel });
+  });
 }

@@ -46,4 +46,19 @@ export class SubscriptionHistoryRepository {
       return mapRowToEntry(result.rows[0]);
     });
   }
+
+  /** Todo o histórico de um tenant, mais antigo primeiro — usado pra métricas cross-tenant (`admin.routes.ts`, funil de conversão). */
+  async findAllByTenant(tenantId: string): Promise<readonly SubscriptionHistoryEntry[]> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<SubscriptionHistoryRow>(
+        `SELECT id, tenant_id, subscription_id, plan_id, status, effective_from, reason, created_at
+         FROM subscription_history
+         WHERE tenant_id = $1
+         ORDER BY effective_from ASC`,
+        [tenantId],
+      );
+
+      return result.rows.map(mapRowToEntry);
+    });
+  }
 }
