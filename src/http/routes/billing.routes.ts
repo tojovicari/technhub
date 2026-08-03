@@ -37,6 +37,21 @@ export function registerBillingRoutes(
   server: FastifyInstance,
   billingService: BillingService = new BillingService(),
 ): void {
+  /**
+   * Pública, sem auth — pensada pra landing page/site de marketing
+   * (server-side/build-time, nunca fetch direto do navegador: CORS não
+   * libera essa origem, ver `server.ts`). Mesmo filtro `isPublic && isActive`
+   * do checkout (`billingService.listPlans` → `PlanRepository.findPublicActive`),
+   * sem duplicar a regra. Omite `stripePriceId` (referência interna, sem
+   * motivo pra expor) — todo o resto do shape de `Plan` é informação de
+   * preço, já pensada pra ser pública.
+   */
+  server.get('/plans', async (_request, reply) => {
+    const plans = await billingService.listPlans();
+    const publicPlans = plans.map(({ stripePriceId: _stripePriceId, ...rest }) => rest);
+    return reply.status(200).send(publicPlans);
+  });
+
   server.get<{ Params: TenantParams }>(
     '/tenants/:tenantId/billing/plans',
     { preHandler: [requireAuth, requireAdmin, requireSameTenant] },
