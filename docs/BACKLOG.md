@@ -30,26 +30,30 @@ do seguinte):
    {prefix}/audit-log?tenantId=&limit=` lista. `PlatformOperatorAuditLogRepository`
    (`src/platform-admin/`).
 3. **Impersonation (operador "vira" um usuário de um tenant) — feito,
-   read-only.** `POST {prefix}/tenants/:tenantId/impersonate/:userId` emite
-   um `AuthTokenPayload` normal com `impersonatedBy` preenchido (TTL de
-   15min, contra os 60min do token normal) — reaproveita 100% das rotas
-   tenant-scoped existentes pra leitura (dashboards, perfil, etc.), sem
-   duplicar nada. `requireAuth` (`src/http/middleware/require-auth.ts`)
-   bloqueia qualquer `POST`/`PATCH`/`DELETE` quando `impersonatedBy` está
-   presente, centralizado num único lugar — nenhuma rota existente ou
-   futura pode esquecer de checar isso. RBAC continua sendo o do
-   usuário-alvo de verdade (impersonar um `USUARIO` não abre nada que um
-   `USUARIO` não veria). `POST {prefix}/end-impersonation` grava o
-   encerramento deliberado no audit log (sem revogar o JWT — TTL curto já
-   limita a exposição); "voltar a ser operador" é local no front.
+   acesso completo de `ADMIN`.** `POST {prefix}/tenants/:tenantId/impersonate/:userId`
+   emite um `AuthTokenPayload` normal com `impersonatedBy` preenchido (TTL
+   de 15min, contra os 60min do token normal) e **`systemRole` sempre
+   `'ADMIN'`, independente do papel real da pessoa impersonada** (decisão
+   revista nesta rodada — começou read-only, virou acesso completo por
+   pedido explícito). Reaproveita 100% das rotas tenant-scoped existentes,
+   sem duplicar nada. **Compensação obrigatória pela ausência do bloqueio de
+   escrita**: `requireAuth` (`src/http/middleware/require-auth.ts`) grava
+   `IMPERSONATED_WRITE` no audit log (`metadata: { method, url }`) pra
+   **toda** escrita numa sessão impersonada, sem exceção — nenhuma rota
+   existente ou futura escapa disso. `POST {prefix}/end-impersonation`
+   grava o encerramento deliberado (sem revogar o JWT — TTL curto já limita
+   a exposição); "voltar a ser operador" é local no front.
 4. **Histórico de sync/enrichment por tenant — não feito.** Mesma lacuna já
    registrada no spec do front (Seção 5.2, "não construa achando que depois
    troca") — hoje não existe registro histórico de execução em lugar nenhum
    do sistema, só o estado mais recente (`provider_integrations.status`/
    `last_synced_at`). Resolver isso ajudaria tanto o back office normal
    quanto esse painel. Próximo item real da lista.
-- **Impersonation com escrita** — decisão deliberada de ficar só leitura por
-  enquanto; se precisar mudar, é decisão nova, não extensão natural.
+- **MRR + funil de conversão — feito.** `GET {prefix}/metrics`, ver
+  `.spec/api-reference/platform-admin.md`. Sem série temporal ainda (só
+  retrato do agora); funil histórico de inadimplência/recuperação não é
+  confiável hoje (`invoice.payment_failed`/`invoice.paid` não gravam
+  `subscription_history`, só atualizam o status atual).
 - **Deletar/arquivar plano** — só `create`/`update` hoje, ainda não pedido.
 - **Trocar de plano de um tenant diretamente pelo painel** (sem passar pelo
   checkout normal do tenant) — não pedido ainda.

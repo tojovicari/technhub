@@ -328,10 +328,14 @@ export function registerAdminRoutes(
 
   /**
    * Emite um token de sessão pro usuário-alvo — mesma forma de
-   * `AuthTokenPayload` de sempre, só com `impersonatedBy` preenchido, o que
-   * faz `requireAuth` bloquear qualquer escrita nessa sessão (ver
-   * `require-auth.ts`). RBAC continua sendo o do usuário-alvo de verdade —
-   * impersonar um `USUARIO` não abre nada que um `USUARIO` não veria.
+   * `AuthTokenPayload` de sempre, com `impersonatedBy` preenchido (marca a
+   * sessão, usado pro audit log de toda escrita — ver `require-auth.ts`) e
+   * `systemRole` **sempre `'ADMIN'`, independente do papel real do
+   * usuário-alvo** — decisão deliberada (não read-only, ver histórico desta
+   * rodada): o operador tem acesso completo naquele tenant enquanto
+   * impersona, não só o que o usuário-alvo teria. `id`/`primaryEmail`/
+   * `avatarUrl` no `user` da resposta continuam sendo os da pessoa de
+   * verdade — é só o `systemRole` do token que é elevado.
    * `markLoggedIn`/`last_login_at` não são tocados: isso não é um login de
    * verdade do usuário-alvo.
    */
@@ -349,7 +353,7 @@ export function registerAdminRoutes(
       const accessToken = signImpersonationToken({
         userId: user.id,
         tenantId,
-        systemRole: user.systemRole,
+        systemRole: 'ADMIN',
         primaryEmail: user.primaryEmail,
         impersonatedBy: request.platformOperator!.externalUserId,
       });

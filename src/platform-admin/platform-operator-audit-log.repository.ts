@@ -8,7 +8,15 @@ export type PlatformOperatorAuditAction =
   | 'CREATE_PLAN'
   | 'UPDATE_PLAN'
   | 'START_IMPERSONATION'
-  | 'END_IMPERSONATION';
+  | 'END_IMPERSONATION'
+  /**
+   * Toda escrita (`POST`/`PATCH`/`DELETE`) feita numa sessão impersonada
+   * (`AuthTokenPayload.impersonatedBy` presente) — impersonation dá acesso
+   * de `ADMIN` completo (não é read-only), então isso é o que fica no lugar
+   * do bloqueio: nenhuma escrita durante impersonation passa sem log.
+   * `metadata` carrega `{ method, url }` (ver `require-auth.ts`).
+   */
+  | 'IMPERSONATED_WRITE';
 
 export interface PlatformOperatorAuditLogEntry {
   readonly id: string;
