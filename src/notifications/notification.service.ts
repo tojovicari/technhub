@@ -14,6 +14,7 @@ export interface SendEmailInput {
 export interface SendInviteEmailInput {
   readonly to: string;
   readonly recipientName: string;
+  readonly tenantName: string;
   readonly loginUrl: string;
 }
 
@@ -46,6 +47,7 @@ export class NotificationService {
   async sendInviteEmail(input: SendInviteEmailInput): Promise<NotificationResult> {
     const content = buildInviteEmailContent({
       recipientName: input.recipientName,
+      tenantName: input.tenantName,
       loginUrl: input.loginUrl,
     });
 

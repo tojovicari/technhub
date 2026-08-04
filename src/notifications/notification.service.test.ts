@@ -25,6 +25,7 @@ describe('NotificationService.sendInviteEmail', () => {
     const result = await service.sendInviteEmail({
       to: 'dev@example.com',
       recipientName: 'Dev Exemplo',
+      tenantName: 'Acme Inc',
       loginUrl: 'http://127.0.0.1:3000/auth/github/login?tenantId=abc-123',
     });
 
@@ -34,5 +35,6 @@ describe('NotificationService.sendInviteEmail', () => {
     assert.equal(provider.lastMessage?.to[0]?.address, 'dev@example.com');
     assert.match(provider.lastMessage?.bodyHtml ?? '', /abc-123/);
     assert.match(provider.lastMessage?.bodyText ?? '', /abc-123/);
+    assert.match(provider.lastMessage?.bodyHtml ?? '', /Acme Inc/);
   });
 });

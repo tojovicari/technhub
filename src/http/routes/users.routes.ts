@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { UserRepository } from '../../identity/user.repository';
+import { TenantRepository } from '../../identity/tenant.repository';
 import { UserProviderAliasRepository } from '../../identity/user-provider-alias.repository';
 import { DiscoveredIdentityRepository } from '../../integrations/repositories/discovered-identity.repository';
 import type { SystemRole, User } from '../../identity/identity.types';
@@ -56,12 +57,25 @@ function isSystemRole(value: string): value is SystemRole {
  * `SyncOrchestrator.persist()` (falha de uma etapa não derruba o fluxo
  * principal, só é logada).
  */
-function sendInviteEmailBestEffort(notificationService: NotificationService, tenantId: string, user: User): void {
+function sendInviteEmailBestEffort(
+  notificationService: NotificationService,
+  tenantRepository: TenantRepository,
+  tenantId: string,
+  user: User,
+): void {
   const loginProvider = process.env.AUTH_DEFAULT_LOGIN_PROVIDER ?? 'github';
   const loginUrl = `${getPublicApiUrl()}/auth/${loginProvider}/login?tenantId=${tenantId}`;
 
-  notificationService
-    .sendInviteEmail({ to: user.primaryEmail, recipientName: user.fullName, loginUrl })
+  // Nome do tenant é só pra copy do email (personalização) — busca best-effort
+  // igual ao resto desta função: se falhar, cai pra um nome genérico em vez
+  // de derrubar o convite inteiro por causa de texto de exibição.
+  tenantRepository
+    .findManyByIds([tenantId])
+    .then((tenants) => tenants[0]?.name ?? 'sua equipe')
+    .catch(() => 'sua equipe')
+    .then((tenantName) =>
+      notificationService.sendInviteEmail({ to: user.primaryEmail, recipientName: user.fullName, tenantName, loginUrl }),
+    )
     .then((result) => {
       if (!result.success) {
         console.error(`[users.routes] Falha ao enviar email de convite para "${user.primaryEmail}": ${result.error}`);
@@ -88,6 +102,7 @@ export function registerUserRoutes(
   aliasRepository: UserProviderAliasRepository = new UserProviderAliasRepository(),
   discoveredIdentityRepository: DiscoveredIdentityRepository = new DiscoveredIdentityRepository(),
   notificationService: NotificationService = new NotificationService(),
+  tenantRepository: TenantRepository = new TenantRepository(),
 ): void {
   server.post<{ Params: TenantParams; Body: CreateUserBody }>(
     '/tenants/:tenantId/users',
@@ -126,7 +141,7 @@ export function registerUserRoutes(
         });
 
         if (!isBootstrap) {
-          sendInviteEmailBestEffort(notificationService, tenantId, user);
+          sendInviteEmailBestEffort(notificationService, tenantRepository, tenantId, user);
         }
 
         return reply.status(201).send(user);
@@ -257,7 +272,7 @@ export function registerUserRoutes(
         });
       }
 
-      sendInviteEmailBestEffort(notificationService, tenantId, invited);
+      sendInviteEmailBestEffort(notificationService, tenantRepository, tenantId, invited);
 
       return reply.status(200).send(invited);
     },
