@@ -34,7 +34,7 @@ const ISSUES_QUERY = `
         state { name }
         labels { nodes { name } }
         assignee { id name avatarUrl email }
-        team { key }
+        team { key name }
         createdAt
         updatedAt
         history(first: 50) {
@@ -71,7 +71,7 @@ interface LinearIssueNode {
     readonly avatarUrl: string | null;
     readonly email: string | null;
   } | null;
-  readonly team: { readonly key: string };
+  readonly team: { readonly key: string; readonly name: string };
   readonly createdAt: string;
   readonly updatedAt: string;
   /**
@@ -258,6 +258,7 @@ export class LinearProvider extends BaseProvider {
       title: node.title,
       assigneeExternalId: node.assignee?.id ?? null,
       externalGroupKey: node.team.key,
+      externalGroupName: node.team.name,
       createdAt: new Date(node.createdAt),
       updatedAt: new Date(node.updatedAt),
     };

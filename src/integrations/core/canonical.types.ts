@@ -160,6 +160,8 @@ export interface CanonicalWorkItem {
    * `jira_project`/`linear_team`), mesmo padrão de `canonical_pull_requests.repository`.
    */
   readonly externalGroupKey?: string | null;
+  /** Nome de exibição do grupo de origem (nome do projeto no Jira, nome do time no Linear) — companheiro de `externalGroupKey`, `null` quando o provider não expõe. */
+  readonly externalGroupName?: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

@@ -48,7 +48,7 @@ interface JiraIssue {
     readonly assignee: { readonly accountId: string } | null;
     readonly created: string;
     readonly updated: string;
-    readonly project: { readonly key: string };
+    readonly project: { readonly key: string; readonly name: string };
   };
   /**
    * Presente porque `buildSearchUrl` sempre pede `expand=changelog` — vem
@@ -527,6 +527,7 @@ export class JiraProvider extends BaseProvider {
       title: issue.fields.summary,
       assigneeExternalId: issue.fields.assignee?.accountId ?? null,
       externalGroupKey: issue.fields.project.key,
+      externalGroupName: issue.fields.project.name,
       createdAt: new Date(issue.fields.created),
       updatedAt: new Date(issue.fields.updated),
     };

@@ -18,6 +18,7 @@ interface WorkItemRow {
   readonly title: string;
   readonly assignee_external_id: string | null;
   readonly external_group_key: string | null;
+  readonly external_group_name: string | null;
   readonly created_at: Date;
   readonly updated_at: Date;
 }
@@ -34,6 +35,7 @@ function mapRowToPersistedWorkItem(row: WorkItemRow): PersistedWorkItem {
     title: row.title,
     assigneeExternalId: row.assignee_external_id,
     externalGroupKey: row.external_group_key,
+    externalGroupName: row.external_group_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -42,11 +44,11 @@ function mapRowToPersistedWorkItem(row: WorkItemRow): PersistedWorkItem {
 const UPSERT_SQL = `
   INSERT INTO canonical_work_items (
     tenant_id, provider, external_id, raw_issue_type, raw_status, raw_labels,
-    title, assignee_external_id, created_at, updated_at, synced_at, provider_integration_id, external_group_key
+    title, assignee_external_id, created_at, updated_at, synced_at, provider_integration_id, external_group_key, external_group_name
   )
   VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, NOW(), $11, $12
+    $7, $8, $9, $10, NOW(), $11, $12, $13
   )
   ON CONFLICT ON CONSTRAINT unique_tenant_integration_item DO UPDATE SET
     raw_issue_type = EXCLUDED.raw_issue_type,
@@ -56,7 +58,8 @@ const UPSERT_SQL = `
     assignee_external_id = EXCLUDED.assignee_external_id,
     updated_at = EXCLUDED.updated_at,
     synced_at = NOW(),
-    external_group_key = EXCLUDED.external_group_key;
+    external_group_key = EXCLUDED.external_group_key,
+    external_group_name = EXCLUDED.external_group_name;
 `;
 
 function toQueryParams(workItem: CanonicalWorkItem, providerIntegrationId: string): unknown[] {
@@ -73,6 +76,7 @@ function toQueryParams(workItem: CanonicalWorkItem, providerIntegrationId: strin
     workItem.updatedAt,
     providerIntegrationId,
     workItem.externalGroupKey ?? null,
+    workItem.externalGroupName ?? null,
   ];
 }
 
@@ -183,7 +187,7 @@ export class WorkItemRepository {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<WorkItemRow>(
         `SELECT id, tenant_id, provider, external_id, raw_issue_type, raw_status, raw_labels,
-                title, assignee_external_id, external_group_key, created_at, updated_at
+                title, assignee_external_id, external_group_key, external_group_name, created_at, updated_at
          FROM canonical_work_items
          WHERE tenant_id = $1 AND provider_integration_id = $2`,
         [tenantId, providerIntegrationId],
@@ -199,11 +203,19 @@ export class WorkItemRepository {
    * vinculados a nenhum time da plataforma — candidatos a vínculo via
    * `team_resource_links`. Mesmo padrão de
    * `PullRequestRepository.findUnlinkedRepositories`.
+   *
+   * `DISTINCT ON (external_group_key)` (não `DISTINCT` cru) + `ORDER BY ...,
+   * synced_at DESC`: pega o nome mais recente pra cada chave — cobre o caso
+   * raro de renomeação de projeto/time sem devolver a mesma key duas vezes
+   * com nomes diferentes.
    */
-  async findUnlinkedExternalGroups(tenantId: string, provider: string): Promise<readonly string[]> {
+  async findUnlinkedExternalGroups(
+    tenantId: string,
+    provider: string,
+  ): Promise<readonly { readonly key: string; readonly name: string | null }[]> {
     return withTenantContext(this.pool, tenantId, async (client) => {
-      const result = await client.query<{ external_group_key: string }>(
-        `SELECT DISTINCT external_group_key
+      const result = await client.query<{ external_group_key: string; external_group_name: string | null }>(
+        `SELECT DISTINCT ON (external_group_key) external_group_key, external_group_name
          FROM canonical_work_items cwi
          WHERE cwi.tenant_id = $1
            AND cwi.provider = $2
@@ -215,11 +227,11 @@ export class WorkItemRepository {
                AND trl.resource_type = $3
                AND trl.external_resource_id = cwi.external_group_key
            )
-         ORDER BY external_group_key`,
+         ORDER BY external_group_key, synced_at DESC`,
         [tenantId, provider, provider === 'jira' ? 'jira_project' : 'linear_team'],
       );
 
-      return result.rows.map((row) => row.external_group_key);
+      return result.rows.map((row) => ({ key: row.external_group_key, name: row.external_group_name }));
     });
   }
 }
