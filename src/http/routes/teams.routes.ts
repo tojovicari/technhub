@@ -12,6 +12,7 @@ import { WorkItemRepository } from '../../integrations/repositories/work-item.re
 import { DeploymentRepository } from '../../integrations/repositories/deployment.repository';
 import type { PlanningCycle } from '../../identity/identity.types';
 import { getPgErrorCode } from '../pg-error';
+import { isValidUuid } from '../uuid';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
 import { requireSameTenant } from '../middleware/require-same-tenant';
@@ -38,6 +39,9 @@ interface TenantParams {
 }
 interface TenantTeamParams extends TenantParams {
   readonly teamId: string;
+}
+interface TenantTeamLinkParams extends TenantTeamParams {
+  readonly linkId: string;
 }
 
 interface CreateTeamBody {
@@ -203,6 +207,26 @@ export function registerTeamRoutes(
       const { tenantId, teamId } = request.params;
       const links = await teamResourceLinkRepository.findByTeam(tenantId, teamId);
       return reply.status(200).send(links);
+    },
+  );
+
+  /** Desvincula — o recurso externo volta a aparecer em `GET .../candidates` na próxima consulta. Não é retroativo: dado já enriquecido continua com o `team_id` antigo até o próximo `POST .../enrichment/:integrationId/run`. */
+  server.delete<{ Params: TenantTeamLinkParams }>(
+    '/tenants/:tenantId/teams/:teamId/resource-links/:linkId',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, teamId, linkId } = request.params;
+
+      if (!isValidUuid(linkId)) {
+        return reply.status(404).send({ error: 'Vínculo não encontrado.' });
+      }
+
+      const deleted = await teamResourceLinkRepository.delete(tenantId, teamId, linkId);
+      if (!deleted) {
+        return reply.status(404).send({ error: 'Vínculo não encontrado.' });
+      }
+
+      return reply.status(204).send();
     },
   );
 

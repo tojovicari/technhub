@@ -101,6 +101,18 @@ export class TeamResourceLinkRepository {
     });
   }
 
+  /** Remove um vínculo — o recurso externo volta a aparecer em `GET .../candidates`. `false` se o `id` não existe (ou não pertence a esse tenant/time). */
+  async delete(tenantId: string, teamId: string, linkId: string): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `DELETE FROM team_resource_links WHERE tenant_id = $1 AND team_id = $2 AND id = $3`,
+        [tenantId, teamId, linkId],
+      );
+
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
+
   /**
    * `external_resource_id → team_id` pra um provider+tipo — carregado uma
    * vez por execução (enriquecimento/dashboard) pra evitar N+1 ao resolver
