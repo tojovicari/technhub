@@ -12,6 +12,13 @@ primary_region = "gru"
 
 [deploy]
   release_command = "npm run migrate"
+  # Rolling (default) derrubou as duas máquinas quase ao mesmo tempo num
+  # deploy investigado nesta sessão, gerando uma janela real de 500 pra
+  # tráfego de usuário. Blue-green só desliga a(s) máquina(s) antiga(s)
+  # depois que a(s) nova(s) passam no health check (agora com checagem real
+  # de Postgres, não só liveness) — nunca corta capacidade saudável por uma
+  # que ainda está subindo.
+  strategy = "bluegreen"
 
 [http_service]
   internal_port         = 3000
@@ -31,7 +38,7 @@ primary_region = "gru"
 
 [checks]
   [checks.health]
-    grace_period  = "10s"
+    grace_period  = "15s"
     interval      = "15s"
     method        = "GET"
     path          = "/health"
