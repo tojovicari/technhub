@@ -228,24 +228,33 @@ export class ProviderIntegrationRepository {
    * falha (`success: false`) preserva ambos os campos, pelo mesmo motivo já
    * documentado: não avançar `since` sobre dado nunca efetivamente
    * sincronizado.
+   *
+   * Exceção deliberada: `outcome.cursorInvalidated` (ver `SyncResult`) —
+   * quando o próprio cursor é a causa da falha (ex: `nextPageToken` do Jira
+   * expirado), retê-lo só garante que a próxima tentativa falhe do mesmo
+   * jeito pra sempre (foi exatamente o que aconteceu numa integração real,
+   * travada por mais de um ano até alguém notar). Nesse caso `last_cursor`
+   * é limpo mesmo com `success: false`, pra próxima tentativa recomeçar a
+   * janela do zero em vez de repetir o cursor morto.
    */
   async markSyncOutcome(
     tenantId: string,
     integrationId: string,
-    outcome: { readonly success: boolean; readonly nextCursor?: string | null },
+    outcome: { readonly success: boolean; readonly nextCursor?: string | null; readonly cursorInvalidated?: boolean },
   ): Promise<void> {
     const status: IntegrationStatus = outcome.success ? 'ACTIVE' : 'ERROR';
     const nextCursor = outcome.nextCursor ?? null;
+    const shouldClearCursor = outcome.success || outcome.cursorInvalidated === true;
 
     await withTenantContext(this.pool, tenantId, (client) =>
       client.query(
         `UPDATE provider_integrations
          SET status = $3::varchar,
-             last_cursor = CASE WHEN $3::varchar = 'ACTIVE' THEN $4 ELSE last_cursor END,
+             last_cursor = CASE WHEN $5 THEN $4 ELSE last_cursor END,
              last_synced_at = CASE WHEN $3::varchar = 'ACTIVE' AND $4 IS NULL THEN NOW() ELSE last_synced_at END,
              updated_at = NOW()
          WHERE tenant_id = $1 AND id = $2`,
-        [tenantId, integrationId, status, nextCursor],
+        [tenantId, integrationId, status, nextCursor, shouldClearCursor],
       ),
     );
   }

@@ -356,6 +356,19 @@ export interface SyncResult {
   readonly statusTransitions?: readonly CanonicalWorkItemStatusTransition[];
   /** Mensagens de erro não fatais ocorridas durante a coleta do lote. */
   readonly errors?: readonly string[];
+  /**
+   * `success: false` cujo motivo é um cursor de paginação que o provider
+   * rejeitou como inválido/expirado (ex: Jira `nextPageToken` de uma janela
+   * de backfill velha demais) — não adianta reter e reusar `last_cursor`
+   * (o padrão pra falha comum, ver doc de `markSyncOutcome`), porque
+   * reenviar o mesmo cursor vai falhar do mesmo jeito pra sempre. Sinaliza
+   * pro repositório limpar `last_cursor` mesmo com `success: false`, pra
+   * próxima tentativa recomeçar a janela — mesmo comportamento
+   * autocorretivo que `parseBackfillCursor` já tem pra cursor malformado/
+   * ausente (ver `backfill-window.ts`), só que disparado deliberadamente
+   * em vez de por acaso.
+   */
+  readonly cursorInvalidated?: boolean;
 }
 
 /**

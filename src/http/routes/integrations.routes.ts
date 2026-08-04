@@ -209,6 +209,7 @@ export function registerIntegrationRoutes(
       await integrationRepository.markSyncOutcome(tenantId, integrationId, {
         success: result.success,
         nextCursor: result.nextCursor,
+        cursorInvalidated: result.cursorInvalidated,
       });
 
       return reply.status(200).send(result);

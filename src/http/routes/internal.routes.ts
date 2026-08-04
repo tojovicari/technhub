@@ -34,12 +34,21 @@ export function registerInternalRoutes(
   syncOrchestrator: SyncOrchestrator = new SyncOrchestrator(),
 ): void {
   /**
-   * Avança **toda** integração `ACTIVE` de todo tenant `ACTIVE` em uma sync
-   * call cada — sem heurística de "precisa sincronizar ou não" (uma sync
-   * incremental normal já é barata; uma em backfill avança mais uma
-   * janela/página). Integrações em `ERROR` ficam de fora de propósito —
-   * exigem intervenção manual, não bate várias vezes por hora numa
-   * credencial já sabidamente quebrada.
+   * Avança **toda** integração `ACTIVE` *ou* `ERROR` de todo tenant `ACTIVE`
+   * em uma sync call cada — sem heurística de "precisa sincronizar ou não"
+   * (uma sync incremental normal já é barata; uma em backfill avança mais
+   * uma janela/página).
+   *
+   * `ERROR` entra na lista de propósito (mudou nesta rodada) — uma
+   * integração real ficou travada em `ERROR` por mais de um ano porque o
+   * cron só reprocessava `ACTIVE`: uma falha passageira virava permanente
+   * silenciosamente, sem ninguém saber até checar manualmente. O custo de
+   * reprocessar diariamente uma credencial genuinamente quebrada é uma
+   * chamada HTTP a mais por dia (o `SyncOrchestrator` já isola falha por
+   * integração, nunca propaga) — bem mais barato que o risco de esconder um
+   * problema recuperável (rate limit, blip de rede, cursor expirado — ver
+   * `cursorInvalidated` em `provider-integration.repository.ts`) atrás de
+   * "precisa de intervenção manual" indefinidamente.
    */
   server.post('/internal/sync', { preHandler: [requireInternalToken] }, async (_request, reply) => {
     const tenants = await tenantRepository.findAllActive();
@@ -52,7 +61,9 @@ export function registerInternalRoutes(
     const targetsByTenant = await Promise.all(
       tenants.map(async (tenant): Promise<readonly ScheduledSyncTarget[]> => {
         const integrations = await integrationRepository.listByTenant(tenant.id);
-        const activeIntegrations = integrations.filter((integration) => integration.status === 'ACTIVE');
+        const activeIntegrations = integrations.filter(
+          (integration) => integration.status === 'ACTIVE' || integration.status === 'ERROR',
+        );
 
         const resolved = await Promise.all(
           activeIntegrations.map(async (integration): Promise<ScheduledSyncTarget | null> => {
@@ -95,6 +106,7 @@ export function registerInternalRoutes(
         await integrationRepository.markSyncOutcome(target.context.tenantId, target.context.integrationId, {
           success: result.success,
           nextCursor: result.nextCursor,
+          cursorInvalidated: result.cursorInvalidated,
         });
 
         if (result.success) {

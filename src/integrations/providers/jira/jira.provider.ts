@@ -226,9 +226,18 @@ export class JiraProvider extends BaseProvider {
 
     if (!searchResponse.ok) {
       const detail = await searchResponse.text().catch(() => '');
+      // Heurística estrutural, não string matching na mensagem (localizada —
+      // já vimos em português e inglês): um 400 especificamente ao continuar
+      // paginação (havia `pageToken` em uso) é o sinal conhecido de "esse
+      // nextPageToken não é mais válido" — o próprio Jira não devolve um
+      // código de erro estável pra isso, só `errorMessages` em texto livre.
+      // Um 400 na primeira página (sem pageToken) é outra coisa (JQL malformada,
+      // por exemplo) e não deve disparar essa recuperação.
+      const cursorInvalidated = searchResponse.status === 400 && pageToken !== undefined;
       return {
         success: false,
         fetchedCount: 0,
+        cursorInvalidated,
         errors: [
           `[${this.providerName}] Falha ao buscar issues (backfill): ${searchResponse.status} ${searchResponse.statusText}. ${detail}`.trim(),
         ],
