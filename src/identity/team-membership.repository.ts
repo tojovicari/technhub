@@ -143,6 +143,43 @@ export class TeamMembershipRepository {
     });
   }
 
+  /**
+   * Todas as memberships de uma pessoa, com a capacidade default do
+   * respectivo time já embutida — usado por `PersonProfileService` pra
+   * somar a capacidade própria da pessoa (soma de todas as memberships,
+   * cada uma com `customMonthlyCapacityHours ?? team.defaultMonthlyCapacityHours`
+   * escalado por `capacityAllocationPercent`), mesma fórmula de
+   * `TeamProfileService.computeToilRatio`, só que por pessoa em vez de por
+   * time inteiro.
+   */
+  async findByUserId(
+    tenantId: string,
+    userId: string,
+  ): Promise<readonly { readonly teamId: string; readonly capacityAllocationPercent: number; readonly customMonthlyCapacityHours: number | null; readonly teamDefaultMonthlyCapacityHours: number }[]> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{
+        team_id: string;
+        capacity_allocation_percent: string;
+        custom_monthly_capacity_hours: string | null;
+        team_default_monthly_capacity_hours: string;
+      }>(
+        `SELECT tm.team_id, tm.capacity_allocation_percent, tm.custom_monthly_capacity_hours,
+                t.default_monthly_capacity_hours AS team_default_monthly_capacity_hours
+         FROM team_memberships tm
+         JOIN teams t ON t.id = tm.team_id
+         WHERE tm.tenant_id = $1 AND tm.user_id = $2`,
+        [tenantId, userId],
+      );
+
+      return result.rows.map((row) => ({
+        teamId: row.team_id,
+        capacityAllocationPercent: Number(row.capacity_allocation_percent),
+        customMonthlyCapacityHours: row.custom_monthly_capacity_hours === null ? null : Number(row.custom_monthly_capacity_hours),
+        teamDefaultMonthlyCapacityHours: Number(row.team_default_monthly_capacity_hours),
+      }));
+    });
+  }
+
   /** Lista os membros de um time, com dados básicos do usuário — usado pela tela de back office. */
   async findByTeamWithUser(tenantId: string, teamId: string): Promise<readonly TeamMembershipWithUser[]> {
     return withTenantContext(this.pool, tenantId, async (client) => {

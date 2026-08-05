@@ -3,6 +3,7 @@ import { TeamProfileService } from '../../dashboard/team-profile.service';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
 import { requireSameTenant } from '../middleware/require-same-tenant';
+import { parseOptionalPeriod } from './period-query.util';
 
 const requireAdminOrManager = requireRole('ADMIN', 'GESTOR');
 const DEFAULT_HISTORY_WEEKS = 12;
@@ -20,31 +21,6 @@ interface ProfileHistoryQuery {
 interface ContributorsQuery {
   readonly from?: string;
   readonly to?: string;
-}
-
-/**
- * `from`/`to` **ausentes os dois** → all-time (`null`, comportamento
- * idêntico ao original). Um presente e o outro ausente → `'invalid'` (não
- * existe default parcial aqui — diferente de `parseDateOrDefault` em
- * `dashboard.routes.ts`, que sempre preenche um default de 30 dias; este
- * endpoint precisa que a ausência do param signifique all-time de verdade,
- * não um período implícito). Os dois presentes → parseados como ISO 8601.
- */
-function parseOptionalPeriod(from: string | undefined, to: string | undefined): { from: Date; to: Date } | null | 'invalid' {
-  if (!from && !to) {
-    return null;
-  }
-  if (!from || !to) {
-    return 'invalid';
-  }
-
-  const parsedFrom = new Date(from);
-  const parsedTo = new Date(to);
-  if (Number.isNaN(parsedFrom.getTime()) || Number.isNaN(parsedTo.getTime())) {
-    return 'invalid';
-  }
-
-  return { from: parsedFrom, to: parsedTo };
 }
 
 /**

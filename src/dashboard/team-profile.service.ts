@@ -6,6 +6,7 @@ import type { Team } from '../identity/identity.types';
 import type { FlowDistributionEntry, UnavailableMetric } from './dashboard.service';
 import { MappingRulesRepository } from '../enrichment/mapping-rules.repository';
 import { evaluateWorkItemType, evaluateWorkflowState } from '../enrichment/rule-evaluator';
+import { computeLifetimeStats } from './lifetime-stats.util';
 
 export interface DeploymentSuccessRateMetric {
   readonly available: true;
@@ -162,14 +163,6 @@ interface HistoryWorkItemRow {
 }
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-
-/** Mediana de um array já ordenado ascendentemente — sem dependência nova, volume por categoria/semana é baixo. */
-function medianOfSorted(sortedAscValues: readonly number[]): number {
-  const mid = Math.floor(sortedAscValues.length / 2);
-  return sortedAscValues.length % 2 !== 0
-    ? sortedAscValues[mid]
-    : (sortedAscValues[mid - 1] + sortedAscValues[mid]) / 2;
-}
 
 export interface TeamContributor {
   readonly identity: {
@@ -677,17 +670,11 @@ export class TeamProfileService {
           .sort((a, b) => a.category.localeCompare(b.category));
 
         const completed: TeamProfileHistoryCompletedEntry[] = [...completedCountByCategory.entries()]
-          .map(([category, count]) => {
-            const hours = completedLifetimeHoursByCategory.get(category);
-            const sorted = hours ? [...hours].sort((a, b) => a - b) : [];
-            return {
-              category,
-              count,
-              lifetimeSampleSize: sorted.length,
-              avgLifetimeHours: sorted.length > 0 ? sorted.reduce((sum, h) => sum + h, 0) / sorted.length : null,
-              medianLifetimeHours: sorted.length > 0 ? medianOfSorted(sorted) : null,
-            };
-          })
+          .map(([category, count]) => ({
+            category,
+            count,
+            ...computeLifetimeStats(completedLifetimeHoursByCategory.get(category) ?? []),
+          }))
           .sort((a, b) => a.category.localeCompare(b.category));
 
         return { date: date.toISOString().slice(0, 10), wip, distribution, completed };

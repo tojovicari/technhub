@@ -3,7 +3,9 @@ import type { Pool, PoolClient } from 'pg';
 import { UserRepository } from '../identity/user.repository';
 import { UserProviderAliasRepository } from '../identity/user-provider-alias.repository';
 import { TeamRepository } from '../identity/team.repository';
+import { TeamMembershipRepository } from '../identity/team-membership.repository';
 import type { User } from '../identity/identity.types';
+import { computeLifetimeStats } from './lifetime-stats.util';
 
 export interface PersonProfileAlias {
   readonly id: string;
@@ -13,9 +15,18 @@ export interface PersonProfileAlias {
 }
 
 interface PersonWorkBreakdown {
-  readonly workItems: { readonly total: number; readonly wip: number };
-  readonly pullRequests: { readonly merged: number };
-  readonly deployments: { readonly triggered: number };
+  readonly workItems: {
+    readonly total: number;
+    readonly wip: number;
+    readonly byCategory: Readonly<Record<string, number>>;
+  };
+  readonly pullRequests: { readonly merged: number; readonly reviewed: number };
+  readonly deployments: {
+    readonly triggered: number;
+    readonly success: number;
+    readonly failure: number;
+    readonly rate: number | null;
+  };
   readonly incidents: { readonly assigned: number };
 }
 
@@ -24,23 +35,56 @@ export interface PersonProfileTeamBreakdown extends PersonWorkBreakdown {
   readonly team: { readonly id: string; readonly name: string } | null;
 }
 
+export interface PersonProfilePeriod {
+  readonly from: string;
+  readonly to: string;
+}
+
+export interface PersonToilMetric {
+  readonly available: true;
+  readonly hoursThisMonth: number;
+  /** Soma da capacidade da própria pessoa em todas as memberships (`customMonthlyCapacityHours ?? team.defaultMonthlyCapacityHours`, escalado por `capacityAllocationPercent`) — não é capacidade de time, é a fatia dela. */
+  readonly capacityHours: number;
+  readonly ratio: number;
+}
+
+export interface PersonToilUnavailable {
+  readonly available: false;
+  readonly reason: string;
+}
+
 export interface PersonProfile {
   readonly user: Pick<User, 'id' | 'fullName' | 'primaryEmail' | 'avatarUrl' | 'systemRole' | 'status'>;
   readonly aliases: readonly PersonProfileAlias[];
+  /** Eco do período aplicado — `null` = all-time (comportamento original). `wip`/`toil` nunca respeitam período, mesmo preenchido (ver docs). */
+  readonly period: PersonProfilePeriod | null;
   readonly summary: PersonWorkBreakdown;
+  /** Sempre mês corrente, independente de `period` — mesma razão do `toilRatio` do time (capacidade não prorrateia). Só no nível de `summary`, não quebrado por `byTeam`. */
+  readonly toil: PersonToilMetric | PersonToilUnavailable;
   readonly byTeam: readonly PersonProfileTeamBreakdown[];
 }
 
 /**
  * Trabalho concluído/incidentes por semana, não cumulativo — mesmo espírito
  * de `TeamProfileHistoryPoint`/`DoraHistoryPoint`: janela `(ponto anterior,
- * este ponto]`. Sem tempo de vida por enquanto (ver plano desta rodada) —
- * só contagem, pra não reabrir a mesma decisão de `started_working_at`
- * ausente sem necessidade confirmada pro caso de pessoa.
+ * este ponto]`. `completedWorkItems` ganhou tempo de vida por categoria
+ * (mesma fórmula de `TeamProfileHistoryCompletedEntry`); `pullRequestsMerged`/
+ * `deploymentsTriggered` são números crus (sem categoria, mesma convenção
+ * de `TeamContributorActivity`).
  */
+export interface PersonProfileHistoryCompletedEntry {
+  readonly category: string;
+  readonly count: number;
+  readonly lifetimeSampleSize: number;
+  readonly avgLifetimeHours: number | null;
+  readonly medianLifetimeHours: number | null;
+}
+
 export interface PersonProfileHistoryPoint {
   readonly date: string;
-  readonly completedWorkItems: readonly { readonly category: string; readonly count: number }[];
+  readonly completedWorkItems: readonly PersonProfileHistoryCompletedEntry[];
+  readonly pullRequestsMerged: number;
+  readonly deploymentsTriggered: number;
   readonly incidentsAssigned: number;
 }
 
@@ -53,8 +97,12 @@ interface TeamAccumulator {
   teamId: string | null;
   workItemsTotal: number;
   workItemsWip: number;
+  workItemsByCategory: Record<string, number>;
   pullRequestsMerged: number;
+  pullRequestsReviewed: number;
   deploymentsTriggered: number;
+  deploymentsSuccess: number;
+  deploymentsFailure: number;
   incidentsAssigned: number;
 }
 
@@ -63,12 +111,17 @@ const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 function emptyBreakdown(): PersonWorkBreakdown {
   return {
-    workItems: { total: 0, wip: 0 },
-    pullRequests: { merged: 0 },
-    deployments: { triggered: 0 },
+    workItems: { total: 0, wip: 0, byCategory: {} },
+    pullRequests: { merged: 0, reviewed: 0 },
+    deployments: { triggered: 0, success: 0, failure: 0, rate: null },
     incidents: { assigned: 0 },
   };
 }
+
+const TOIL_UNAVAILABLE: PersonToilUnavailable = {
+  available: false,
+  reason: 'Pessoa sem nenhuma membership de time — sem capacidade própria pra calcular a fração de toil.',
+};
 
 /**
  * Perfil agregado de uma pessoa — inverso do `TeamProfileService.getContributors`:
@@ -77,9 +130,10 @@ function emptyBreakdown(): PersonWorkBreakdown {
  * e os mesmos padrões de JOIN pra time por fonte canônica, só sem o filtro
  * `team_id = $1` — agrupa por time em vez de filtrar por um só.
  *
- * Sem período (`from`/`to`): mesmo espírito all-time de
- * `deploymentSuccessRate`/`pullRequestReviewHealth`/`contributionConcentration`
- * no perfil de time, que este endpoint mais se parece.
+ * `from`/`to` opcional (mesma regra de `TeamProfileService.getContributors`,
+ * via `parseOptionalPeriod` compartilhado): sem período, all-time original.
+ * `wip`/`toil` nunca respeitam período — `wip` é sempre "agora", `toil` é
+ * sempre mês corrente (capacidade não prorrateia, mesma razão do time).
  *
  * @see .spec/spec-engineering-intelligence.md — Seção 6.
  */
@@ -89,9 +143,14 @@ export class PersonProfileService {
     private readonly userRepository: UserRepository = new UserRepository(),
     private readonly userProviderAliasRepository: UserProviderAliasRepository = new UserProviderAliasRepository(),
     private readonly teamRepository: TeamRepository = new TeamRepository(),
+    private readonly teamMembershipRepository: TeamMembershipRepository = new TeamMembershipRepository(),
   ) {}
 
-  async getProfile(tenantId: string, userId: string): Promise<PersonProfile | null> {
+  async getProfile(
+    tenantId: string,
+    userId: string,
+    period?: { readonly from: Date; readonly to: Date } | null,
+  ): Promise<PersonProfile | null> {
     const user = await this.userRepository.findById(tenantId, userId);
     if (!user) {
       return null;
@@ -116,55 +175,137 @@ export class PersonProfileService {
       })),
     };
 
+    const periodEcho: PersonProfilePeriod | null = period
+      ? { from: period.from.toISOString(), to: period.to.toISOString() }
+      : null;
+
     // Sem alias nenhum, não tem como achar nada nas fontes canônicas — evita
-    // rodar as 4 queries à toa. Não é erro: usuário existe, só não foi
+    // rodar as queries à toa. Não é erro: usuário existe, só não foi
     // vinculado a nenhuma identidade externa ainda.
     if (aliases.length === 0) {
-      return { ...baseProfile, summary: emptyBreakdown(), byTeam: [] };
+      return { ...baseProfile, period: periodEcho, summary: emptyBreakdown(), toil: TOIL_UNAVAILABLE, byTeam: [] };
     }
 
     const providers = aliases.map((alias) => alias.provider);
     const externalIds = aliases.map((alias) => alias.externalUserId);
 
-    const byTeamMap = await withTenantContext(this.pool, tenantId, (client) =>
-      this.queryBreakdownByTeam(client, providers, externalIds),
-    );
+    const [{ byTeamMap, toilHours }, memberships, teams] = await Promise.all([
+      withTenantContext(this.pool, tenantId, async (client) => {
+        const [byTeamMap, toilHours] = await Promise.all([
+          this.queryBreakdownByTeam(client, providers, externalIds, period ?? null),
+          this.queryToilHours(client, providers, externalIds),
+        ]);
+        return { byTeamMap, toilHours };
+      }),
+      this.teamMembershipRepository.findByUserId(tenantId, userId),
+      this.teamRepository.findAllByTenant(tenantId),
+    ]);
 
-    const teams = await this.teamRepository.findAllByTenant(tenantId);
     const teamNameById = new Map(teams.map((team) => [team.id, team.name]));
+    const rawAccs = [...byTeamMap.values()];
 
-    const byTeam: PersonProfileTeamBreakdown[] = [...byTeamMap.values()]
+    const byTeamRaw: PersonProfileTeamBreakdown[] = rawAccs
       .map((acc) => ({
         team: acc.teamId ? { id: acc.teamId, name: teamNameById.get(acc.teamId) ?? acc.teamId } : null,
-        workItems: { total: acc.workItemsTotal, wip: acc.workItemsWip },
-        pullRequests: { merged: acc.pullRequestsMerged },
-        deployments: { triggered: acc.deploymentsTriggered },
+        workItems: { total: acc.workItemsTotal, wip: acc.workItemsWip, byCategory: acc.workItemsByCategory },
+        pullRequests: { merged: acc.pullRequestsMerged, reviewed: acc.pullRequestsReviewed },
+        deployments: {
+          triggered: acc.deploymentsTriggered,
+          success: acc.deploymentsSuccess,
+          failure: acc.deploymentsFailure,
+          rate:
+            acc.deploymentsSuccess + acc.deploymentsFailure > 0
+              ? acc.deploymentsSuccess / (acc.deploymentsSuccess + acc.deploymentsFailure)
+              : null,
+        },
         incidents: { assigned: acc.incidentsAssigned },
       }))
       .sort((a, b) => (a.team?.name ?? '').localeCompare(b.team?.name ?? ''));
 
-    const summary = byTeam.reduce<PersonWorkBreakdown>(
-      (acc, entry) => ({
-        workItems: {
-          total: acc.workItems.total + entry.workItems.total,
-          wip: acc.workItems.wip + entry.workItems.wip,
-        },
-        pullRequests: { merged: acc.pullRequests.merged + entry.pullRequests.merged },
-        deployments: { triggered: acc.deployments.triggered + entry.deployments.triggered },
-        incidents: { assigned: acc.incidents.assigned + entry.incidents.assigned },
+    // Mesma regra de "fantasma" de `TeamProfileService.getContributors`:
+    // com período ativo, uma linha de byTeam só com resíduo de wip (ex:
+    // ticket velho ainda IN_PROGRESS num time que a pessoa não toca mais)
+    // não aparece — soma sempre a partir de byTeamRaw (não filtrado), então
+    // wip residual continua contando pro summary mesmo que a linha de
+    // byTeam correspondente seja escondida.
+    const periodActive = period !== null && period !== undefined;
+    const byTeam = periodActive
+      ? byTeamRaw.filter(
+          (entry) =>
+            entry.workItems.total > 0 ||
+            entry.pullRequests.merged > 0 ||
+            entry.deployments.triggered > 0 ||
+            entry.incidents.assigned > 0,
+        )
+      : byTeamRaw;
+
+    const summaryByCategory: Record<string, number> = {};
+    for (const acc of rawAccs) {
+      for (const [category, count] of Object.entries(acc.workItemsByCategory)) {
+        summaryByCategory[category] = (summaryByCategory[category] ?? 0) + count;
+      }
+    }
+
+    const totals = rawAccs.reduce(
+      (sum, acc) => ({
+        workItemsTotal: sum.workItemsTotal + acc.workItemsTotal,
+        workItemsWip: sum.workItemsWip + acc.workItemsWip,
+        pullRequestsMerged: sum.pullRequestsMerged + acc.pullRequestsMerged,
+        pullRequestsReviewed: sum.pullRequestsReviewed + acc.pullRequestsReviewed,
+        deploymentsTriggered: sum.deploymentsTriggered + acc.deploymentsTriggered,
+        deploymentsSuccess: sum.deploymentsSuccess + acc.deploymentsSuccess,
+        deploymentsFailure: sum.deploymentsFailure + acc.deploymentsFailure,
+        incidentsAssigned: sum.incidentsAssigned + acc.incidentsAssigned,
       }),
-      emptyBreakdown(),
+      {
+        workItemsTotal: 0,
+        workItemsWip: 0,
+        pullRequestsMerged: 0,
+        pullRequestsReviewed: 0,
+        deploymentsTriggered: 0,
+        deploymentsSuccess: 0,
+        deploymentsFailure: 0,
+        incidentsAssigned: 0,
+      },
     );
 
-    return { ...baseProfile, summary, byTeam };
+    const summary: PersonWorkBreakdown = {
+      workItems: { total: totals.workItemsTotal, wip: totals.workItemsWip, byCategory: summaryByCategory },
+      pullRequests: { merged: totals.pullRequestsMerged, reviewed: totals.pullRequestsReviewed },
+      deployments: {
+        triggered: totals.deploymentsTriggered,
+        success: totals.deploymentsSuccess,
+        failure: totals.deploymentsFailure,
+        rate:
+          totals.deploymentsSuccess + totals.deploymentsFailure > 0
+            ? totals.deploymentsSuccess / (totals.deploymentsSuccess + totals.deploymentsFailure)
+            : null,
+      },
+      incidents: { assigned: totals.incidentsAssigned },
+    };
+
+    const capacityHours = memberships.reduce((sum, membership) => {
+      const baseHours = membership.customMonthlyCapacityHours ?? membership.teamDefaultMonthlyCapacityHours;
+      return sum + baseHours * (membership.capacityAllocationPercent / 100);
+    }, 0);
+
+    const toil: PersonToilMetric | PersonToilUnavailable =
+      memberships.length === 0
+        ? TOIL_UNAVAILABLE
+        : { available: true, hoursThisMonth: toilHours, capacityHours, ratio: capacityHours > 0 ? toilHours / capacityHours : 0 };
+
+    return { ...baseProfile, period: periodEcho, summary, toil, byTeam };
   }
 
   /**
-   * `completedWorkItems`/`incidentsAssigned` por semana, não cumulativo —
-   * mesmo padrão de janela rolante de `TeamProfileService.getProfileHistory`.
-   * Busca tudo de uma vez (2 queries, uma por fonte) e bucketiza em JS por
-   * ponto, mesmo espírito da resolução em memória do time (volume por
-   * pessoa é ainda menor que por time, não justifica SQL com bucket nativo).
+   * `completedWorkItems`/`pullRequestsMerged`/`deploymentsTriggered`/
+   * `incidentsAssigned` por semana, não cumulativo — mesmo padrão de janela
+   * rolante de `TeamProfileService.getProfileHistory`. `completedWorkItems`
+   * ganha tempo de vida por categoria (`computeLifetimeStats`, mesma fórmula
+   * do time). Busca tudo de uma vez (4 queries, uma por fonte) e bucketiza
+   * em JS por ponto, mesmo espírito da resolução em memória do time (volume
+   * por pessoa é ainda menor que por time, não justifica SQL com bucket
+   * nativo).
    */
   async getProfileHistory(tenantId: string, userId: string, weeks: number): Promise<PersonProfileHistory | null> {
     const user = await this.userRepository.findById(tenantId, userId);
@@ -187,6 +328,8 @@ export class PersonProfileService {
       const emptyPoints = pointDates.map((date) => ({
         date: date.toISOString().slice(0, 10),
         completedWorkItems: [],
+        pullRequestsMerged: 0,
+        deploymentsTriggered: 0,
         incidentsAssigned: 0,
       }));
       return { points: emptyPoints };
@@ -196,13 +339,32 @@ export class PersonProfileService {
     const externalIds = aliases.map((alias) => alias.externalUserId);
 
     return withTenantContext(this.pool, tenantId, async (client) => {
-      const [workItemRows, incidentRows] = await Promise.all([
-        client.query<{ completed_at: Date | null; semantic_category: string }>(
-          `SELECT ewi.completed_at, ewi.semantic_category
+      const [workItemRows, prRows, deploymentRows, incidentRows] = await Promise.all([
+        client.query<{
+          completed_at: Date | null;
+          started_working_at: Date | null;
+          semantic_category: string;
+        }>(
+          `SELECT ewi.completed_at, ewi.started_working_at, ewi.semantic_category
            FROM canonical_work_items cwi
            JOIN enriched_work_items ewi ON ewi.id = cwi.id
            JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
              ON pa.provider = cwi.provider AND pa.external_id = cwi.assignee_external_id`,
+          [providers, externalIds],
+        ),
+        client.query<{ merged_at: Date | null }>(
+          `SELECT cpr.merged_at
+           FROM canonical_pull_requests cpr
+           JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
+             ON pa.provider = 'github' AND pa.external_id = cpr.author_external_id
+           WHERE cpr.state = 'MERGED'`,
+          [providers, externalIds],
+        ),
+        client.query<{ started_at: Date }>(
+          `SELECT cd.started_at
+           FROM canonical_deployments cd
+           JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
+             ON pa.provider = cd.provider AND pa.external_id = cd.triggered_by_external_id`,
           [providers, externalIds],
         ),
         client.query<{ triggered_at: Date }>(
@@ -218,21 +380,41 @@ export class PersonProfileService {
         const windowStart = index === 0 ? new Date(date.getTime() - ONE_WEEK_MS) : pointDates[index - 1];
 
         const categoryCounts = new Map<string, number>();
+        const categoryLifetimeHours = new Map<string, number[]>();
         for (const row of workItemRows.rows) {
           if (row.completed_at !== null && row.completed_at > windowStart && row.completed_at <= date) {
             categoryCounts.set(row.semantic_category, (categoryCounts.get(row.semantic_category) ?? 0) + 1);
+            if (row.started_working_at !== null) {
+              const hours = (row.completed_at.getTime() - row.started_working_at.getTime()) / (60 * 60 * 1000);
+              const existing = categoryLifetimeHours.get(row.semantic_category);
+              if (existing) {
+                existing.push(hours);
+              } else {
+                categoryLifetimeHours.set(row.semantic_category, [hours]);
+              }
+            }
           }
         }
 
+        const pullRequestsMerged = prRows.rows.filter(
+          (row) => row.merged_at !== null && row.merged_at > windowStart && row.merged_at <= date,
+        ).length;
+        const deploymentsTriggered = deploymentRows.rows.filter(
+          (row) => row.started_at > windowStart && row.started_at <= date,
+        ).length;
         const incidentsAssigned = incidentRows.rows.filter(
           (row) => row.triggered_at > windowStart && row.triggered_at <= date,
         ).length;
 
-        const completedWorkItems = [...categoryCounts.entries()]
-          .map(([category, count]) => ({ category, count }))
+        const completedWorkItems: PersonProfileHistoryCompletedEntry[] = [...categoryCounts.entries()]
+          .map(([category, count]) => ({
+            category,
+            count,
+            ...computeLifetimeStats(categoryLifetimeHours.get(category) ?? []),
+          }))
           .sort((a, b) => a.category.localeCompare(b.category));
 
-        return { date: date.toISOString().slice(0, 10), completedWorkItems, incidentsAssigned };
+        return { date: date.toISOString().slice(0, 10), completedWorkItems, pullRequestsMerged, deploymentsTriggered, incidentsAssigned };
       });
 
       return { points };
@@ -243,26 +425,40 @@ export class PersonProfileService {
    * As 4 fontes canônicas, cada uma casando qualquer uma das identidades
    * externas da pessoa (`unnest` parametrizado — evita N queries, uma por
    * alias) e agrupando por `team_id`, em vez do filtro `team_id = $1` que
-   * `TeamProfileService.getContributors` usa. Combinadas em memória num
-   * único acumulador por time, mesmo espírito do `resolveAccumulator` de
-   * `getContributors`, só chaveado por time em vez de por pessoa.
+   * `TeamProfileService.getContributors` usa. `wip` vem de query própria,
+   * separada de `total`/`byCategory` — mesma correção de
+   * `TeamProfileService.getContributors` (um `WHERE` de `completed_at`
+   * excluiria todo item nunca concluído, que é exatamente o WIP).
    */
   private async queryBreakdownByTeam(
     client: PoolClient,
     providers: readonly string[],
     externalIds: readonly string[],
+    period: { readonly from: Date; readonly to: Date } | null,
   ): Promise<Map<string, TeamAccumulator>> {
-    const [workItemRows, prRows, deploymentRows, incidentRows] = await Promise.all([
-      client.query<{ team_id: string | null; total: string; wip: string }>(
-        `SELECT ewi.team_id,
-                count(*) AS total,
-                count(*) FILTER (WHERE ewi.semantic_state = 'IN_PROGRESS') AS wip
+    const periodFrom = period?.from ?? null;
+    const periodTo = period?.to ?? null;
+
+    const [wipRows, workItemRows, prRows, prReviewRows, deploymentRows, incidentRows] = await Promise.all([
+      client.query<{ team_id: string | null; wip: string }>(
+        `SELECT ewi.team_id, count(*) AS wip
          FROM canonical_work_items cwi
          JOIN enriched_work_items ewi ON ewi.id = cwi.id
          JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
            ON pa.provider = cwi.provider AND pa.external_id = cwi.assignee_external_id
+         WHERE ewi.semantic_state = 'IN_PROGRESS'
          GROUP BY ewi.team_id`,
         [providers, externalIds],
+      ),
+      client.query<{ team_id: string | null; category: string; total: string }>(
+        `SELECT ewi.team_id, ewi.semantic_category AS category, count(*) AS total
+         FROM canonical_work_items cwi
+         JOIN enriched_work_items ewi ON ewi.id = cwi.id
+         JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
+           ON pa.provider = cwi.provider AND pa.external_id = cwi.assignee_external_id
+         WHERE ($3::timestamptz IS NULL OR (ewi.completed_at IS NOT NULL AND ewi.completed_at BETWEEN $3 AND $4))
+         GROUP BY ewi.team_id, ewi.semantic_category`,
+        [providers, externalIds, periodFrom, periodTo],
       ),
       client.query<{ team_id: string | null; merged: string }>(
         `SELECT trl.team_id, count(*) AS merged
@@ -272,17 +468,39 @@ export class PersonProfileService {
          LEFT JOIN team_resource_links trl
            ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
          WHERE cpr.state = 'MERGED'
+           AND ($3::timestamptz IS NULL OR (cpr.merged_at IS NOT NULL AND cpr.merged_at BETWEEN $3 AND $4))
          GROUP BY trl.team_id`,
-        [providers, externalIds],
+        [providers, externalIds, periodFrom, periodTo],
       ),
-      client.query<{ team_id: string | null; triggered: string }>(
-        `SELECT ed.team_id, count(*) AS triggered
+      // Revisor — casa a pessoa contra reviewer_external_ids via = ANY(),
+      // não CROSS JOIN LATERAL unnest (diferente de getContributors: aqui
+      // já sabemos as identidades da pessoa de antemão, não precisamos
+      // enumerar todo mundo que revisou pra depois filtrar em memória).
+      // Sem timestamp próprio de revisão — usa merged_at do PR mesmo.
+      client.query<{ team_id: string | null; reviewed: string }>(
+        `SELECT trl.team_id, count(*) AS reviewed
+         FROM canonical_pull_requests cpr
+         JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
+           ON pa.provider = 'github' AND pa.external_id = ANY(cpr.reviewer_external_ids)
+         LEFT JOIN team_resource_links trl
+           ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+         WHERE cpr.state = 'MERGED'
+           AND ($3::timestamptz IS NULL OR (cpr.merged_at IS NOT NULL AND cpr.merged_at BETWEEN $3 AND $4))
+         GROUP BY trl.team_id`,
+        [providers, externalIds, periodFrom, periodTo],
+      ),
+      client.query<{ team_id: string | null; triggered: string; success: string; failure: string }>(
+        `SELECT ed.team_id,
+                count(*) AS triggered,
+                count(*) FILTER (WHERE cd.status = 'SUCCESS') AS success,
+                count(*) FILTER (WHERE cd.status = 'FAILURE') AS failure
          FROM canonical_deployments cd
          JOIN enriched_deployments ed ON ed.id = cd.id
          JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
            ON pa.provider = cd.provider AND pa.external_id = cd.triggered_by_external_id
+         WHERE ($3::timestamptz IS NULL OR cd.started_at BETWEEN $3 AND $4)
          GROUP BY ed.team_id`,
-        [providers, externalIds],
+        [providers, externalIds, periodFrom, periodTo],
       ),
       client.query<{ team_id: string | null; assigned: string }>(
         `SELECT ei.team_id, count(*) AS assigned
@@ -290,8 +508,9 @@ export class PersonProfileService {
          JOIN enriched_incidents ei ON ei.id = ci.id
          JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
            ON pa.provider = ci.provider AND pa.external_id = ci.assignee_external_id
+         WHERE ($3::timestamptz IS NULL OR ci.triggered_at BETWEEN $3 AND $4)
          GROUP BY ei.team_id`,
-        [providers, externalIds],
+        [providers, externalIds, periodFrom, periodTo],
       ),
     ]);
 
@@ -308,29 +527,63 @@ export class PersonProfileService {
         teamId,
         workItemsTotal: 0,
         workItemsWip: 0,
+        workItemsByCategory: {},
         pullRequestsMerged: 0,
+        pullRequestsReviewed: 0,
         deploymentsTriggered: 0,
+        deploymentsSuccess: 0,
+        deploymentsFailure: 0,
         incidentsAssigned: 0,
       };
       byTeamMap.set(key, created);
       return created;
     };
 
+    for (const row of wipRows.rows) {
+      resolveAccumulator(row.team_id).workItemsWip += Number(row.wip);
+    }
     for (const row of workItemRows.rows) {
       const acc = resolveAccumulator(row.team_id);
       acc.workItemsTotal += Number(row.total);
-      acc.workItemsWip += Number(row.wip);
+      acc.workItemsByCategory[row.category] = (acc.workItemsByCategory[row.category] ?? 0) + Number(row.total);
     }
     for (const row of prRows.rows) {
       resolveAccumulator(row.team_id).pullRequestsMerged += Number(row.merged);
     }
+    for (const row of prReviewRows.rows) {
+      resolveAccumulator(row.team_id).pullRequestsReviewed += Number(row.reviewed);
+    }
     for (const row of deploymentRows.rows) {
-      resolveAccumulator(row.team_id).deploymentsTriggered += Number(row.triggered);
+      const acc = resolveAccumulator(row.team_id);
+      acc.deploymentsTriggered += Number(row.triggered);
+      acc.deploymentsSuccess += Number(row.success);
+      acc.deploymentsFailure += Number(row.failure);
     }
     for (const row of incidentRows.rows) {
       resolveAccumulator(row.team_id).incidentsAssigned += Number(row.assigned);
     }
 
     return byTeamMap;
+  }
+
+  /** Toil da pessoa, sempre mês corrente — mesma janela/filtro de `TeamProfileService`, só casando as identidades dela em vez de filtrar por time. */
+  private async queryToilHours(
+    client: PoolClient,
+    providers: readonly string[],
+    externalIds: readonly string[],
+  ): Promise<number> {
+    const result = await client.query<{ toil_hours: string | null }>(
+      `SELECT SUM(EXTRACT(EPOCH FROM (ewi.completed_at - ewi.started_working_at)) / 3600) AS toil_hours
+       FROM canonical_work_items cwi
+       JOIN enriched_work_items ewi ON ewi.id = cwi.id
+       JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
+         ON pa.provider = cwi.provider AND pa.external_id = cwi.assignee_external_id
+       WHERE ewi.semantic_category = 'TOIL'
+         AND ewi.started_working_at IS NOT NULL
+         AND ewi.completed_at >= date_trunc('month', NOW())`,
+      [providers, externalIds],
+    );
+
+    return result.rows[0].toil_hours !== null ? Number(result.rows[0].toil_hours) : 0;
   }
 }

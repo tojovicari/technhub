@@ -3,6 +3,7 @@ import { PersonProfileService } from '../../dashboard/person-profile.service';
 import { requireAuth } from '../middleware/require-auth';
 import { requireSelfOrRole } from '../middleware/require-self-or-role';
 import { requireSameTenant } from '../middleware/require-same-tenant';
+import { parseOptionalPeriod } from './period-query.util';
 
 const requireSelfOrAdminOrManager = requireSelfOrRole('ADMIN', 'GESTOR');
 const DEFAULT_HISTORY_WEEKS = 12;
@@ -17,6 +18,11 @@ interface ProfileHistoryQuery {
   readonly weeks?: string;
 }
 
+interface ProfileQuery {
+  readonly from?: string;
+  readonly to?: string;
+}
+
 /**
  * Registra `GET /tenants/:tenantId/users/:userId/profile` — perfil agregado
  * de uma pessoa (todo o trabalho dela, cruzando os times em que contribui).
@@ -29,13 +35,20 @@ export function registerPersonProfileRoutes(
   server: FastifyInstance,
   personProfileService: PersonProfileService = new PersonProfileService(),
 ): void {
-  server.get<{ Params: TenantUserParams }>(
+  server.get<{ Params: TenantUserParams; Querystring: ProfileQuery }>(
     '/tenants/:tenantId/users/:userId/profile',
     { preHandler: [requireAuth, requireSelfOrAdminOrManager, requireSameTenant] },
     async (request, reply) => {
       const { tenantId, userId } = request.params;
+      const period = parseOptionalPeriod(request.query.from, request.query.to);
 
-      const profile = await personProfileService.getProfile(tenantId, userId);
+      if (period === 'invalid') {
+        return reply
+          .status(400)
+          .send({ error: '"from" e "to" precisam vir juntos, como datas ISO 8601 válidas.' });
+      }
+
+      const profile = await personProfileService.getProfile(tenantId, userId, period);
       if (!profile) {
         return reply.status(404).send({ error: 'Usuário não encontrado.' });
       }
