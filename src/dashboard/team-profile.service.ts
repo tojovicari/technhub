@@ -181,14 +181,49 @@ export interface TeamContributor {
     readonly externalUserId: string | null;
     readonly externalUsername: string | null;
   };
-  readonly workItems: { readonly total: number; readonly wip: number };
-  readonly pullRequests: { readonly merged: number };
-  readonly deployments: { readonly triggered: number };
+  readonly workItems: {
+    readonly total: number;
+    readonly wip: number;
+    /** `semantic_category` → contagem (ex: `{ "BUG": 5, "FEATURE": 12 }`) — categorias sem item desta pessoa não aparecem. */
+    readonly byCategory: Readonly<Record<string, number>>;
+  };
+  readonly pullRequests: { readonly merged: number; readonly reviewed: number };
+  readonly deployments: {
+    readonly triggered: number;
+    readonly success: number;
+    readonly failure: number;
+    /** `success / (success + failure)` — `null` se a soma for 0 (mesmo espírito de `available: false` do `deploymentSuccessRate` do time, só que sem o wrapper, pra não inflar o payload por pessoa). */
+    readonly rate: number | null;
+  };
   readonly incidents: { readonly assigned: number };
+  /** Mesma janela/fórmula do `toilRatio` do time (`GET .../profile`) — mês corrente, `completed_at - started_working_at`. */
+  readonly toil: {
+    readonly hoursThisMonth: number;
+    /** Fração (0-1) do total de horas de toil do time neste mês que veio desta pessoa. `0` se o time não teve toil nenhum no mês. */
+    readonly shareOfTeamToil: number;
+  };
 }
 
 export interface TeamContributors {
   readonly contributors: readonly TeamContributor[];
+}
+
+export interface TeamContributorActivity {
+  readonly identity: TeamContributor['identity'];
+  readonly workItemsCompleted: number;
+  readonly pullRequestsMerged: number;
+  readonly deploymentsTriggered: number;
+  readonly incidentsAssigned: number;
+}
+
+export interface TeamContributorHistoryPoint {
+  readonly date: string;
+  /** Só quem teve pelo menos 1 atividade nesta janela — mesma convenção de `distribution`/`completed` em `TeamProfileHistory`, sem entrada zerada. */
+  readonly contributors: readonly TeamContributorActivity[];
+}
+
+export interface TeamContributorsHistory {
+  readonly points: readonly TeamContributorHistoryPoint[];
 }
 
 /** Acumulador mutável interno — vira `TeamContributor` só na montagem final. */
@@ -196,9 +231,14 @@ interface ContributorAccumulator {
   identity: TeamContributor['identity'];
   workItemsTotal: number;
   workItemsWip: number;
+  workItemsByCategory: Record<string, number>;
   pullRequestsMerged: number;
+  pullRequestsReviewed: number;
   deploymentsTriggered: number;
+  deploymentsSuccess: number;
+  deploymentsFailure: number;
   incidentsAssigned: number;
+  toilHours: number;
 }
 
 interface ProviderExternalIdCountRow {
@@ -679,6 +719,90 @@ export class TeamProfileService {
   }
 
   /**
+   * Monta os dois mapas de resolução de identidade (`provider:externalId` →
+   * pessoa/username) a partir das linhas já buscadas — puro, sem acesso a
+   * banco, pra ser reaproveitado por `getContributors` e
+   * `getContributorsHistory` sem duplicar a query nem a lógica de merge.
+   */
+  private buildIdentityLookups(
+    aliasRows: readonly { provider: string; external_user_id: string; user_id: string; full_name: string; avatar_url: string | null }[],
+    discoveredRows: readonly {
+      provider: string;
+      external_user_id: string;
+      external_username: string | null;
+      external_avatar_url: string | null;
+    }[],
+  ): {
+    aliasMap: Map<string, { userId: string; fullName: string; avatarUrl: string | null }>;
+    discoveredMap: Map<string, { externalUsername: string | null; externalAvatarUrl: string | null }>;
+  } {
+    const aliasMap = new Map<string, { userId: string; fullName: string; avatarUrl: string | null }>();
+    for (const row of aliasRows) {
+      aliasMap.set(`${row.provider}:${row.external_user_id}`, {
+        userId: row.user_id,
+        fullName: row.full_name,
+        avatarUrl: row.avatar_url,
+      });
+    }
+
+    const discoveredMap = new Map<string, { externalUsername: string | null; externalAvatarUrl: string | null }>();
+    for (const row of discoveredRows) {
+      discoveredMap.set(`${row.provider}:${row.external_user_id}`, {
+        externalUsername: row.external_username,
+        externalAvatarUrl: row.external_avatar_url,
+      });
+    }
+
+    return { aliasMap, discoveredMap };
+  }
+
+  /**
+   * `groupKey` funde `(provider, externalId)` numa mesma pessoa quando há
+   * alias (`user:userId`); sem alias, cada `(provider, externalId)` fica
+   * isolado (`raw:provider:externalId`) — mesma regra pra qualquer chamador,
+   * ver doc de `getContributors` pra motivação completa.
+   */
+  private resolveContributorIdentity(
+    provider: string,
+    externalId: string,
+    aliasMap: Map<string, { userId: string; fullName: string; avatarUrl: string | null }>,
+    discoveredMap: Map<string, { externalUsername: string | null; externalAvatarUrl: string | null }>,
+  ): { groupKey: string; identity: TeamContributor['identity'] } {
+    const key = `${provider}:${externalId}`;
+    const alias = aliasMap.get(key);
+    const groupKey = alias ? `user:${alias.userId}` : `raw:${key}`;
+
+    if (alias) {
+      return {
+        groupKey,
+        identity: {
+          identified: true,
+          userId: alias.userId,
+          fullName: alias.fullName,
+          avatarUrl: alias.avatarUrl,
+          provider: null,
+          externalUserId: null,
+          externalUsername: null,
+        },
+      };
+    }
+
+    const discovered = discoveredMap.get(key);
+    return {
+      groupKey,
+      identity: {
+        identified: false,
+        userId: null,
+        fullName: null,
+        avatarUrl: discovered?.externalAvatarUrl ?? null,
+        provider,
+        externalUserId: externalId,
+        externalUsername: discovered?.externalUsername ?? null,
+      },
+    };
+  }
+
+  /**
    * Quebra por pessoa — agrega `assignee_external_id`/`author_external_id`/
    * `triggered_by_external_id` das 4 fontes canônicas do time (work items,
    * PRs, deploys, incidentes), resolvendo identidade em duas camadas:
@@ -698,15 +822,24 @@ export class TeamProfileService {
     }
 
     return withTenantContext(this.pool, tenantId, async (client) => {
-      const [workItemRows, prRows, deploymentRows, incidentRows, aliasRows, discoveredRows] = await Promise.all([
-        client.query<{ provider: string; external_id: string; total: string; wip: string }>(
-          `SELECT cwi.provider, cwi.assignee_external_id AS external_id,
+      const [
+        workItemRows,
+        prRows,
+        prReviewRows,
+        deploymentRows,
+        incidentRows,
+        toilRows,
+        aliasRows,
+        discoveredRows,
+      ] = await Promise.all([
+        client.query<{ provider: string; external_id: string; category: string; total: string; wip: string }>(
+          `SELECT cwi.provider, cwi.assignee_external_id AS external_id, ewi.semantic_category AS category,
                   count(*) AS total,
                   count(*) FILTER (WHERE ewi.semantic_state = 'IN_PROGRESS') AS wip
            FROM canonical_work_items cwi
            JOIN enriched_work_items ewi ON ewi.id = cwi.id
            WHERE ewi.team_id = $1 AND cwi.assignee_external_id IS NOT NULL
-           GROUP BY cwi.provider, cwi.assignee_external_id`,
+           GROUP BY cwi.provider, cwi.assignee_external_id, ewi.semantic_category`,
           [teamId],
         ),
         client.query<ProviderExternalIdCountRow>(
@@ -718,8 +851,24 @@ export class TeamProfileService {
            GROUP BY cpr.author_external_id`,
           [teamId],
         ),
+        // Revisor — diferente de author_external_id (quem abriu/mergeou):
+        // reviewer_external_ids é array, um PR pode ter vários revisores,
+        // por isso o unnest em vez de um count(*) direto.
         client.query<ProviderExternalIdCountRow>(
-          `SELECT cd.provider, cd.triggered_by_external_id AS external_id, count(*) AS count
+          `SELECT 'github' AS provider, reviewer_id AS external_id, count(*) AS count
+           FROM canonical_pull_requests cpr
+           JOIN team_resource_links trl
+             ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+           CROSS JOIN LATERAL unnest(cpr.reviewer_external_ids) AS reviewer_id
+           WHERE trl.team_id = $1 AND cpr.state = 'MERGED'
+           GROUP BY reviewer_id`,
+          [teamId],
+        ),
+        client.query<{ provider: string; external_id: string; total: string; success: string; failure: string }>(
+          `SELECT cd.provider, cd.triggered_by_external_id AS external_id,
+                  count(*) AS total,
+                  count(*) FILTER (WHERE cd.status = 'SUCCESS') AS success,
+                  count(*) FILTER (WHERE cd.status = 'FAILURE') AS failure
            FROM canonical_deployments cd
            JOIN enriched_deployments ed ON ed.id = cd.id
            WHERE ed.team_id = $1 AND cd.triggered_by_external_id IS NOT NULL
@@ -732,6 +881,21 @@ export class TeamProfileService {
            JOIN enriched_incidents ei ON ei.id = ci.id
            WHERE ei.team_id = $1 AND ci.assignee_external_id IS NOT NULL
            GROUP BY ci.provider, ci.assignee_external_id`,
+          [teamId],
+        ),
+        // Mesma janela/filtro do toilRatio do time (ver computeToilRatio) —
+        // só quebrado por assignee em vez de somado no time inteiro.
+        client.query<{ provider: string; external_id: string; toil_hours: string | null }>(
+          `SELECT cwi.provider, cwi.assignee_external_id AS external_id,
+                  SUM(EXTRACT(EPOCH FROM (ewi.completed_at - ewi.started_working_at)) / 3600) AS toil_hours
+           FROM canonical_work_items cwi
+           JOIN enriched_work_items ewi ON ewi.id = cwi.id
+           WHERE ewi.team_id = $1
+             AND ewi.semantic_category = 'TOIL'
+             AND ewi.started_working_at IS NOT NULL
+             AND ewi.completed_at >= date_trunc('month', NOW())
+             AND cwi.assignee_external_id IS NOT NULL
+           GROUP BY cwi.provider, cwi.assignee_external_id`,
           [teamId],
         ),
         client.query<{
@@ -760,63 +924,30 @@ export class TeamProfileService {
         ),
       ]);
 
-      const aliasMap = new Map<string, { userId: string; fullName: string; avatarUrl: string | null }>();
-      for (const row of aliasRows.rows) {
-        aliasMap.set(`${row.provider}:${row.external_user_id}`, {
-          userId: row.user_id,
-          fullName: row.full_name,
-          avatarUrl: row.avatar_url,
-        });
-      }
-
-      const discoveredMap = new Map<string, { externalUsername: string | null; externalAvatarUrl: string | null }>();
-      for (const row of discoveredRows.rows) {
-        discoveredMap.set(`${row.provider}:${row.external_user_id}`, {
-          externalUsername: row.external_username,
-          externalAvatarUrl: row.external_avatar_url,
-        });
-      }
+      const { aliasMap, discoveredMap } = this.buildIdentityLookups(aliasRows.rows, discoveredRows.rows);
 
       const accumulators = new Map<string, ContributorAccumulator>();
 
       const resolveAccumulator = (provider: string, externalId: string): ContributorAccumulator => {
-        const key = `${provider}:${externalId}`;
-        const alias = aliasMap.get(key);
-        const groupKey = alias ? `user:${alias.userId}` : `raw:${key}`;
+        const { groupKey, identity } = this.resolveContributorIdentity(provider, externalId, aliasMap, discoveredMap);
 
         const existing = accumulators.get(groupKey);
         if (existing) {
           return existing;
         }
 
-        const discovered = discoveredMap.get(key);
-        const identity: TeamContributor['identity'] = alias
-          ? {
-              identified: true,
-              userId: alias.userId,
-              fullName: alias.fullName,
-              avatarUrl: alias.avatarUrl,
-              provider: null,
-              externalUserId: null,
-              externalUsername: null,
-            }
-          : {
-              identified: false,
-              userId: null,
-              fullName: null,
-              avatarUrl: discovered?.externalAvatarUrl ?? null,
-              provider,
-              externalUserId: externalId,
-              externalUsername: discovered?.externalUsername ?? null,
-            };
-
         const created: ContributorAccumulator = {
           identity,
           workItemsTotal: 0,
           workItemsWip: 0,
+          workItemsByCategory: {},
           pullRequestsMerged: 0,
+          pullRequestsReviewed: 0,
           deploymentsTriggered: 0,
+          deploymentsSuccess: 0,
+          deploymentsFailure: 0,
           incidentsAssigned: 0,
+          toilHours: 0,
         };
         accumulators.set(groupKey, created);
         return created;
@@ -826,25 +957,49 @@ export class TeamProfileService {
         const acc = resolveAccumulator(row.provider, row.external_id);
         acc.workItemsTotal += Number(row.total);
         acc.workItemsWip += Number(row.wip);
+        acc.workItemsByCategory[row.category] = (acc.workItemsByCategory[row.category] ?? 0) + Number(row.total);
       }
       for (const row of prRows.rows) {
         resolveAccumulator(row.provider, row.external_id).pullRequestsMerged += Number(row.count);
       }
+      for (const row of prReviewRows.rows) {
+        resolveAccumulator(row.provider, row.external_id).pullRequestsReviewed += Number(row.count);
+      }
       for (const row of deploymentRows.rows) {
-        resolveAccumulator(row.provider, row.external_id).deploymentsTriggered += Number(row.count);
+        const acc = resolveAccumulator(row.provider, row.external_id);
+        acc.deploymentsTriggered += Number(row.total);
+        acc.deploymentsSuccess += Number(row.success);
+        acc.deploymentsFailure += Number(row.failure);
       }
       for (const row of incidentRows.rows) {
         resolveAccumulator(row.provider, row.external_id).incidentsAssigned += Number(row.count);
       }
+      for (const row of toilRows.rows) {
+        resolveAccumulator(row.provider, row.external_id).toilHours += row.toil_hours !== null ? Number(row.toil_hours) : 0;
+      }
+
+      const teamToilHours = [...accumulators.values()].reduce((sum, acc) => sum + acc.toilHours, 0);
 
       const contributors = [...accumulators.values()]
         .map(
           (acc): TeamContributor => ({
             identity: acc.identity,
-            workItems: { total: acc.workItemsTotal, wip: acc.workItemsWip },
-            pullRequests: { merged: acc.pullRequestsMerged },
-            deployments: { triggered: acc.deploymentsTriggered },
+            workItems: { total: acc.workItemsTotal, wip: acc.workItemsWip, byCategory: acc.workItemsByCategory },
+            pullRequests: { merged: acc.pullRequestsMerged, reviewed: acc.pullRequestsReviewed },
+            deployments: {
+              triggered: acc.deploymentsTriggered,
+              success: acc.deploymentsSuccess,
+              failure: acc.deploymentsFailure,
+              rate:
+                acc.deploymentsSuccess + acc.deploymentsFailure > 0
+                  ? acc.deploymentsSuccess / (acc.deploymentsSuccess + acc.deploymentsFailure)
+                  : null,
+            },
             incidents: { assigned: acc.incidentsAssigned },
+            toil: {
+              hoursThisMonth: acc.toilHours,
+              shareOfTeamToil: teamToilHours > 0 ? acc.toilHours / teamToilHours : 0,
+            },
           }),
         )
         .sort((a, b) => {
@@ -854,6 +1009,155 @@ export class TeamProfileService {
         });
 
       return { contributors };
+    });
+  }
+
+  /**
+   * Tendência semanal de `getContributors` — quem fez o quê, semana a
+   * semana, **não cumulativo** (mesmo espírito de `completed` em
+   * `getProfileHistory`, não de `distribution`): cada ponto é escopado só à
+   * janela `(ponto anterior, este ponto]`, uma pessoa pode sumir e voltar a
+   * aparecer entre pontos. Pensado pra detectar ramp-up, rotação, ausência —
+   * não pra ranquear performance (evite usar isso como métrica de
+   * produtividade individual isolada).
+   *
+   * Sem `wip`/toil/revisão/status de deploy aqui de propósito: reconstruir
+   * WIP histórico por pessoa exigiria repetir o replay de changelog de
+   * `getProfileHistory` multiplicado por pessoa (caro, e o ganho de insight
+   * é marginal frente ao WIP agregado do time que já existe). Se isso virar
+   * necessidade real, é extensão natural do mesmo método.
+   */
+  async getContributorsHistory(tenantId: string, teamId: string, weeks: number): Promise<TeamContributorsHistory | null> {
+    const team = await this.teamRepository.findById(tenantId, teamId);
+    if (!team) {
+      return null;
+    }
+
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const [workItemRows, prRows, deploymentRows, incidentRows, aliasRows, discoveredRows] = await Promise.all([
+        client.query<{ provider: string; external_id: string; completed_at: Date }>(
+          `SELECT cwi.provider, cwi.assignee_external_id AS external_id, ewi.completed_at
+           FROM canonical_work_items cwi
+           JOIN enriched_work_items ewi ON ewi.id = cwi.id
+           WHERE ewi.team_id = $1 AND cwi.assignee_external_id IS NOT NULL AND ewi.completed_at IS NOT NULL`,
+          [teamId],
+        ),
+        client.query<{ provider: string; external_id: string; merged_at: Date }>(
+          `SELECT 'github' AS provider, cpr.author_external_id AS external_id, cpr.merged_at
+           FROM canonical_pull_requests cpr
+           JOIN team_resource_links trl
+             ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+           WHERE trl.team_id = $1 AND cpr.state = 'MERGED' AND cpr.author_external_id IS NOT NULL AND cpr.merged_at IS NOT NULL`,
+          [teamId],
+        ),
+        client.query<{ provider: string; external_id: string; started_at: Date }>(
+          `SELECT cd.provider, cd.triggered_by_external_id AS external_id, cd.started_at
+           FROM canonical_deployments cd
+           JOIN enriched_deployments ed ON ed.id = cd.id
+           WHERE ed.team_id = $1 AND cd.triggered_by_external_id IS NOT NULL`,
+          [teamId],
+        ),
+        client.query<{ provider: string; external_id: string; triggered_at: Date }>(
+          `SELECT ci.provider, ci.assignee_external_id AS external_id, ci.triggered_at
+           FROM canonical_incidents ci
+           JOIN enriched_incidents ei ON ei.id = ci.id
+           WHERE ei.team_id = $1 AND ci.assignee_external_id IS NOT NULL`,
+          [teamId],
+        ),
+        client.query<{
+          provider: string;
+          external_user_id: string;
+          user_id: string;
+          full_name: string;
+          avatar_url: string | null;
+        }>(
+          `SELECT upa.provider, upa.external_user_id, upa.user_id, u.full_name, u.avatar_url
+           FROM user_provider_aliases upa
+           JOIN users u ON u.id = upa.user_id
+           WHERE upa.tenant_id = $1`,
+          [tenantId],
+        ),
+        client.query<{
+          provider: string;
+          external_user_id: string;
+          external_username: string | null;
+          external_avatar_url: string | null;
+        }>(
+          `SELECT provider, external_user_id, external_username, external_avatar_url
+           FROM discovered_identities
+           WHERE tenant_id = $1`,
+          [tenantId],
+        ),
+      ]);
+
+      const { aliasMap, discoveredMap } = this.buildIdentityLookups(aliasRows.rows, discoveredRows.rows);
+
+      const now = new Date();
+      const pointDates: Date[] = [];
+      for (let i = weeks - 1; i >= 0; i -= 1) {
+        pointDates.push(new Date(now.getTime() - i * ONE_WEEK_MS));
+      }
+
+      const points: TeamContributorHistoryPoint[] = pointDates.map((date, index) => {
+        const windowStart = index === 0 ? new Date(date.getTime() - ONE_WEEK_MS) : pointDates[index - 1];
+
+        interface Accumulator {
+          identity: TeamContributor['identity'];
+          workItemsCompleted: number;
+          pullRequestsMerged: number;
+          deploymentsTriggered: number;
+          incidentsAssigned: number;
+        }
+        const byPerson = new Map<string, Accumulator>();
+
+        const bump = (provider: string, externalId: string, field: keyof Omit<Accumulator, 'identity'>) => {
+          const { groupKey, identity } = this.resolveContributorIdentity(provider, externalId, aliasMap, discoveredMap);
+          const existing = byPerson.get(groupKey);
+          if (existing) {
+            existing[field] += 1;
+          } else {
+            byPerson.set(groupKey, {
+              identity,
+              workItemsCompleted: 0,
+              pullRequestsMerged: 0,
+              deploymentsTriggered: 0,
+              incidentsAssigned: 0,
+              [field]: 1,
+            } as Accumulator);
+          }
+        };
+
+        for (const row of workItemRows.rows) {
+          if (row.completed_at > windowStart && row.completed_at <= date) {
+            bump(row.provider, row.external_id, 'workItemsCompleted');
+          }
+        }
+        for (const row of prRows.rows) {
+          if (row.merged_at > windowStart && row.merged_at <= date) {
+            bump(row.provider, row.external_id, 'pullRequestsMerged');
+          }
+        }
+        for (const row of deploymentRows.rows) {
+          if (row.started_at > windowStart && row.started_at <= date) {
+            bump(row.provider, row.external_id, 'deploymentsTriggered');
+          }
+        }
+        for (const row of incidentRows.rows) {
+          if (row.triggered_at > windowStart && row.triggered_at <= date) {
+            bump(row.provider, row.external_id, 'incidentsAssigned');
+          }
+        }
+
+        const contributors = [...byPerson.values()].sort((a, b) => {
+          const totalA = a.workItemsCompleted + a.pullRequestsMerged + a.deploymentsTriggered + a.incidentsAssigned;
+          const totalB = b.workItemsCompleted + b.pullRequestsMerged + b.deploymentsTriggered + b.incidentsAssigned;
+          return totalB - totalA;
+        });
+
+        return { date: date.toISOString().slice(0, 10), contributors };
+      });
+
+      return { points };
     });
   }
 }

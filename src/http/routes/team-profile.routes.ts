@@ -89,4 +89,30 @@ export function registerTeamProfileRoutes(
       return reply.status(200).send(contributors);
     },
   );
+
+  /**
+   * Tendência semanal de `/profile/contributors`, não-cumulativa (mesmo
+   * espírito de query param de `/profile/history`). Mesmo RBAC.
+   */
+  server.get<{ Params: TenantTeamParams; Querystring: ProfileHistoryQuery }>(
+    '/tenants/:tenantId/teams/:teamId/profile/contributors/history',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, teamId } = request.params;
+      const parsedWeeks = request.query.weeks ? Number(request.query.weeks) : DEFAULT_HISTORY_WEEKS;
+
+      if (!Number.isInteger(parsedWeeks) || parsedWeeks < 1 || parsedWeeks > MAX_HISTORY_WEEKS) {
+        return reply
+          .status(400)
+          .send({ error: `"weeks" precisa ser um inteiro entre 1 e ${MAX_HISTORY_WEEKS}.` });
+      }
+
+      const history = await teamProfileService.getContributorsHistory(tenantId, teamId, parsedWeeks);
+      if (!history) {
+        return reply.status(404).send({ error: 'Time não encontrado.' });
+      }
+
+      return reply.status(200).send(history);
+    },
+  );
 }
