@@ -204,7 +204,14 @@ export interface TeamContributor {
   };
 }
 
+export interface TeamContributorsPeriod {
+  readonly from: string;
+  readonly to: string;
+}
+
 export interface TeamContributors {
+  /** Eco do período efetivamente aplicado — `null` quando nenhum `from`/`to` foi passado (all-time, comportamento original). */
+  readonly period: TeamContributorsPeriod | null;
   readonly contributors: readonly TeamContributor[];
 }
 
@@ -815,14 +822,22 @@ export class TeamProfileService {
    * não identificadas nunca são fundidas entre si — cada `(provider,
    * externalId)` sem match vira uma entrada própria.
    */
-  async getContributors(tenantId: string, teamId: string): Promise<TeamContributors | null> {
+  async getContributors(
+    tenantId: string,
+    teamId: string,
+    period?: { readonly from: Date; readonly to: Date } | null,
+  ): Promise<TeamContributors | null> {
     const team = await this.teamRepository.findById(tenantId, teamId);
     if (!team) {
       return null;
     }
 
+    const periodFrom = period?.from ?? null;
+    const periodTo = period?.to ?? null;
+
     return withTenantContext(this.pool, tenantId, async (client) => {
       const [
+        wipRows,
         workItemRows,
         prRows,
         prReviewRows,
@@ -832,15 +847,33 @@ export class TeamProfileService {
         aliasRows,
         discoveredRows,
       ] = await Promise.all([
-        client.query<{ provider: string; external_id: string; category: string; total: string; wip: string }>(
+        // `wip` nunca respeita período (é inerentemente "agora", mesmo
+        // espírito de `distribution`/`wip` em GET /dashboard/flow) — query
+        // própria, separada de `total`/`byCategory` abaixo, pra não colidir
+        // com o filtro de data delas (um WHERE de completed_at excluiria
+        // todo item ainda não concluído, que é exatamente o WIP).
+        client.query<{ provider: string; external_id: string; wip: string }>(
+          `SELECT cwi.provider, cwi.assignee_external_id AS external_id, count(*) AS wip
+           FROM canonical_work_items cwi
+           JOIN enriched_work_items ewi ON ewi.id = cwi.id
+           WHERE ewi.team_id = $1 AND cwi.assignee_external_id IS NOT NULL AND ewi.semantic_state = 'IN_PROGRESS'
+           GROUP BY cwi.provider, cwi.assignee_external_id`,
+          [teamId],
+        ),
+        // Período no WHERE de verdade (não FILTER) — deixa o Postgres pular
+        // linha fora da janela via idx_enriched_work_items_team_completed_at
+        // (migration 0041) em vez de sequential scan. $2/$3 nulos = sem
+        // filtro, comportamento idêntico ao de antes desta mudança (total =
+        // todo item já atribuído, não só concluído).
+        client.query<{ provider: string; external_id: string; category: string; total: string }>(
           `SELECT cwi.provider, cwi.assignee_external_id AS external_id, ewi.semantic_category AS category,
-                  count(*) AS total,
-                  count(*) FILTER (WHERE ewi.semantic_state = 'IN_PROGRESS') AS wip
+                  count(*) AS total
            FROM canonical_work_items cwi
            JOIN enriched_work_items ewi ON ewi.id = cwi.id
            WHERE ewi.team_id = $1 AND cwi.assignee_external_id IS NOT NULL
+             AND ($2::timestamptz IS NULL OR (ewi.completed_at IS NOT NULL AND ewi.completed_at BETWEEN $2 AND $3))
            GROUP BY cwi.provider, cwi.assignee_external_id, ewi.semantic_category`,
-          [teamId],
+          [teamId, periodFrom, periodTo],
         ),
         client.query<ProviderExternalIdCountRow>(
           `SELECT 'github' AS provider, cpr.author_external_id AS external_id, count(*) AS count
@@ -848,12 +881,15 @@ export class TeamProfileService {
            JOIN team_resource_links trl
              ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
            WHERE trl.team_id = $1 AND cpr.state = 'MERGED' AND cpr.author_external_id IS NOT NULL
+             AND ($2::timestamptz IS NULL OR (cpr.merged_at IS NOT NULL AND cpr.merged_at BETWEEN $2 AND $3))
            GROUP BY cpr.author_external_id`,
-          [teamId],
+          [teamId, periodFrom, periodTo],
         ),
         // Revisor — diferente de author_external_id (quem abriu/mergeou):
         // reviewer_external_ids é array, um PR pode ter vários revisores,
-        // por isso o unnest em vez de um count(*) direto.
+        // por isso o unnest em vez de um count(*) direto. Sem timestamp
+        // próprio de revisão nos dados canônicos — usa merged_at do PR
+        // mesmo (mesma janela do autor), limitação documentada pro front.
         client.query<ProviderExternalIdCountRow>(
           `SELECT 'github' AS provider, reviewer_id AS external_id, count(*) AS count
            FROM canonical_pull_requests cpr
@@ -861,8 +897,9 @@ export class TeamProfileService {
              ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
            CROSS JOIN LATERAL unnest(cpr.reviewer_external_ids) AS reviewer_id
            WHERE trl.team_id = $1 AND cpr.state = 'MERGED'
+             AND ($2::timestamptz IS NULL OR (cpr.merged_at IS NOT NULL AND cpr.merged_at BETWEEN $2 AND $3))
            GROUP BY reviewer_id`,
-          [teamId],
+          [teamId, periodFrom, periodTo],
         ),
         client.query<{ provider: string; external_id: string; total: string; success: string; failure: string }>(
           `SELECT cd.provider, cd.triggered_by_external_id AS external_id,
@@ -872,16 +909,18 @@ export class TeamProfileService {
            FROM canonical_deployments cd
            JOIN enriched_deployments ed ON ed.id = cd.id
            WHERE ed.team_id = $1 AND cd.triggered_by_external_id IS NOT NULL
+             AND ($2::timestamptz IS NULL OR cd.started_at BETWEEN $2 AND $3)
            GROUP BY cd.provider, cd.triggered_by_external_id`,
-          [teamId],
+          [teamId, periodFrom, periodTo],
         ),
         client.query<ProviderExternalIdCountRow>(
           `SELECT ci.provider, ci.assignee_external_id AS external_id, count(*) AS count
            FROM canonical_incidents ci
            JOIN enriched_incidents ei ON ei.id = ci.id
            WHERE ei.team_id = $1 AND ci.assignee_external_id IS NOT NULL
+             AND ($2::timestamptz IS NULL OR ci.triggered_at BETWEEN $2 AND $3)
            GROUP BY ci.provider, ci.assignee_external_id`,
-          [teamId],
+          [teamId, periodFrom, periodTo],
         ),
         // Mesma janela/filtro do toilRatio do time (ver computeToilRatio) —
         // só quebrado por assignee em vez de somado no time inteiro.
@@ -953,10 +992,12 @@ export class TeamProfileService {
         return created;
       };
 
+      for (const row of wipRows.rows) {
+        resolveAccumulator(row.provider, row.external_id).workItemsWip += Number(row.wip);
+      }
       for (const row of workItemRows.rows) {
         const acc = resolveAccumulator(row.provider, row.external_id);
         acc.workItemsTotal += Number(row.total);
-        acc.workItemsWip += Number(row.wip);
         acc.workItemsByCategory[row.category] = (acc.workItemsByCategory[row.category] ?? 0) + Number(row.total);
       }
       for (const row of prRows.rows) {
@@ -980,6 +1021,8 @@ export class TeamProfileService {
 
       const teamToilHours = [...accumulators.values()].reduce((sum, acc) => sum + acc.toilHours, 0);
 
+      const periodActive = periodFrom !== null && periodTo !== null;
+
       const contributors = [...accumulators.values()]
         .map(
           (acc): TeamContributor => ({
@@ -1002,13 +1045,32 @@ export class TeamProfileService {
             },
           }),
         )
+        // Com período ativo, `wip`/`toil` continuam sem filtro (de propósito
+        // — ver doc do método) e podem gerar uma entrada só com resíduo
+        // deles (ex: ticket velho ainda IN_PROGRESS de quem já saiu do
+        // time) mesmo com zero atividade de verdade na janela pedida. Sem
+        // isso, esses "fantasmas" apareceriam na lista sem nunca poder ser
+        // top contribuidor (não entram no sort abaixo), só como ruído.
+        .filter((contributor) => {
+          if (!periodActive) return true;
+          return (
+            contributor.workItems.total > 0 ||
+            contributor.pullRequests.merged > 0 ||
+            contributor.deployments.triggered > 0 ||
+            contributor.incidents.assigned > 0
+          );
+        })
         .sort((a, b) => {
           const totalA = a.workItems.total + a.pullRequests.merged + a.deployments.triggered + a.incidents.assigned;
           const totalB = b.workItems.total + b.pullRequests.merged + b.deployments.triggered + b.incidents.assigned;
           return totalB - totalA;
         });
 
-      return { contributors };
+      const period: TeamContributorsPeriod | null = periodActive
+        ? { from: (periodFrom as Date).toISOString(), to: (periodTo as Date).toISOString() }
+        : null;
+
+      return { period, contributors };
     });
   }
 
