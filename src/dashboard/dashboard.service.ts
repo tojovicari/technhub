@@ -1,7 +1,12 @@
 import type { Pool, PoolClient } from 'pg';
 import { getPool, withTenantContext } from '../database/pool';
 import { MetricTriggerConfigRepository } from './metric-trigger-config.repository';
-import type { ChangeFailureRateTriggerConfig, TriggerConfigSource } from './metric-trigger-config.types';
+import type {
+  ChangeFailureRateTriggerConfig,
+  DeploymentFrequencyTriggerConfig,
+  TriggerConfigSource,
+} from './metric-trigger-config.types';
+import type { SemanticCategory } from '../enrichment/domain-context.types';
 
 /** Presente só quando `teamId` é passado na query — distingue métrica calculada por time de métrica ainda tenant-wide. */
 export type MetricScope = 'team' | 'tenant';
@@ -42,13 +47,14 @@ export interface DoraMetrics {
   readonly changeFailureRate: AvailableChangeFailureRateMetric | UnavailableMetric;
   /**
    * "O que foi usado pra calcular este número" (auditoria — Seção 6 da
-   * spec). Só `changeFailureRate` por enquanto: gatilho configurável
-   * chegando 1 métrica por vez (ver `DashboardService`, ordem de
-   * construção), as outras 3 ainda são fixas e não têm eco ainda — ecoar
-   * "isto foi usado" antes de a query realmente respeitar a config seria
-   * enganoso.
+   * spec). `deploymentFrequency`/`changeFailureRate` por enquanto: gatilho
+   * configurável chegando 1 métrica por vez (ver `DashboardService`, ordem
+   * de construção), Lead Time/MTTR ainda são fixos e não têm eco ainda —
+   * ecoar "isto foi usado" antes de a query realmente respeitar a config
+   * seria enganoso.
    */
   readonly appliedTriggerConfig: {
+    readonly deploymentFrequency: TriggerConfigSource<DeploymentFrequencyTriggerConfig>;
     readonly changeFailureRate: TriggerConfigSource<ChangeFailureRateTriggerConfig>;
   };
 }
@@ -151,7 +157,7 @@ export class DashboardService {
 
     return withTenantContext(this.pool, tenantId, async (client) => {
       const [deploymentFrequency, leadTimeForChanges, meanTimeToRestore, changeFailureRate] = await Promise.all([
-        this.queryDeploymentFrequency(client, from, to, teamId),
+        this.queryDeploymentFrequency(client, from, to, teamId, effectiveTriggerConfig.config.deploymentFrequency),
         this.queryLeadTime(client, from, to, teamId),
         this.queryMeanTimeToRestore(client, from, to, teamId),
         this.queryChangeFailureRate(
@@ -163,6 +169,12 @@ export class DashboardService {
         ),
       ]);
 
+      const appliedTriggerConfigSource = {
+        source: effectiveTriggerConfig.source,
+        teamId: teamId ?? null,
+        updatedAt: effectiveTriggerConfig.updatedAt.toISOString(),
+      };
+
       return {
         period: { from: from.toISOString(), to: to.toISOString() },
         deploymentFrequency,
@@ -170,12 +182,8 @@ export class DashboardService {
         meanTimeToRestore,
         changeFailureRate,
         appliedTriggerConfig: {
-          changeFailureRate: {
-            config: effectiveTriggerConfig.config.changeFailureRate,
-            source: effectiveTriggerConfig.source,
-            teamId: teamId ?? null,
-            updatedAt: effectiveTriggerConfig.updatedAt.toISOString(),
-          },
+          deploymentFrequency: { config: effectiveTriggerConfig.config.deploymentFrequency, ...appliedTriggerConfigSource },
+          changeFailureRate: { config: effectiveTriggerConfig.config.changeFailureRate, ...appliedTriggerConfigSource },
         },
       };
     });
@@ -213,7 +221,13 @@ export class DashboardService {
           const windowStart = index === 0 ? new Date(date.getTime() - DORA_HISTORY_WEEK_MS) : pointDates[index - 1];
 
           const [deploymentFrequency, changeFailureRate] = await Promise.all([
-            this.queryDeploymentFrequency(client, windowStart, date, teamId),
+            this.queryDeploymentFrequency(
+              client,
+              windowStart,
+              date,
+              teamId,
+              effectiveTriggerConfig.config.deploymentFrequency,
+            ),
             this.queryChangeFailureRate(
               client,
               windowStart,
@@ -261,12 +275,43 @@ export class DashboardService {
     });
   }
 
+  /**
+   * Gatilho configurável (Seção 6 da spec): `CICD_DEPLOY` (default, mesmo
+   * comportamento hardcoded de antes desta config existir) conta deploy de
+   * produção via `canonical_deployments`/`enriched_deployments`.
+   * `WORKFLOW_DONE_TRANSITION` conta transição pra `DONE` via
+   * `enriched_work_items.completed_at` em vez disso — pensado pra time sem
+   * pipeline de CI/CD rastreado, que usa a coluna "Done" do board como
+   * proxy de "foi pra produção" (exemplo literal da spec). As duas fontes
+   * são mutuamente exclusivas — nunca somadas.
+   */
   private async queryDeploymentFrequency(
     client: PoolClient,
     from: Date,
     to: Date,
     teamId: string | undefined,
+    config: DeploymentFrequencyTriggerConfig,
   ): Promise<DeploymentFrequencyMetric> {
+    const rows =
+      config.startEvent === 'WORKFLOW_DONE_TRANSITION'
+        ? await this.queryDeploymentFrequencyFromWorkflowDone(client, from, to, teamId, config.categoryFilter)
+        : await this.queryDeploymentFrequencyFromCicdDeploy(client, from, to, teamId);
+
+    const byDay = rows.map((row) => ({
+      date: row.day.toISOString().slice(0, 10),
+      count: Number(row.count),
+    }));
+    const total = byDay.reduce((sum, day) => sum + day.count, 0);
+
+    return { total, byDay, ...(teamId ? { scope: 'team' as const } : {}) };
+  }
+
+  private async queryDeploymentFrequencyFromCicdDeploy(
+    client: PoolClient,
+    from: Date,
+    to: Date,
+    teamId: string | undefined,
+  ): Promise<readonly { readonly day: Date; readonly count: string }[]> {
     const result = await client.query<{ day: Date; count: string }>(
       `SELECT date_trunc('day', cd.started_at) AS day, count(*) AS count
        FROM enriched_deployments ed
@@ -278,13 +323,41 @@ export class DashboardService {
       teamId ? [from, to, teamId] : [from, to],
     );
 
-    const byDay = result.rows.map((row) => ({
-      date: row.day.toISOString().slice(0, 10),
-      count: Number(row.count),
-    }));
-    const total = byDay.reduce((sum, day) => sum + day.count, 0);
+    return result.rows;
+  }
 
-    return { total, byDay, ...(teamId ? { scope: 'team' as const } : {}) };
+  /**
+   * `categoryFilter` vazio/ausente = sem filtro (conta toda categoria) —
+   * mesma convenção de "array vazio/ausente não restringe" já usada em
+   * `condition.values` do Domain Context Engine, não "filtra pra zero".
+   */
+  private async queryDeploymentFrequencyFromWorkflowDone(
+    client: PoolClient,
+    from: Date,
+    to: Date,
+    teamId: string | undefined,
+    categoryFilter: readonly SemanticCategory[] | undefined,
+  ): Promise<readonly { readonly day: Date; readonly count: string }[]> {
+    const teamParamIndex = 3;
+    const categoryParamIndex = teamId ? 4 : 3;
+    const hasCategoryFilter = categoryFilter !== undefined && categoryFilter.length > 0;
+
+    const params: unknown[] = [from, to];
+    if (teamId) params.push(teamId);
+    if (hasCategoryFilter) params.push(categoryFilter);
+
+    const result = await client.query<{ day: Date; count: string }>(
+      `SELECT date_trunc('day', completed_at) AS day, count(*) AS count
+       FROM enriched_work_items
+       WHERE completed_at BETWEEN $1 AND $2
+       ${teamId ? `AND team_id = $${teamParamIndex}` : ''}
+       ${hasCategoryFilter ? `AND semantic_category = ANY($${categoryParamIndex})` : ''}
+       GROUP BY 1
+       ORDER BY 1`,
+      params,
+    );
+
+    return result.rows;
   }
 
   /**
