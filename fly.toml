@@ -9,6 +9,12 @@ primary_region = "gru"
   GITHUB_OAUTH_CALLBACK_URL   = "https://api.moasy.tech/auth/github/callback"
   AUTH_DEFAULT_LOGIN_PROVIDER = "github"
   NOTIFICATION_EMAIL_PROVIDER = "resend"
+  # Sem isso explícito, cada máquina do app cai no default do código (20,
+  # ver src/database/pool.ts) — com as 2 máquinas do app, até 40 conexões
+  # simultâneas contra um banco que já foi derrubado por OOM numa instância
+  # pequena (ver incidente investigado nesta sessão). 10 por máquina = 20 no
+  # total, cabe com folga no 1GB novo do cto-ai-db.
+  DATABASE_POOL_MAX = "10"
 
 [deploy]
   release_command = "npm run migrate"
