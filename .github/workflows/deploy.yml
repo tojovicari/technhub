@@ -11,7 +11,7 @@ jobs:
     concurrency: deploy-production
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # `superfly/flyctl-actions/setup-flyctl@master` parou de exportar o
       # PATH corretamente pro passo seguinte ("fly: command not found" logo
