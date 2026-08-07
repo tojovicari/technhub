@@ -4,6 +4,7 @@ import { MetricTriggerConfigRepository } from './metric-trigger-config.repositor
 import type {
   ChangeFailureRateTriggerConfig,
   DeploymentFrequencyTriggerConfig,
+  MttrTriggerConfig,
   TriggerConfigSource,
 } from './metric-trigger-config.types';
 import type { SemanticCategory } from '../enrichment/domain-context.types';
@@ -47,14 +48,15 @@ export interface DoraMetrics {
   readonly changeFailureRate: AvailableChangeFailureRateMetric | UnavailableMetric;
   /**
    * "O que foi usado pra calcular este número" (auditoria — Seção 6 da
-   * spec). `deploymentFrequency`/`changeFailureRate` por enquanto: gatilho
-   * configurável chegando 1 métrica por vez (ver `DashboardService`, ordem
-   * de construção), Lead Time/MTTR ainda são fixos e não têm eco ainda —
-   * ecoar "isto foi usado" antes de a query realmente respeitar a config
-   * seria enganoso.
+   * spec). `deploymentFrequency`/`meanTimeToRestore`/`changeFailureRate` por
+   * enquanto: gatilho configurável chegando 1 métrica por vez (ver
+   * `DashboardService`, ordem de construção), Lead Time ainda é fixo e não
+   * tem eco ainda — ecoar "isto foi usado" antes de a query realmente
+   * respeitar a config seria enganoso.
    */
   readonly appliedTriggerConfig: {
     readonly deploymentFrequency: TriggerConfigSource<DeploymentFrequencyTriggerConfig>;
+    readonly meanTimeToRestore: TriggerConfigSource<MttrTriggerConfig>;
     readonly changeFailureRate: TriggerConfigSource<ChangeFailureRateTriggerConfig>;
   };
 }
@@ -159,7 +161,7 @@ export class DashboardService {
       const [deploymentFrequency, leadTimeForChanges, meanTimeToRestore, changeFailureRate] = await Promise.all([
         this.queryDeploymentFrequency(client, from, to, teamId, effectiveTriggerConfig.config.deploymentFrequency),
         this.queryLeadTime(client, from, to, teamId),
-        this.queryMeanTimeToRestore(client, from, to, teamId),
+        this.queryMeanTimeToRestore(client, from, to, teamId, effectiveTriggerConfig.config.meanTimeToRestore),
         this.queryChangeFailureRate(
           client,
           from,
@@ -183,6 +185,7 @@ export class DashboardService {
         changeFailureRate,
         appliedTriggerConfig: {
           deploymentFrequency: { config: effectiveTriggerConfig.config.deploymentFrequency, ...appliedTriggerConfigSource },
+          meanTimeToRestore: { config: effectiveTriggerConfig.config.meanTimeToRestore, ...appliedTriggerConfigSource },
           changeFailureRate: { config: effectiveTriggerConfig.config.changeFailureRate, ...appliedTriggerConfigSource },
         },
       };
@@ -411,29 +414,43 @@ export class DashboardService {
    * do enriquecimento ter rodado. Com `teamId`: junta contra
    * `enriched_incidents.team_id`, que agora é resolvido por incidente (ver
    * `EnrichmentService.runIncidentEnrichment`), não mais por integração inteira.
+   *
+   * Gatilho configurável (Seção 6 da spec): `startEvent` troca
+   * `triggered_at` (default) por `acknowledged_at`. Sem `endEvent`
+   * configurável — `resolved_at` é o único sinal de "restaurado" que existe
+   * nos dados (ver `MttrTriggerConfig`). `<startColumn> IS NOT NULL` é
+   * incondicional nas duas queries abaixo: é sempre verdadeiro pra
+   * `triggered_at` (`NOT NULL` no schema, não muda nada no default), mas
+   * exclui da amostra incidente sem `acknowledged_at` quando esse é o
+   * gatilho escolhido — não cai silenciosamente pra `triggered_at`.
    */
   private async queryMeanTimeToRestore(
     client: PoolClient,
     from: Date,
     to: Date,
     teamId: string | undefined,
+    config: MttrTriggerConfig,
   ): Promise<AvailableDurationMetric> {
+    const startColumn = config.startEvent === 'INCIDENT_ACKNOWLEDGED' ? 'acknowledged_at' : 'triggered_at';
+
     const result = teamId
       ? await client.query<{ avg_hours: string | null; sample_size: string }>(
           `SELECT
-             avg(EXTRACT(EPOCH FROM (ci.resolved_at - ci.triggered_at)) / 3600) AS avg_hours,
+             avg(EXTRACT(EPOCH FROM (ci.resolved_at - ci.${startColumn})) / 3600) AS avg_hours,
              count(*) AS sample_size
            FROM canonical_incidents ci
            JOIN enriched_incidents ei ON ei.id = ci.id
-           WHERE ci.resolved_at IS NOT NULL AND ci.resolved_at BETWEEN $1 AND $2 AND ei.team_id = $3`,
+           WHERE ci.resolved_at IS NOT NULL AND ci.resolved_at BETWEEN $1 AND $2
+             AND ci.${startColumn} IS NOT NULL AND ei.team_id = $3`,
           [from, to, teamId],
         )
       : await client.query<{ avg_hours: string | null; sample_size: string }>(
           `SELECT
-             avg(EXTRACT(EPOCH FROM (resolved_at - triggered_at)) / 3600) AS avg_hours,
+             avg(EXTRACT(EPOCH FROM (resolved_at - ${startColumn})) / 3600) AS avg_hours,
              count(*) AS sample_size
            FROM canonical_incidents
-           WHERE resolved_at IS NOT NULL AND resolved_at BETWEEN $1 AND $2`,
+           WHERE resolved_at IS NOT NULL AND resolved_at BETWEEN $1 AND $2
+             AND ${startColumn} IS NOT NULL`,
           [from, to],
         );
 
