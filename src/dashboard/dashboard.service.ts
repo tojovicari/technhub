@@ -4,6 +4,7 @@ import { MetricTriggerConfigRepository } from './metric-trigger-config.repositor
 import type {
   ChangeFailureRateTriggerConfig,
   DeploymentFrequencyTriggerConfig,
+  LeadTimeTriggerConfig,
   MttrTriggerConfig,
   TriggerConfigSource,
 } from './metric-trigger-config.types';
@@ -48,14 +49,12 @@ export interface DoraMetrics {
   readonly changeFailureRate: AvailableChangeFailureRateMetric | UnavailableMetric;
   /**
    * "O que foi usado pra calcular este número" (auditoria — Seção 6 da
-   * spec). `deploymentFrequency`/`meanTimeToRestore`/`changeFailureRate` por
-   * enquanto: gatilho configurável chegando 1 métrica por vez (ver
-   * `DashboardService`, ordem de construção), Lead Time ainda é fixo e não
-   * tem eco ainda — ecoar "isto foi usado" antes de a query realmente
-   * respeitar a config seria enganoso.
+   * spec). As 4 métricas já ecoam aqui — última a entrar foi
+   * `leadTimeForChanges` (ver `DashboardService`, ordem de construção).
    */
   readonly appliedTriggerConfig: {
     readonly deploymentFrequency: TriggerConfigSource<DeploymentFrequencyTriggerConfig>;
+    readonly leadTimeForChanges: TriggerConfigSource<LeadTimeTriggerConfig>;
     readonly meanTimeToRestore: TriggerConfigSource<MttrTriggerConfig>;
     readonly changeFailureRate: TriggerConfigSource<ChangeFailureRateTriggerConfig>;
   };
@@ -128,20 +127,21 @@ const DORA_HISTORY_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * Primeira camada de leitura agregada (DORA + Flow) — Seção 6 da spec.
  *
- * Gatilhos configuráveis chegando 1 métrica por vez, não todas de uma vez
- * (motor completo "Valor = f(Evento Inicial, Evento Final, Filtro,
- * Agrupamento)" da Seção 6): **Change Failure Rate** já resolve
- * `correlationWindowHours` via `MetricTriggerConfigRepository` (Time >
- * Organização > Fallback do Sistema, mesma precedência de `mapping_rules`).
- * Deployment Frequency/Lead Time/MTTR ainda são fixos — Lead Time é sempre
- * abertura→merge do PR, MTTR é sempre disparo→resolução do incidente. A
+ * As 4 métricas de DORA já resolvem gatilho via `MetricTriggerConfigRepository`
+ * (Time > Organização > Fallback do Sistema, mesma precedência de
+ * `mapping_rules`) — chegaram 1 de cada vez, nessa ordem: Change Failure
+ * Rate, Deployment Frequency, Mean Time to Restore, Lead Time. A
  * classificação semântica em si (o que é "produção", o que conta como
  * falha) continua configurável via `mapping_rules` — isso não muda, só o
  * "quando começa/termina o relógio".
  *
- * Escopo tenant inteiro, não por time: Pull Requests nunca passaram pela
- * Enriched Layer e o conector do GitHub escopa por organização (não por
- * repo/time), então não há como filtrar Lead Time por time ainda.
+ * Lead Time com `endEvent: 'PR_MERGED'` (default) continua tenant-wide por
+ * padrão — Pull Requests nunca passaram pela Enriched Layer e o conector do
+ * GitHub escopa por organização (não por repo/time), então só filtra por
+ * time quando `teamId` é passado (via `team_resource_links`). Com
+ * `endEvent: 'CICD_DEPLOY'`, o vínculo com `team_resource_links` passa a
+ * ser **obrigatório** mesmo sem `teamId` — precisa saber o time do PR pra
+ * correlacionar com o deploy do mesmo time (ver `queryLeadTimeToDeployment`).
  *
  * @see .spec/spec-engineering-intelligence.md — Seção 6.
  */
@@ -160,7 +160,7 @@ export class DashboardService {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const [deploymentFrequency, leadTimeForChanges, meanTimeToRestore, changeFailureRate] = await Promise.all([
         this.queryDeploymentFrequency(client, from, to, teamId, effectiveTriggerConfig.config.deploymentFrequency),
-        this.queryLeadTime(client, from, to, teamId),
+        this.queryLeadTime(client, from, to, teamId, effectiveTriggerConfig.config.leadTime),
         this.queryMeanTimeToRestore(client, from, to, teamId, effectiveTriggerConfig.config.meanTimeToRestore),
         this.queryChangeFailureRate(
           client,
@@ -185,6 +185,7 @@ export class DashboardService {
         changeFailureRate,
         appliedTriggerConfig: {
           deploymentFrequency: { config: effectiveTriggerConfig.config.deploymentFrequency, ...appliedTriggerConfigSource },
+          leadTimeForChanges: { config: effectiveTriggerConfig.config.leadTime, ...appliedTriggerConfigSource },
           meanTimeToRestore: { config: effectiveTriggerConfig.config.meanTimeToRestore, ...appliedTriggerConfigSource },
           changeFailureRate: { config: effectiveTriggerConfig.config.changeFailureRate, ...appliedTriggerConfigSource },
         },
@@ -364,41 +365,30 @@ export class DashboardService {
   }
 
   /**
-   * Sem `teamId`: lê `canonical_pull_requests` direto, como sempre (PRs
-   * nunca passaram pela Enriched Layer). Com `teamId`: junta contra
-   * `team_resource_links` (vínculo manual `repository → team`, ver
-   * `POST /teams/:teamId/resource-links`) — só entra na conta o PR de um
-   * repositório já vinculado àquele time.
+   * Gatilho configurável (Seção 6 da spec, exemplo literal: "Início
+   * configurável (1º commit ou abertura de card) e Fim configurável (Deploy
+   * CI/CD ou Merge de PR)"). `startEvent: 'FIRST_COMMIT'` troca
+   * `opened_at` por `first_commit_at` — nullable no schema (PR sem commit
+   * sincronizado ainda), excluído da amostra quando ausente, mesma decisão
+   * já tomada em `queryMeanTimeToRestore` (não cai silenciosamente pro
+   * `opened_at`, pra não misturar duas metodologias na mesma média).
+   * `endEvent: 'CICD_DEPLOY'` despacha pra `queryLeadTimeToDeployment`
+   * (correlação aproximada, ver lá) em vez do merge direto. `CARD_OPENED`
+   * **não existe** no enum — não há vínculo PR↔work item no schema hoje.
    */
   private async queryLeadTime(
     client: PoolClient,
     from: Date,
     to: Date,
     teamId: string | undefined,
+    config: LeadTimeTriggerConfig,
   ): Promise<AvailableDurationMetric> {
-    const result = teamId
-      ? await client.query<{ avg_hours: string | null; median_hours: string | null; sample_size: string }>(
-          `SELECT
-             avg(EXTRACT(EPOCH FROM (cpr.merged_at - cpr.opened_at)) / 3600) AS avg_hours,
-             percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (cpr.merged_at - cpr.opened_at)) / 3600) AS median_hours,
-             count(*) AS sample_size
-           FROM canonical_pull_requests cpr
-           JOIN team_resource_links trl
-             ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
-           WHERE cpr.state = 'MERGED' AND cpr.merged_at BETWEEN $1 AND $2 AND trl.team_id = $3`,
-          [from, to, teamId],
-        )
-      : await client.query<{ avg_hours: string | null; median_hours: string | null; sample_size: string }>(
-          `SELECT
-             avg(EXTRACT(EPOCH FROM (merged_at - opened_at)) / 3600) AS avg_hours,
-             percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (merged_at - opened_at)) / 3600) AS median_hours,
-             count(*) AS sample_size
-           FROM canonical_pull_requests
-           WHERE state = 'MERGED' AND merged_at BETWEEN $1 AND $2`,
-          [from, to],
-        );
+    const startColumn = config.startEvent === 'FIRST_COMMIT' ? 'first_commit_at' : 'opened_at';
 
-    const row = result.rows[0];
+    const row =
+      config.endEvent === 'CICD_DEPLOY'
+        ? await this.queryLeadTimeToDeployment(client, from, to, teamId, startColumn)
+        : await this.queryLeadTimeToMerge(client, from, to, teamId, startColumn);
 
     return {
       available: true,
@@ -407,6 +397,88 @@ export class DashboardService {
       sampleSize: Number(row.sample_size),
       ...(teamId ? { scope: 'team' as const } : {}),
     };
+  }
+
+  private async queryLeadTimeToMerge(
+    client: PoolClient,
+    from: Date,
+    to: Date,
+    teamId: string | undefined,
+    startColumn: 'opened_at' | 'first_commit_at',
+  ): Promise<{ readonly avg_hours: string | null; readonly median_hours: string | null; readonly sample_size: string }> {
+    const result = teamId
+      ? await client.query<{ avg_hours: string | null; median_hours: string | null; sample_size: string }>(
+          `SELECT
+             avg(EXTRACT(EPOCH FROM (cpr.merged_at - cpr.${startColumn})) / 3600) AS avg_hours,
+             percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (cpr.merged_at - cpr.${startColumn})) / 3600) AS median_hours,
+             count(*) AS sample_size
+           FROM canonical_pull_requests cpr
+           JOIN team_resource_links trl
+             ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+           WHERE cpr.state = 'MERGED' AND cpr.merged_at BETWEEN $1 AND $2
+             AND cpr.${startColumn} IS NOT NULL AND trl.team_id = $3`,
+          [from, to, teamId],
+        )
+      : await client.query<{ avg_hours: string | null; median_hours: string | null; sample_size: string }>(
+          `SELECT
+             avg(EXTRACT(EPOCH FROM (merged_at - ${startColumn})) / 3600) AS avg_hours,
+             percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (merged_at - ${startColumn})) / 3600) AS median_hours,
+             count(*) AS sample_size
+           FROM canonical_pull_requests
+           WHERE state = 'MERGED' AND merged_at BETWEEN $1 AND $2 AND ${startColumn} IS NOT NULL`,
+          [from, to],
+        );
+
+    return result.rows[0];
+  }
+
+  /**
+   * `endEvent: 'CICD_DEPLOY'` — sem vínculo explícito PR→deploy nos dados
+   * (mesma limitação do Change Failure Rate), correlacionado por
+   * proximidade: o primeiro deploy de produção bem-sucedido do **mesmo
+   * time**, iniciado depois do merge (`JOIN LATERAL ... LIMIT 1`, ordenado
+   * por `started_at ASC`). Aproximado, não uma verdade absoluta — um PR
+   * cujo time nunca teve deploy de produção depois do merge simplesmente
+   * não entra na amostra (a lateral join não devolve linha, `count(*)` já
+   * reflete só os pares de verdade correlacionados).
+   *
+   * Diferente de `queryLeadTimeToMerge`: o vínculo com `team_resource_links`
+   * é **sempre obrigatório** aqui, mesmo sem `teamId` — precisa do time do
+   * PR pra saber qual deploy corresponde. Um PR cujo repositório nunca foi
+   * vinculado a nenhum time fica de fora mesmo numa chamada tenant-wide.
+   */
+  private async queryLeadTimeToDeployment(
+    client: PoolClient,
+    from: Date,
+    to: Date,
+    teamId: string | undefined,
+    startColumn: 'opened_at' | 'first_commit_at',
+  ): Promise<{ readonly avg_hours: string | null; readonly median_hours: string | null; readonly sample_size: string }> {
+    const result = await client.query<{ avg_hours: string | null; median_hours: string | null; sample_size: string }>(
+      `SELECT
+         avg(EXTRACT(EPOCH FROM (deploy.started_at - cpr.${startColumn})) / 3600) AS avg_hours,
+         percentile_cont(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (deploy.started_at - cpr.${startColumn})) / 3600) AS median_hours,
+         count(*) AS sample_size
+       FROM canonical_pull_requests cpr
+       JOIN team_resource_links trl
+         ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+       JOIN LATERAL (
+         SELECT cd.started_at
+         FROM canonical_deployments cd
+         JOIN enriched_deployments ed ON ed.id = cd.id
+         WHERE ed.semantic_environment = 'PRODUCTION' AND cd.status = 'SUCCESS'
+           AND ed.team_id = trl.team_id
+           AND cd.started_at >= cpr.merged_at
+         ORDER BY cd.started_at ASC
+         LIMIT 1
+       ) deploy ON true
+       WHERE cpr.state = 'MERGED' AND cpr.merged_at BETWEEN $1 AND $2
+         AND cpr.${startColumn} IS NOT NULL
+         ${teamId ? 'AND trl.team_id = $3' : ''}`,
+      teamId ? [from, to, teamId] : [from, to],
+    );
+
+    return result.rows[0];
   }
 
   /**
