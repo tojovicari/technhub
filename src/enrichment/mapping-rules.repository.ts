@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { getPool, withTenantContext } from '../database/pool';
 import type { EffectiveRules, MappingRules } from './domain-context.types';
 import { SYSTEM_DEFAULT_RULE_VERSION, SYSTEM_DEFAULT_RULES } from './system-default-rules';
+import { TeamMetricConfigHistoryRepository } from '../dashboard/team-metric-config-history.repository';
 
 interface ConfigRow {
   readonly rules: MappingRules;
@@ -16,22 +17,40 @@ interface ConfigRow {
  *
  * Tenant-scoped: toda operação roda dentro de `withTenantContext` (RLS,
  * Seção 4.3 da spec).
+ *
+ * `rules` é nullable desde a migration 0043 (mesma linha passou a poder
+ * existir só por causa de `metric_triggers`, ver `MetricTriggerConfigRepository`)
+ * — toda leitura aqui precisa checar `rules IS NOT NULL` antes de tratar uma
+ * linha como "regra configurada neste nível", senão uma linha criada só pra
+ * gatilho de DORA seria lida como `rules: null` e quebraria
+ * `evaluateWorkItemType`/`evaluateWorkflowState` rio abaixo.
  */
 export class MappingRulesRepository {
-  constructor(private readonly pool: Pool = getPool()) {}
+  constructor(
+    private readonly pool: Pool = getPool(),
+    private readonly historyRepository: TeamMetricConfigHistoryRepository = new TeamMetricConfigHistoryRepository(),
+  ) {}
 
   /** Cria ou substitui a configuração de um time específico. */
-  async upsertTeamRules(tenantId: string, teamId: string, rules: MappingRules): Promise<void> {
-    await withTenantContext(this.pool, tenantId, (client) =>
-      client.query(
+  async upsertTeamRules(tenantId: string, teamId: string, rules: MappingRules, changedByUserId: string): Promise<void> {
+    await withTenantContext(this.pool, tenantId, async (client) => {
+      await client.query(
         `INSERT INTO team_metric_configurations (tenant_id, team_id, rules)
          VALUES ($1, $2, $3)
          ON CONFLICT ON CONSTRAINT unique_tenant_team_config DO UPDATE SET
            rules = EXCLUDED.rules,
            updated_at = NOW()`,
         [tenantId, teamId, JSON.stringify(rules)],
-      ),
-    );
+      );
+
+      await this.historyRepository.record(client, {
+        tenantId,
+        teamId,
+        configType: 'mapping_rules',
+        snapshot: rules,
+        changedByUserId,
+      });
+    });
   }
 
   /**
@@ -43,17 +62,25 @@ export class MappingRulesRepository {
    * é a forma que o Postgres exige pra inferir conflito contra um índice
    * parcial (`ON CONFLICT ON CONSTRAINT` só aceita constraints de verdade).
    */
-  async upsertOrgRules(tenantId: string, rules: MappingRules): Promise<void> {
-    await withTenantContext(this.pool, tenantId, (client) =>
-      client.query(
+  async upsertOrgRules(tenantId: string, rules: MappingRules, changedByUserId: string): Promise<void> {
+    await withTenantContext(this.pool, tenantId, async (client) => {
+      await client.query(
         `INSERT INTO team_metric_configurations (tenant_id, team_id, rules)
          VALUES ($1, NULL, $2)
          ON CONFLICT (tenant_id) WHERE team_id IS NULL DO UPDATE SET
            rules = EXCLUDED.rules,
            updated_at = NOW()`,
         [tenantId, JSON.stringify(rules)],
-      ),
-    );
+      );
+
+      await this.historyRepository.record(client, {
+        tenantId,
+        teamId: null,
+        configType: 'mapping_rules',
+        snapshot: rules,
+        changedByUserId,
+      });
+    });
   }
 
   /**
@@ -67,7 +94,8 @@ export class MappingRulesRepository {
     return withTenantContext(this.pool, tenantId, async (client) => {
       if (teamId !== null) {
         const teamResult = await client.query<ConfigRow>(
-          `SELECT rules, updated_at FROM team_metric_configurations WHERE tenant_id = $1 AND team_id = $2`,
+          `SELECT rules, updated_at FROM team_metric_configurations
+           WHERE tenant_id = $1 AND team_id = $2 AND rules IS NOT NULL`,
           [tenantId, teamId],
         );
         if (teamResult.rows.length > 0) {
@@ -76,7 +104,8 @@ export class MappingRulesRepository {
       }
 
       const orgResult = await client.query<ConfigRow>(
-        `SELECT rules, updated_at FROM team_metric_configurations WHERE tenant_id = $1 AND team_id IS NULL`,
+        `SELECT rules, updated_at FROM team_metric_configurations
+         WHERE tenant_id = $1 AND team_id IS NULL AND rules IS NOT NULL`,
         [tenantId],
       );
       if (orgResult.rows.length > 0) {
@@ -95,7 +124,8 @@ export class MappingRulesRepository {
   async getOrgRules(tenantId: string): Promise<EffectiveRules | null> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<ConfigRow>(
-        `SELECT rules, updated_at FROM team_metric_configurations WHERE tenant_id = $1 AND team_id IS NULL`,
+        `SELECT rules, updated_at FROM team_metric_configurations
+         WHERE tenant_id = $1 AND team_id IS NULL AND rules IS NOT NULL`,
         [tenantId],
       );
 
@@ -112,7 +142,8 @@ export class MappingRulesRepository {
   async getTeamRules(tenantId: string, teamId: string): Promise<EffectiveRules | null> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<ConfigRow>(
-        `SELECT rules, updated_at FROM team_metric_configurations WHERE tenant_id = $1 AND team_id = $2`,
+        `SELECT rules, updated_at FROM team_metric_configurations
+         WHERE tenant_id = $1 AND team_id = $2 AND rules IS NOT NULL`,
         [tenantId, teamId],
       );
 

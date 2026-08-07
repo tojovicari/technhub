@@ -116,7 +116,8 @@ export function registerMappingRulesRoutes(
       }
 
       try {
-        await mappingRulesRepository.upsertOrgRules(tenantId, rules);
+        // `request.user` é garantido pelo `requireAuth` no preHandler.
+        await mappingRulesRepository.upsertOrgRules(tenantId, rules, request.user!.userId);
         return reply.status(200).send({ tenantId, teamId: null, rules });
       } catch (error) {
         if (getPgErrorCode(error) === '23503') {
@@ -158,7 +159,8 @@ export function registerMappingRulesRoutes(
       }
 
       try {
-        await mappingRulesRepository.upsertTeamRules(tenantId, teamId, rules);
+        // `request.user` é garantido pelo `requireAuth` no preHandler.
+        await mappingRulesRepository.upsertTeamRules(tenantId, teamId, rules, request.user!.userId);
         return reply.status(200).send({ tenantId, teamId, rules });
       } catch (error) {
         if (getPgErrorCode(error) === '23503') {

@@ -1,5 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { getPool, withTenantContext } from '../database/pool';
+import { MetricTriggerConfigRepository } from './metric-trigger-config.repository';
+import type { ChangeFailureRateTriggerConfig, TriggerConfigSource } from './metric-trigger-config.types';
 
 /** Presente só quando `teamId` é passado na query — distingue métrica calculada por time de métrica ainda tenant-wide. */
 export type MetricScope = 'team' | 'tenant';
@@ -38,6 +40,17 @@ export interface DoraMetrics {
   readonly leadTimeForChanges: AvailableDurationMetric | UnavailableMetric;
   readonly meanTimeToRestore: AvailableDurationMetric | UnavailableMetric;
   readonly changeFailureRate: AvailableChangeFailureRateMetric | UnavailableMetric;
+  /**
+   * "O que foi usado pra calcular este número" (auditoria — Seção 6 da
+   * spec). Só `changeFailureRate` por enquanto: gatilho configurável
+   * chegando 1 métrica por vez (ver `DashboardService`, ordem de
+   * construção), as outras 3 ainda são fixas e não têm eco ainda — ecoar
+   * "isto foi usado" antes de a query realmente respeitar a config seria
+   * enganoso.
+   */
+  readonly appliedTriggerConfig: {
+    readonly changeFailureRate: TriggerConfigSource<ChangeFailureRateTriggerConfig>;
+  };
 }
 
 export interface FlowDistributionEntry {
@@ -97,17 +110,6 @@ const CHANGE_FAILURE_RATE_UNAVAILABLE: UnavailableMetric = {
   reason: 'Nenhum deploy de produção bem-sucedido neste período.',
 };
 
-/**
- * Janela de correlação deploy→incidente pro Change Failure Rate: um
- * incidente conta como "causado por" um deploy se disparar dentro dessa
- * janela depois do deploy terminar, no mesmo time. Sem link explícito nos
- * dados (nem GitHub Actions nem Waroom expõem isso) — é sempre inferido por
- * proximidade de tempo. 1h é o valor confirmado com o usuário: rigoroso o
- * bastante pra não correlacionar coisas não relacionadas, mesmo sabendo que
- * subestima falhas que demoram mais que isso pra se manifestar.
- */
-const CHANGE_FAILURE_RATE_WINDOW = "INTERVAL '1 hour'";
-
 const CYCLE_TIME_UNAVAILABLE: UnavailableMetric = {
   available: false,
   reason: 'Nenhum work item concluído (completed_at) neste período ainda.',
@@ -118,12 +120,16 @@ const DORA_HISTORY_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 /**
  * Primeira camada de leitura agregada (DORA + Flow) — Seção 6 da spec.
  *
- * Gatilhos fixos nesta rodada (não ainda o motor de eventos configuráveis
- * "Valor = f(Evento Inicial, Evento Final, Filtro, Agrupamento)" descrito
- * na Seção 6): Lead Time é sempre abertura→merge do PR, MTTR é sempre
- * disparo→resolução do incidente. A classificação semântica em si (o que é
- * "produção", o que conta como falha) continua configurável via
- * `mapping_rules` — isso não muda, só o "quando começa/termina o relógio".
+ * Gatilhos configuráveis chegando 1 métrica por vez, não todas de uma vez
+ * (motor completo "Valor = f(Evento Inicial, Evento Final, Filtro,
+ * Agrupamento)" da Seção 6): **Change Failure Rate** já resolve
+ * `correlationWindowHours` via `MetricTriggerConfigRepository` (Time >
+ * Organização > Fallback do Sistema, mesma precedência de `mapping_rules`).
+ * Deployment Frequency/Lead Time/MTTR ainda são fixos — Lead Time é sempre
+ * abertura→merge do PR, MTTR é sempre disparo→resolução do incidente. A
+ * classificação semântica em si (o que é "produção", o que conta como
+ * falha) continua configurável via `mapping_rules` — isso não muda, só o
+ * "quando começa/termina o relógio".
  *
  * Escopo tenant inteiro, não por time: Pull Requests nunca passaram pela
  * Enriched Layer e o conector do GitHub escopa por organização (não por
@@ -132,15 +138,29 @@ const DORA_HISTORY_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
  * @see .spec/spec-engineering-intelligence.md — Seção 6.
  */
 export class DashboardService {
-  constructor(private readonly pool: Pool = getPool()) {}
+  constructor(
+    private readonly pool: Pool = getPool(),
+    private readonly metricTriggerConfigRepository: MetricTriggerConfigRepository = new MetricTriggerConfigRepository(),
+  ) {}
 
   async getDoraMetrics(tenantId: string, from: Date, to: Date, teamId?: string): Promise<DoraMetrics> {
+    const effectiveTriggerConfig = await this.metricTriggerConfigRepository.getEffectiveTriggerConfig(
+      tenantId,
+      teamId ?? null,
+    );
+
     return withTenantContext(this.pool, tenantId, async (client) => {
       const [deploymentFrequency, leadTimeForChanges, meanTimeToRestore, changeFailureRate] = await Promise.all([
         this.queryDeploymentFrequency(client, from, to, teamId),
         this.queryLeadTime(client, from, to, teamId),
         this.queryMeanTimeToRestore(client, from, to, teamId),
-        this.queryChangeFailureRate(client, from, to, teamId),
+        this.queryChangeFailureRate(
+          client,
+          from,
+          to,
+          teamId,
+          effectiveTriggerConfig.config.changeFailureRate.correlationWindowHours,
+        ),
       ]);
 
       return {
@@ -149,6 +169,14 @@ export class DashboardService {
         leadTimeForChanges,
         meanTimeToRestore,
         changeFailureRate,
+        appliedTriggerConfig: {
+          changeFailureRate: {
+            config: effectiveTriggerConfig.config.changeFailureRate,
+            source: effectiveTriggerConfig.source,
+            teamId: teamId ?? null,
+            updatedAt: effectiveTriggerConfig.updatedAt.toISOString(),
+          },
+        },
       };
     });
   }
@@ -163,6 +191,16 @@ export class DashboardService {
    * motivo de preocupação de performance.
    */
   async getDoraHistory(tenantId: string, teamId: string | undefined, weeks: number): Promise<DoraHistory> {
+    // Resolvido uma vez pro `tenantId`/`teamId` inteiro (não por ponto semanal
+    // — é o mesmo time ao longo de toda a série). Sem eco de
+    // `appliedTriggerConfig` aqui, diferente de `getDoraMetrics`: repetir por
+    // ponto seria ruído numa série já densa, e "o que foi usado" já fica
+    // respondido no retrato principal (`/dashboard/dora`).
+    const effectiveTriggerConfig = await this.metricTriggerConfigRepository.getEffectiveTriggerConfig(
+      tenantId,
+      teamId ?? null,
+    );
+
     return withTenantContext(this.pool, tenantId, async (client) => {
       const now = new Date();
       const pointDates: Date[] = [];
@@ -176,7 +214,13 @@ export class DashboardService {
 
           const [deploymentFrequency, changeFailureRate] = await Promise.all([
             this.queryDeploymentFrequency(client, windowStart, date, teamId),
-            this.queryChangeFailureRate(client, windowStart, date, teamId),
+            this.queryChangeFailureRate(
+              client,
+              windowStart,
+              date,
+              teamId,
+              effectiveTriggerConfig.config.changeFailureRate.correlationWindowHours,
+            ),
           ]);
 
           return { date: date.toISOString().slice(0, 10), deploymentFrequency, changeFailureRate };
@@ -337,17 +381,27 @@ export class DashboardService {
    * "causou falha" se existe um incidente `COUNTS_AS_FAILURE` (campo já
    * calculado por `evaluateIncidentSeverity`, antes não consumido por
    * nenhuma métrica) do mesmo time, disparado dentro de
-   * `CHANGE_FAILURE_RATE_WINDOW` depois do deploy terminar. Mesmo padrão de
-   * `queryDeploymentFrequency`: `team_id` direto em `enriched_deployments`/
-   * `enriched_incidents`, sem `team_resource_links` (ambos já passam pela
-   * Enriched Layer, diferente de PRs).
+   * `correlationWindowHours` depois do deploy terminar — configurável por
+   * time via `MetricTriggerConfigRepository` (Seção 6 da spec; default `1`,
+   * ver `SYSTEM_DEFAULT_TRIGGER_CONFIG`, reproduz o valor que era hardcoded
+   * antes desta config existir). Mesmo padrão de `queryDeploymentFrequency`:
+   * `team_id` direto em `enriched_deployments`/`enriched_incidents`, sem
+   * `team_resource_links` (ambos já passam pela Enriched Layer, diferente
+   * de PRs).
    */
   private async queryChangeFailureRate(
     client: PoolClient,
     from: Date,
     to: Date,
     teamId: string | undefined,
+    correlationWindowHours: number,
   ): Promise<AvailableChangeFailureRateMetric | UnavailableMetric> {
+    // Em segundos, não horas: `make_interval(secs => ...)` aceita fração
+    // (double precision), diferente do parâmetro `hours` (inteiro) —
+    // permite configurar uma janela menor que 1h (ex: 30min) sem truncar.
+    const correlationWindowSeconds = correlationWindowHours * 3600;
+    const windowParamIndex = teamId ? 4 : 3;
+
     const result = await client.query<{ total_deployments: string; failed_deployments: string }>(
       `SELECT
          count(*) AS total_deployments,
@@ -356,7 +410,7 @@ export class DashboardService {
            JOIN enriched_incidents ei ON ei.id = ci.id
            WHERE ei.failure_classification = 'COUNTS_AS_FAILURE'
              AND ei.team_id = ed.team_id
-             AND ci.triggered_at BETWEEN cd.finished_at AND cd.finished_at + ${CHANGE_FAILURE_RATE_WINDOW}
+             AND ci.triggered_at BETWEEN cd.finished_at AND cd.finished_at + make_interval(secs => $${windowParamIndex})
          )) AS failed_deployments
        FROM canonical_deployments cd
        JOIN enriched_deployments ed ON ed.id = cd.id
@@ -365,7 +419,7 @@ export class DashboardService {
          AND cd.finished_at IS NOT NULL
          AND cd.started_at BETWEEN $1 AND $2
          ${teamId ? 'AND ed.team_id = $3' : ''}`,
-      teamId ? [from, to, teamId] : [from, to],
+      teamId ? [from, to, teamId, correlationWindowSeconds] : [from, to, correlationWindowSeconds],
     );
 
     const totalDeployments = Number(result.rows[0].total_deployments);
