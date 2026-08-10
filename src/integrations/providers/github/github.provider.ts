@@ -73,6 +73,14 @@ interface GitHubPullRequestFile {
   readonly filename: string;
 }
 
+/** Item da resposta de "List commits on a pull request" — só a data do primeiro commit interessa (`first_commit_at`, Lead Time configurável, Seção 6 da spec). */
+interface GitHubPullRequestCommit {
+  readonly commit: {
+    readonly author: { readonly date: string } | null;
+    readonly committer: { readonly date: string } | null;
+  };
+}
+
 /**
  * Conector de Version Control para o GitHub (REST API v3 / Search API).
  *
@@ -308,11 +316,12 @@ export class GitHubProvider extends BaseProvider {
       }
 
       try {
-        const [detail, changedFiles] = await Promise.all([
+        const [detail, changedFiles, commits] = await Promise.all([
           this.fetchPullRequestDetail(item, headers),
           this.fetchPullRequestFiles(item, headers),
+          this.fetchPullRequestCommits(item, headers),
         ]);
-        pullRequests.push(this.mapToCanonicalPullRequest(detail, changedFiles, tenantId));
+        pullRequests.push(this.mapToCanonicalPullRequest(detail, changedFiles, commits, tenantId));
 
         if (detail.user) {
           const identity = this.mapToDiscoveredIdentity(detail.user, tenantId);
@@ -435,9 +444,51 @@ export class GitHubProvider extends BaseProvider {
     return files.map((file) => file.filename);
   }
 
+  /**
+   * Commits do PR — alimenta `firstCommitAt` (`CanonicalPullRequest`), até
+   * aqui sempre `null` (ver histórico deste arquivo). Só a primeira página
+   * (`per_page=100`, mesma limitação de `fetchPullRequestFiles`) — sem
+   * problema pro primeiro commit especificamente, já que a API devolve em
+   * ordem cronológica (mais antigo primeiro), então `commits[0]` é sempre o
+   * primeiro mesmo que o PR tenha mais de 100 commits ao todo.
+   */
+  private async fetchPullRequestCommits(
+    item: GitHubSearchIssueItem,
+    headers: Record<string, string>,
+  ): Promise<readonly GitHubPullRequestCommit[]> {
+    const commitsUrl = `${item.repository_url}/pulls/${item.number}/commits?per_page=100`;
+    const response = await fetch(commitsUrl, { headers });
+
+    if (!response.ok) {
+      throw new Error(`GET ${commitsUrl} retornou ${response.status} ${response.statusText}.`);
+    }
+
+    return (await response.json()) as readonly GitHubPullRequestCommit[];
+  }
+
+  /**
+   * Data do primeiro commit — `author.date` (quando o código foi escrito)
+   * em vez de `committer.date` (quando foi commitado/rebasado, pode
+   * divergir do autor) — mais fiel à semântica de "início do trabalho" que
+   * `startEvent: 'FIRST_COMMIT'` do Lead Time pretende capturar. Fallback
+   * pro `committer.date` só na (rara) ausência do `author.date`; `null` se
+   * o PR não tem nenhum commit (não deveria acontecer na prática, mas evita
+   * estourar em vez de assumir).
+   */
+  private resolveFirstCommitAt(commits: readonly GitHubPullRequestCommit[]): Date | null {
+    const firstCommit = commits[0];
+    if (!firstCommit) {
+      return null;
+    }
+
+    const rawDate = firstCommit.commit.author?.date ?? firstCommit.commit.committer?.date;
+    return rawDate ? new Date(rawDate) : null;
+  }
+
   private mapToCanonicalPullRequest(
     detail: GitHubPullRequestDetail,
     changedFiles: readonly string[],
+    commits: readonly GitHubPullRequestCommit[],
     tenantId: string,
   ): CanonicalPullRequest {
     const state: CanonicalPullRequestState = detail.merged_at
@@ -461,8 +512,7 @@ export class GitHubProvider extends BaseProvider {
       linesDeleted: detail.deletions,
       commentsCount: detail.comments + detail.review_comments,
       changedFiles,
-      // Requer uma chamada adicional a /pulls/{n}/commits; não coletado nesta versão.
-      firstCommitAt: null,
+      firstCommitAt: this.resolveFirstCommitAt(commits),
       openedAt: new Date(detail.created_at),
       mergedAt: detail.merged_at ? new Date(detail.merged_at) : null,
       closedAt: detail.closed_at ? new Date(detail.closed_at) : null,
