@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { TenantRepository } from '../../identity/tenant.repository';
 import { BillingService } from '../../billing/billing.service';
+import { isValidUuid } from '../uuid';
 
 interface CreateTenantBody {
   readonly name?: string;
@@ -42,6 +43,15 @@ export function registerTenantRoutes(
    */
   server.get<{ Params: TenantIdParams }>('/tenants/:tenantId/public-info', async (request, reply) => {
     const { tenantId } = request.params;
+
+    // Sem isso, um `tenantId` malformado (ex: link de convite quebrado)
+    // derrubava a query com erro de sintaxe do driver `pg`, subindo como
+    // `500` cru em vez do `404` que a doc já promete — achado numa
+    // auditoria de documentação, ver `isValidUuid`.
+    if (!isValidUuid(tenantId)) {
+      return reply.status(404).send({ error: 'Tenant não encontrado.' });
+    }
+
     const tenants = await tenantRepository.findManyByIds([tenantId]);
     const tenant = tenants[0];
 

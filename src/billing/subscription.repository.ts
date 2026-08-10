@@ -80,44 +80,58 @@ export class SubscriptionRepository {
   }
 
   /**
-   * Atualização parcial (PATCH): só sobrescreve os campos presentes em
-   * `input`, via `COALESCE` contra o valor já gravado. Usado pelos
-   * handlers de webhook do Stripe e pelo cancelamento.
+   * Colunas atualizáveis via `update` — chave é a coluna SQL, valor é o
+   * campo correspondente em `UpdateSubscriptionInput`.
+   */
+  private static readonly UPDATABLE_COLUMNS: Record<string, keyof UpdateSubscriptionInput> = {
+    plan_id: 'planId',
+    status: 'status',
+    trial_ends_at: 'trialEndsAt',
+    current_period_start: 'currentPeriodStart',
+    current_period_end: 'currentPeriodEnd',
+    past_due_since: 'pastDueSince',
+    cancelled_at: 'cancelledAt',
+    provider: 'provider',
+    provider_customer_id: 'providerCustomerId',
+    provider_subscription_id: 'providerSubscriptionId',
+  };
+
+  /**
+   * Atualização parcial (PATCH): só sobrescreve os campos **presentes** em
+   * `input` (`key in input`, não `input[key] ?? null`) — distingue "campo
+   * ausente" (não mexe) de "campo explicitamente `null`" (limpa a coluna).
+   * `pastDueSince`/`cancelledAt` são `Date | null` de propósito
+   * (`billing.types.ts`) justamente pra suportar "voltar a ficar `null`"
+   * quando uma assinatura se recupera de `past_due` ou tem o cancelamento
+   * desfeito — um `COALESCE($N, coluna)` contra `input.campo ?? null` não
+   * consegue expressar isso (`COALESCE(NULL, coluna)` sempre devolve o
+   * valor antigo, nunca limpa). Bug real encontrado numa auditoria de
+   * documentação: `onInvoicePaid`/`resumeSubscription` já tentavam limpar
+   * esses campos passando `null` explícito, mas a coluna nunca de fato
+   * zerava — `status` corrigia certo, os timestamps ficavam obsoletos.
    */
   async update(tenantId: string, input: UpdateSubscriptionInput): Promise<Subscription | null> {
     return withTenantContext(this.pool, tenantId, async (client) => {
+      const params: unknown[] = [tenantId];
+      const setClauses: string[] = [];
+
+      for (const [column, field] of Object.entries(SubscriptionRepository.UPDATABLE_COLUMNS)) {
+        if (field in input) {
+          params.push(input[field]);
+          setClauses.push(`${column} = $${params.length}`);
+        }
+      }
+      setClauses.push('updated_at = NOW()');
+
       const result = await client.query<SubscriptionRow>(
         `UPDATE subscriptions
-         SET plan_id = COALESCE($2, plan_id),
-             status = COALESCE($3, status),
-             trial_ends_at = COALESCE($4, trial_ends_at),
-             current_period_start = COALESCE($5, current_period_start),
-             current_period_end = COALESCE($6, current_period_end),
-             past_due_since = COALESCE($7, past_due_since),
-             cancelled_at = COALESCE($8, cancelled_at),
-             provider = COALESCE($9, provider),
-             provider_customer_id = COALESCE($10, provider_customer_id),
-             provider_subscription_id = COALESCE($11, provider_subscription_id),
-             updated_at = NOW()
+         SET ${setClauses.join(', ')}
          WHERE tenant_id = $1
          RETURNING ${SUBSCRIPTION_COLUMNS}`,
-        [
-          tenantId,
-          input.planId ?? null,
-          input.status ?? null,
-          input.trialEndsAt ?? null,
-          input.currentPeriodStart ?? null,
-          input.currentPeriodEnd ?? null,
-          input.pastDueSince ?? null,
-          input.cancelledAt ?? null,
-          input.provider ?? null,
-          input.providerCustomerId ?? null,
-          input.providerSubscriptionId ?? null,
-        ],
+        params,
       );
 
       return result.rows.length === 0 ? null : mapRowToSubscription(result.rows[0]);
     });
   }
-
 }
