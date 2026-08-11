@@ -25,6 +25,13 @@ export interface SendEnterpriseCheckoutLinkEmailInput {
   readonly planDisplayName: string;
   readonly checkoutUrl: string;
   readonly expiresAt: Date;
+  readonly priceCents: number;
+  readonly currency: string;
+  readonly billingPeriod: string;
+  readonly trialDays: number;
+  readonly maxUsers: number | null;
+  readonly maxTeams: number | null;
+  readonly maxIntegrations: number | null;
 }
 
 /**
@@ -75,6 +82,13 @@ export class NotificationService {
       planDisplayName: input.planDisplayName,
       checkoutUrl: input.checkoutUrl,
       expiresAt: input.expiresAt,
+      priceCents: input.priceCents,
+      currency: input.currency,
+      billingPeriod: input.billingPeriod,
+      trialDays: input.trialDays,
+      maxUsers: input.maxUsers,
+      maxTeams: input.maxTeams,
+      maxIntegrations: input.maxIntegrations,
     });
 
     return this.sendEmail({

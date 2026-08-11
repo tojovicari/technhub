@@ -122,16 +122,22 @@ function sendEnterpriseCheckoutLinkEmailBestEffort(
 ): void {
   Promise.all([
     tenantRepository.findManyByIds([link.tenantId]).then((tenants) => tenants[0]?.name ?? 'seu workspace'),
-    planRepository.findById(link.planId).then((plan) => plan?.displayName ?? 'novo plano'),
+    planRepository.findById(link.planId),
   ])
-    .catch(() => ['seu workspace', 'novo plano'] as const)
-    .then(([tenantName, planDisplayName]) =>
+    .then(([tenantName, plan]) =>
       notificationService.sendEnterpriseCheckoutLinkEmail({
         to: link.contactEmail,
         tenantName,
-        planDisplayName,
+        planDisplayName: plan?.displayName ?? 'novo plano',
         checkoutUrl: link.checkoutUrl,
         expiresAt: link.expiresAt,
+        priceCents: plan?.priceCents ?? 0,
+        currency: plan?.currency ?? 'usd',
+        billingPeriod: plan?.billingPeriod ?? 'monthly',
+        trialDays: plan?.trialDays ?? 0,
+        maxUsers: plan?.maxUsers ?? null,
+        maxTeams: plan?.maxTeams ?? null,
+        maxIntegrations: plan?.maxIntegrations ?? null,
       }),
     )
     .then((result) => {
