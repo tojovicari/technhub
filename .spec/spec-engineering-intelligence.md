@@ -269,7 +269,7 @@ Isolamento multi-tenant (Seção 1, Princípio 5) é garantido em duas camadas i
 
 Sistema de alertas operacionais dentro do produto (não confundir com `src/notifications/`, que é e-mail transacional outbound). Tabela tenant-scoped `alerts`, RLS no mesmo padrão da Seção 4.3, colunas principais:
 
-- `type` (`CHECK`, 10 valores fechados): `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `onboarding_incomplete`, `team_without_contributors`, `users_limit_reached`, `teams_limit_reached`, `integrations_limit_reached`.
+- `type` (`CHECK`, 12 valores fechados): `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`, `onboarding_incomplete`, `team_without_contributors`, `users_limit_reached`, `teams_limit_reached`, `integrations_limit_reached`.
 - `severity` (`CHECK`): `info` | `warning` | `critical`.
 - `integration_id` — só preenchido em alertas de sync/reconexão; `ON DELETE CASCADE` de `provider_integrations`.
 - `team_id` (`0048_add_onboarding_alerts.sql`) — só preenchido em `team_without_contributors`; `ON DELETE CASCADE` de `teams`. Junto com `integration_id`, forma a chave de dedup/resolução de "alerta aberto" (`(tenant_id, type, integration_id, team_id)`, índice parcial `WHERE resolved_at IS NULL`) — os dois `NULL` identifica o único alerta de nível de tenant (`onboarding_incomplete`).
@@ -285,6 +285,12 @@ Gatilhos (todos disparam via chamada direta de função, sem fila/pub-sub — me
 5. **`onboarding_incomplete`** — mesmo scan de `sync_stale`: tenant sem nenhum time (`teams`) e sem ninguém materializado além do ADMIN bootstrap (`users` count ≤ 1). Nível de tenant, `integration_id`/`team_id` sempre `NULL`.
 6. **`team_without_contributors`** — mesmo scan, por time: nenhuma linha em `team_memberships` para aquele `team_id`.
 7. **`users_limit_reached`** / **`teams_limit_reached`** / **`integrations_limit_reached`** (`0049_add_resource_limits_to_plans.sql`, `0050_add_limit_alert_types.sql`) — a contagem atual do tenant (`countByTenant`) atinge `plans.max_users`/`max_teams`/`max_integrations` (`NULL` = ilimitado, resolvido via `BillingService.getResourceLimit`). Diferente dos demais, esses três **também bloqueiam com `403`** na hora, em `POST /tenants/:tenantId/users`, `.../teams` e `.../integrations` — o alerta é criado no mesmo momento do bloqueio; o scan periódico só cobre a *resolução* (e a criação proativa de um tenant já acima do limite sem tentativa recente, ex: downgrade).
+8. **`billing_subscription_confirmed`** (`0052_add_billing_lifecycle_alert_types.sql`) — todo `checkout.session.completed` (upgrade self-service ou link enterprise, mesmo evento Stripe pros dois — ver Seção sobre `enterprise_checkout_links` abaixo), só na confirmação inicial, não em renovação mensal rotineira.
+9. **`billing_subscription_cancelled`** — `BillingService.cancelSubscription` (cancelamento pelo próprio ADMIN via app) ou `customer.subscription.updated` com `cancel_at_period_end` virando `true` sem o app ter iniciado (cancelamento "de surpresa" via Portal do Stripe) — o guard `!current.cancelledAt` já existente nesse handler evita duplicar quando o app já processou o cancelamento primeiro.
+
+### 4.4.1. Links de checkout enterprise (`enterprise_checkout_links`)
+
+Rastreamento de conversão dos links de checkout gerados pelo gestor do SaaS (`POST {prefix}/tenants/:tenantId/enterprise-checkout-links`) pra planos enterprise/privados — mesmo mecanismo de Stripe Checkout Session do upgrade self-service (`BillingService.createCheckoutSession`), sem fluxo nenhum fora do Stripe. Tabela tenant-scoped, RLS no mesmo padrão da Seção 4.3. `status` (`CHECK`): `pending` | `paid` | `expired`, atualizado pelos webhooks `checkout.session.completed`/`checkout.session.expired` via `stripe_checkout_session_id` (chave única). TTL da sessão é o default do Stripe (24h, não configurável via API além disso).
 
 Referência completa da API (endpoints, exemplos, limitações): `docs/alerts-api.md`.
 

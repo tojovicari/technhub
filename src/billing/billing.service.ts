@@ -1,14 +1,16 @@
 import type Stripe from 'stripe';
 import { getStripeClient } from './stripe-client';
+import { getFrontendUrl } from '../config/frontend-url';
 import { PlanRepository } from './plan.repository';
 import type { CreatePlanInput, UpdatePlanInput } from './plan.repository';
 import { SubscriptionRepository } from './subscription.repository';
 import { SubscriptionHistoryRepository } from './subscription-history.repository';
 import { BillingEventRepository } from './billing-event.repository';
 import { StripeSubscriptionIndexRepository } from './stripe-subscription-index.repository';
+import { EnterpriseCheckoutLinkRepository } from './enterprise-checkout-link.repository';
 import { AlertRepository } from '../alerts/alert.repository';
 import { BillingError } from './billing-errors';
-import type { Plan, Subscription } from './billing.types';
+import type { EnterpriseCheckoutLink, Plan, Subscription } from './billing.types';
 
 /** `stripePriceId` não entra aqui — sempre calculado internamente (`createPlan`/`updatePlan`), nunca aceito de fora. */
 export type CreatePlanServiceInput = Omit<CreatePlanInput, 'stripePriceId'>;
@@ -58,6 +60,7 @@ export class BillingService {
     private readonly billingEventRepository: BillingEventRepository = new BillingEventRepository(),
     private readonly stripeIndexRepository: StripeSubscriptionIndexRepository = new StripeSubscriptionIndexRepository(),
     private readonly alertRepository: AlertRepository = new AlertRepository(),
+    private readonly enterpriseCheckoutLinkRepository: EnterpriseCheckoutLinkRepository = new EnterpriseCheckoutLinkRepository(),
   ) {}
 
   async listPlans(): Promise<readonly Plan[]> {
@@ -221,6 +224,58 @@ export class BillingService {
     return { url: session.url, sessionId: session.id };
   }
 
+  /**
+   * Gera um link de checkout pra um plano enterprise/privado, disparado
+   * pelo gestor do SaaS (não pelo próprio tenant) — mesmo mecanismo de
+   * `createCheckoutSession` (Stripe Checkout Session normal, sem fluxo
+   * nenhum fora do Stripe), só que com `customer_email` pré-preenchido com
+   * o contato informado e persistindo o rastreamento em
+   * `enterprise_checkout_links` pra medir conversão depois. TTL da sessão
+   * é o default do Stripe (24h a partir da criação) — não configurável além
+   * disso na API.
+   */
+  async createEnterpriseCheckoutLink(
+    tenantId: string,
+    planId: string,
+    contactEmail: string,
+    operatorEmail: string,
+  ): Promise<EnterpriseCheckoutLink> {
+    const plan = await this.planRepository.findById(planId);
+    if (!plan) {
+      throw new BillingError('Plano não encontrado.', 'NOT_FOUND');
+    }
+    if (!plan.stripePriceId) {
+      throw new BillingError('Este plano não tem um preço configurado no Stripe ainda.', 'VALIDATION_ERROR');
+    }
+
+    const stripe = getStripeClient();
+    const frontendUrl = getFrontendUrl();
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'subscription',
+      client_reference_id: tenantId,
+      metadata: { tenantId, planId, source: 'enterprise_link' },
+      customer_email: contactEmail,
+      line_items: [{ price: plan.stripePriceId, quantity: 1 }],
+      subscription_data: plan.trialDays > 0 ? { trial_period_days: plan.trialDays } : undefined,
+      success_url: `${frontendUrl}/billing/success?tenantId=${tenantId}`,
+      cancel_url: `${frontendUrl}/billing/canceled?tenantId=${tenantId}`,
+    });
+
+    if (!session.url || !session.expires_at) {
+      throw new Error('[billing] Stripe não devolveu uma URL de checkout.');
+    }
+
+    return this.enterpriseCheckoutLinkRepository.create(tenantId, {
+      planId,
+      contactEmail,
+      stripeCheckoutSessionId: session.id,
+      checkoutUrl: session.url,
+      createdByOperatorEmail: operatorEmail,
+      expiresAt: new Date(session.expires_at * 1000),
+    });
+  }
+
   async createPortalSession(tenantId: string, returnUrl: string): Promise<PortalSessionResult> {
     const subscription = await this.subscriptionRepository.findByTenantId(tenantId);
     if (!subscription?.providerCustomerId) {
@@ -272,6 +327,13 @@ export class BillingService {
       reason: 'cancellation_requested',
     });
     await this.billingEventRepository.create(tenantId, { eventType: 'subscription.cancelled' });
+    await this.alertRepository.create(tenantId, {
+      type: 'billing_subscription_cancelled',
+      severity: 'warning',
+      title: 'Assinatura cancelada',
+      message: `Sua assinatura foi cancelada. O acesso continua disponível até ${updated.currentPeriodEnd.toISOString()}.`,
+      metadata: { planId: updated.planId, accessUntil: updated.currentPeriodEnd },
+    });
 
     return { subscription: updated, accessUntil: updated.currentPeriodEnd };
   }
@@ -289,6 +351,9 @@ export class BillingService {
     switch (event.type) {
       case 'checkout.session.completed':
         await this.onCheckoutCompleted(event, event.data.object);
+        break;
+      case 'checkout.session.expired':
+        await this.onCheckoutExpired(event, event.data.object);
         break;
       case 'invoice.paid':
         await this.onInvoicePaid(event, event.data.object);
@@ -346,11 +411,50 @@ export class BillingService {
       status: updated.status,
       reason: 'checkout_completed',
     });
+
+    // No-op (0 linhas) se esta sessão não veio de um link enterprise —
+    // não precisa de `if` aqui, ver docstring de `markPaid`.
+    await this.enterpriseCheckoutLinkRepository.markPaid(tenantId, session.id);
+
+    const plan = await this.planRepository.findById(planId);
+    await this.alertRepository.create(tenantId, {
+      type: 'billing_subscription_confirmed',
+      severity: 'info',
+      title: 'Assinatura confirmada',
+      message: `Sua assinatura foi confirmada no plano "${plan?.displayName ?? updated.planId}".`,
+      metadata: { planId: updated.planId },
+    });
+    // Uma confirmação nova supera qualquer aviso de cancelamento em aberto
+    // — mesmo espírito de `onInvoicePaid` resolvendo `billing_past_due`.
+    await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_subscription_cancelled', null);
+
     await this.billingEventRepository.create(tenantId, {
       eventType: 'checkout.session.completed',
       provider: 'stripe',
       providerEventId: event.id,
       rawPayload: session,
+    });
+  }
+
+  /**
+   * Só relevante pra link enterprise (`markExpired` no-opa pra qualquer
+   * outra sessão, mesmo espírito de `markPaid` acima) — checkout
+   * self-service normal não tem por que reagir a esse evento, já que o
+   * front descarta a sessão assim que o usuário sai da página.
+   */
+  private async onCheckoutExpired(event: Stripe.Event, session: Stripe.Checkout.Session): Promise<void> {
+    if (session.mode !== 'subscription') return;
+
+    const tenantId = session.client_reference_id ?? (session.metadata?.tenantId as string | undefined);
+    if (!tenantId) return;
+    if (await this.alreadyProcessed(tenantId, event.id)) return;
+
+    await this.enterpriseCheckoutLinkRepository.markExpired(tenantId, session.id);
+
+    await this.billingEventRepository.create(tenantId, {
+      eventType: 'checkout.session.expired',
+      provider: 'stripe',
+      providerEventId: event.id,
     });
   }
 
@@ -439,11 +543,27 @@ export class BillingService {
 
     const period = extractPeriod(stripeSubscription);
 
-    await this.subscriptionRepository.update(tenantId, {
+    // `!current.cancelledAt` cobre só o caminho "de surpresa": um
+    // cancelamento feito pelo nosso app (`cancelSubscription`) já seta
+    // `cancelledAt` de forma síncrona antes desse webhook chegar, então o
+    // alerta abaixo nunca duplica pra um cancelamento que já passou por lá.
+    const cancelledJustNow = stripeSubscription.cancel_at_period_end && !current.cancelledAt;
+
+    const updated = await this.subscriptionRepository.update(tenantId, {
       currentPeriodStart: period.start,
       currentPeriodEnd: period.end,
-      ...(stripeSubscription.cancel_at_period_end && !current.cancelledAt ? { cancelledAt: new Date() } : {}),
+      ...(cancelledJustNow ? { cancelledAt: new Date() } : {}),
     });
+
+    if (cancelledJustNow && updated) {
+      await this.alertRepository.create(tenantId, {
+        type: 'billing_subscription_cancelled',
+        severity: 'warning',
+        title: 'Assinatura cancelada',
+        message: `Sua assinatura foi cancelada. O acesso continua disponível até ${updated.currentPeriodEnd.toISOString()}.`,
+        metadata: { planId: updated.planId, accessUntil: updated.currentPeriodEnd },
+      });
+    }
 
     await this.billingEventRepository.create(tenantId, {
       eventType: 'customer.subscription.updated',

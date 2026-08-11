@@ -1,6 +1,6 @@
 # API de Alertas — referência pro time de front
 
-Documenta o sistema de alertas **in-app** (sem e-mail): uma lista de eventos operacionais por tenant — sync desatualizada, sync concluída, integração precisando reconexão, problemas de cobrança, dois alertas de onboarding (workspace vazio, time sem contribuidores) e três alertas de limite de plano (usuários, times, integrações) — pensada pra alimentar um sino de notificações na UI.
+Documenta o sistema de alertas **in-app** (sem e-mail): uma lista de eventos operacionais por tenant — sync desatualizada, sync concluída, integração precisando reconexão, ciclo de vida de cobrança (pagamento falhou, assinatura confirmada/cancelada/expirada), dois alertas de onboarding (workspace vazio, time sem contribuidores) e três alertas de limite de plano (usuários, times, integrações) — pensada pra alimentar um sino de notificações na UI.
 
 **Não confundir com `src/notifications/`** — aquele módulo existe há mais tempo e é outra coisa: e-mail transacional outbound (hoje só convite de usuário), sem nenhuma relação com o que está documentado aqui.
 
@@ -74,17 +74,31 @@ Authorization: Bearer <accessToken>
     "readAt": null,
     "resolvedAt": null,
     "createdAt": "2026-08-11T08:00:00.000Z"
+  },
+  {
+    "id": "a1c9e3f0-...",
+    "tenantId": "c94be6fb-9a26-488a-a624-fb2c891c1168",
+    "type": "billing_subscription_cancelled",
+    "severity": "warning",
+    "title": "Assinatura cancelada",
+    "message": "Sua assinatura foi cancelada. O acesso continua disponível até 2026-09-10T11:58:38.739Z.",
+    "integrationId": null,
+    "teamId": null,
+    "metadata": { "planId": "a1b2...", "accessUntil": "2026-09-10T11:58:38.739Z" },
+    "readAt": null,
+    "resolvedAt": null,
+    "createdAt": "2026-08-11T23:05:00.000Z"
   }
 ]
 ```
 
 ### Campos
 
-- **`type`** — um de `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `onboarding_incomplete`, `team_without_contributors`, `users_limit_reached`, `teams_limit_reached`, `integrations_limit_reached`.
+- **`type`** — um de `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`, `onboarding_incomplete`, `team_without_contributors`, `users_limit_reached`, `teams_limit_reached`, `integrations_limit_reached`.
 - **`severity`** — `info` | `warning` | `critical`.
 - **`integrationId`** — só preenchido em `sync_stale`/`integration_reconnect_required`. Nesses dois tipos, **use esse valor pra disparar a ação do alerta** (ver seção abaixo).
 - **`teamId`** — só preenchido em `team_without_contributors`. Use pra linkar direto pro time (ex: `GET /tenants/:tenantId/dashboard/dora?teamId=...` ou a tela de membros do time) — não tem endpoint de ação associado, é só um ponteiro.
-- **`onboarding_incomplete`** é o único tipo tenant-level de verdade: `integrationId` e `teamId` sempre `null`.
+- Tipos de nível de tenant (sem recurso específico associado — `integrationId` e `teamId` sempre `null`): `onboarding_incomplete`, `billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`.
 - **`metadata`** — formato livre por `type`, pensado pra debug/detalhe na UI, não pra lógica de negócio (não confiar em campos além dos documentados acima).
 - **`readAt`** — `null` = não lido. Estado é **por tenant, não por usuário**: qualquer ADMIN/GESTOR que marcar como lido, marca pra todo mundo.
 - **`resolvedAt`** — `null` = alerta aberto (a causa ainda existe). Preenchido = a causa desapareceu sozinha (sync voltou a rodar, integração voltou a sincronizar, cobrança foi regularizada). Um alerta resolvido continua na lista (histórico), só some do filtro `?unread=true` se também estiver lido.
@@ -112,9 +126,11 @@ Authorization: Bearer <accessToken>
 
 Um sync bem-sucedido resolve automaticamente qualquer alerta `sync_stale`/`integration_reconnect_required` aberto pra essa integração — não é preciso chamar nada além do sync.
 
-`onboarding_incomplete`, `team_without_contributors` e os três `*_limit_reached` **não têm ação associada** — são só um empurrão pra UI (texto estilo tutorial em `message`), resolvidos sozinhos quando o time é criado/ganha membro, alguém é convidado, ou (pros de limite) o plano é ampliado ou recursos são removidos.
+`onboarding_incomplete`, `team_without_contributors`, os três `*_limit_reached` e os quatro tipos de billing (`billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`) **não têm ação associada** — são só um empurrão pra UI (texto estilo tutorial em `message`), resolvidos sozinhos quando o time é criado/ganha membro, alguém é convidado, o plano é ampliado/recursos são removidos, ou a cobrança se regulariza.
 
 **`users_limit_reached` / `teams_limit_reached` / `integrations_limit_reached`**: diferente dos outros, esses três também causam um **`403` na hora**, não só o alerta — `POST /tenants/:tenantId/users`, `POST /tenants/:tenantId/teams` e `POST /tenants/:tenantId/integrations` bloqueiam a criação assim que a contagem atual do tenant atinge `plans.maxUsers`/`maxTeams`/`maxIntegrations` (`null` = ilimitado). O corpo do `403` é `{ "error": "Limite de <recurso> do plano atingido (N). Faça upgrade para <ação>." }` — a UI pode mostrar esse texto direto ou tratar o `403` como sinal pra abrir o fluxo de upgrade.
+
+**`billing_subscription_confirmed`**: dispara uma vez, na confirmação inicial de um checkout concluído (upgrade self-service ou link enterprise — é o mesmo evento Stripe pros dois casos) — não dispara de novo em toda renovação mensal rotineira, só na primeira confirmação (ou troca de plano). **`billing_subscription_cancelled`**: dispara tanto quando o próprio ADMIN cancela pela UI quanto quando o cancelamento vem "de surpresa" via Portal do Stripe — `message` já traz até quando o acesso continua (`metadata.accessUntil`).
 
 ## Limitações conhecidas
 
@@ -125,7 +141,6 @@ Um sync bem-sucedido resolve automaticamente qualquer alerta `sync_stale`/`integ
 | `sync_run_finished` pode ser barulhento | Dispara em **todo** run de sync, inclusive os do disparo em lote/cron — considerar agrupar/filtrar na UI se o volume incomodar. |
 | `limit` corta a resposta, não o total de não-lidos | O cap (`?limit=`) limita quantos alertas voltam nessa chamada, não quantos existem — um tenant com muito alerta acumulado pode ter mais não-lidos do que o `limit` mostra. Não é paginação de cursor de verdade (sem `?cursor=`/`?offset=`), só um teto. |
 | Leitura é por tenant | Não existe estado "lido" por usuário — é uma lista compartilhada entre todo ADMIN/GESTOR do tenant. |
-| Cancelamento pelo próprio ADMIN não gera alerta | Só eventos "surpresa" via webhook do Stripe (pagamento falhou, assinatura expirou) alertam — um cancelamento feito na UI pelo próprio ADMIN não. |
 
 ## Erros
 

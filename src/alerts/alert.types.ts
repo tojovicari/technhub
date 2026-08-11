@@ -8,7 +8,9 @@ export type AlertType =
   | 'team_without_contributors'
   | 'users_limit_reached'
   | 'teams_limit_reached'
-  | 'integrations_limit_reached';
+  | 'integrations_limit_reached'
+  | 'billing_subscription_confirmed'
+  | 'billing_subscription_cancelled';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 

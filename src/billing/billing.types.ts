@@ -92,3 +92,20 @@ export interface CreateBillingEventInput {
   readonly providerEventId?: string;
   readonly rawPayload?: unknown;
 }
+
+export type EnterpriseCheckoutLinkStatus = 'pending' | 'paid' | 'expired';
+
+/** Link de checkout gerado pelo gestor do SaaS (`admin.routes.ts`) pra um plano enterprise/privado — rastreamento de conversão, não fonte de verdade de billing (essa continua sendo `Subscription`). */
+export interface EnterpriseCheckoutLink {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly planId: string;
+  readonly contactEmail: string;
+  readonly stripeCheckoutSessionId: string;
+  readonly checkoutUrl: string;
+  readonly status: EnterpriseCheckoutLinkStatus;
+  readonly createdByOperatorEmail: string;
+  readonly expiresAt: Date;
+  readonly paidAt: Date | null;
+  readonly createdAt: Date;
+}

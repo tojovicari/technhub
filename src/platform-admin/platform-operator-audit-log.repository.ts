@@ -7,6 +7,7 @@ export type PlatformOperatorAuditAction =
   | 'CANCEL_SUBSCRIPTION'
   | 'CREATE_PLAN'
   | 'UPDATE_PLAN'
+  | 'CREATE_ENTERPRISE_CHECKOUT_LINK'
   | 'START_IMPERSONATION'
   | 'END_IMPERSONATION'
   /**

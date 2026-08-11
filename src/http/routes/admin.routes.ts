@@ -10,8 +10,10 @@ import { SubscriptionHistoryRepository } from '../../billing/subscription-histor
 import { BillingService } from '../../billing/billing.service';
 import type { CreatePlanServiceInput, UpdatePlanServiceInput } from '../../billing/billing.service';
 import { BillingError } from '../../billing/billing-errors';
+import { EnterpriseCheckoutLinkRepository } from '../../billing/enterprise-checkout-link.repository';
+import { NotificationService } from '../../notifications/notification.service';
 import type { Tenant, User } from '../../identity/identity.types';
-import type { Subscription, Plan, SubscriptionStatus } from '../../billing/billing.types';
+import type { Subscription, Plan, SubscriptionStatus, EnterpriseCheckoutLink } from '../../billing/billing.types';
 import { PlatformOperatorAuditLogRepository } from '../../platform-admin/platform-operator-audit-log.repository';
 import { requirePlatformOperator } from '../middleware/require-platform-operator';
 import { signImpersonationToken, verifyAuthToken } from '../../auth/core/jwt';
@@ -71,6 +73,11 @@ interface UpdatePlanBody {
   readonly maxIntegrations?: number | null;
 }
 
+interface CreateEnterpriseCheckoutLinkBody {
+  readonly planId?: string;
+  readonly contactEmail?: string;
+}
+
 const BILLING_ERROR_STATUS: Record<BillingError['code'], number> = {
   NOT_FOUND: 404,
   VALIDATION_ERROR: 400,
@@ -103,6 +110,41 @@ function buildTenantOverview(tenant: Tenant, subscription: Subscription | null, 
 }
 
 /**
+ * Envia o email do link de checkout enterprise de forma best-effort: nunca
+ * lança, nunca atrasa a resposta `201` — mesma filosofia de
+ * `sendInviteEmailBestEffort` (`users.routes.ts`).
+ */
+function sendEnterpriseCheckoutLinkEmailBestEffort(
+  notificationService: NotificationService,
+  tenantRepository: TenantRepository,
+  planRepository: PlanRepository,
+  link: EnterpriseCheckoutLink,
+): void {
+  Promise.all([
+    tenantRepository.findManyByIds([link.tenantId]).then((tenants) => tenants[0]?.name ?? 'seu workspace'),
+    planRepository.findById(link.planId).then((plan) => plan?.displayName ?? 'novo plano'),
+  ])
+    .catch(() => ['seu workspace', 'novo plano'] as const)
+    .then(([tenantName, planDisplayName]) =>
+      notificationService.sendEnterpriseCheckoutLinkEmail({
+        to: link.contactEmail,
+        tenantName,
+        planDisplayName,
+        checkoutUrl: link.checkoutUrl,
+        expiresAt: link.expiresAt,
+      }),
+    )
+    .then((result) => {
+      if (!result.success) {
+        console.error(`[admin.routes] Falha ao enviar email de link enterprise para "${link.contactEmail}": ${result.error}`);
+      }
+    })
+    .catch((error) => {
+      console.error(`[admin.routes] Erro inesperado ao enviar email de link enterprise: ${(error as Error).message}`);
+    });
+}
+
+/**
  * Rotas do gestor do SaaS — cross-tenant, fora do namespace `/tenants/:tenantId/*`.
  * Prefixo vem de `PLATFORM_ADMIN_ROUTE_PREFIX` (ver
  * `config/platform-admin-route-prefix.ts`), não-óbvio de propósito. Se não
@@ -125,6 +167,8 @@ export function registerAdminRoutes(
   auditLogRepository: PlatformOperatorAuditLogRepository = new PlatformOperatorAuditLogRepository(),
   subscriptionHistoryRepository: SubscriptionHistoryRepository = new SubscriptionHistoryRepository(),
   runHistoryRepository: IntegrationRunHistoryRepository = new IntegrationRunHistoryRepository(),
+  enterpriseCheckoutLinkRepository: EnterpriseCheckoutLinkRepository = new EnterpriseCheckoutLinkRepository(),
+  notificationService: NotificationService = new NotificationService(),
 ): void {
   const prefix = getPlatformAdminRoutePrefix();
   if (!prefix) {
@@ -353,6 +397,84 @@ export function registerAdminRoutes(
       return reply.status(200).send(plan);
     },
   );
+
+  /**
+   * Gera um link de checkout Stripe pra um plano (tipicamente enterprise/
+   * privado) e manda pro contato informado — mesmo mecanismo do upgrade
+   * self-service (`BillingService.createCheckoutSession`), disparado pelo
+   * operador. Sem fluxo nenhum fora do Stripe: nada é atribuído direto no
+   * banco, só uma Checkout Session real, com rastreamento de conversão em
+   * `enterprise_checkout_links`.
+   */
+  server.post<{ Params: TenantIdParams; Body: CreateEnterpriseCheckoutLinkBody }>(
+    `${prefix}/tenants/:tenantId/enterprise-checkout-links`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const { tenantId } = request.params;
+      const { planId, contactEmail } = request.body;
+
+      if (!planId || !contactEmail) {
+        return reply.status(400).send({ error: 'Os campos "planId" e "contactEmail" são obrigatórios.' });
+      }
+
+      try {
+        const link = await billingService.createEnterpriseCheckoutLink(
+          tenantId,
+          planId,
+          contactEmail,
+          request.platformOperator!.primaryEmail,
+        );
+
+        sendEnterpriseCheckoutLinkEmailBestEffort(notificationService, tenantRepository, planRepository, link);
+
+        await auditLogRepository.record({
+          operatorExternalUserId: request.platformOperator!.externalUserId,
+          operatorEmail: request.platformOperator!.primaryEmail,
+          action: 'CREATE_ENTERPRISE_CHECKOUT_LINK',
+          targetTenantId: tenantId,
+          metadata: { planId, contactEmail, linkId: link.id },
+        });
+        return reply.status(201).send(link);
+      } catch (error) {
+        if (error instanceof BillingError) {
+          return reply.status(BILLING_ERROR_STATUS[error.code]).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  /** Links de checkout enterprise de um tenant só, mais recente primeiro. */
+  server.get<{ Params: TenantIdParams }>(
+    `${prefix}/tenants/:tenantId/enterprise-checkout-links`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const links = await enterpriseCheckoutLinkRepository.findAllByTenant(request.params.tenantId);
+      return reply.status(200).send(links);
+    },
+  );
+
+  /**
+   * Painel cross-tenant de conversão — todo link enterprise já gerado, de
+   * todo tenant, com um resumo por cima. Mesmo padrão de `Promise.all` por
+   * tenant já usado em `buildTenantOverview`/`GET {prefix}/metrics` (RLS não
+   * permite uma query cross-tenant direta, então agrega por fora).
+   */
+  server.get(`${prefix}/enterprise-checkout-links`, { preHandler: [requirePlatformOperator] }, async (_request, reply) => {
+    const tenants = await tenantRepository.findAll();
+    const linksByTenant = await Promise.all(tenants.map((tenant) => enterpriseCheckoutLinkRepository.findAllByTenant(tenant.id)));
+    const links = linksByTenant.flat().sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+    const total = links.length;
+    const paid = links.filter((link) => link.status === 'paid').length;
+    const expired = links.filter((link) => link.status === 'expired').length;
+    const pending = links.filter((link) => link.status === 'pending').length;
+
+    return reply.status(200).send({
+      links,
+      summary: { total, paid, expired, pending, conversionRate: total === 0 ? 0 : paid / total },
+    });
+  });
 
   /**
    * Emite um token de sessão pro usuário-alvo — mesma forma de
