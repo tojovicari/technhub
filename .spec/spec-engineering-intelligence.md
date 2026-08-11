@@ -265,6 +265,25 @@ Isolamento multi-tenant (Seção 1, Princípio 5) é garantido em duas camadas i
 
    Sem essa variável de sessão definida, qualquer query numa tabela protegida falha (fail-closed) — comportamento intencional: preferimos erro explícito a vazamento silencioso entre tenants.
 
+### 4.4. Alertas In-App
+
+Sistema de alertas operacionais dentro do produto (não confundir com `src/notifications/`, que é e-mail transacional outbound). Tabela tenant-scoped `alerts`, RLS no mesmo padrão da Seção 4.3, colunas principais:
+
+- `type` (`CHECK`, só 5 valores fechados): `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`.
+- `severity` (`CHECK`): `info` | `warning` | `critical`.
+- `integration_id` — `NULL` para alertas de billing; `ON DELETE CASCADE` de `provider_integrations`.
+- `read_at` — estado lido/não-lido é por **tenant**, não por usuário.
+- `resolved_at` — `NULL` = alerta aberto; preenchido quando a causa desaparece sozinha. Nunca é apagado (histórico).
+
+Gatilhos (todos disparam via chamada direta de função, sem fila/pub-sub — mesmo estilo do resto do código):
+
+1. **`sync_stale`** — scan periódico (`POST /internal/alerts/scan-stale`, cron a cada ~4h) comparando `provider_integrations.last_synced_at` contra o dia corrente (UTC).
+2. **`sync_run_finished`** — todo run de `SyncOrchestrator.runSyncForIntegration` (sucesso ou falha), manual ou em lote.
+3. **`integration_reconnect_required`** — `provider_integrations.consecutive_failures` (contador dedicado, já que `status` sozinho volta a `ACTIVE` no próximo sucesso) atinge um limiar fixo em código.
+4. **`billing_past_due`** / **`billing_subscription_expired`** — webhooks Stripe `invoice.payment_failed` e `customer.subscription.deleted`, só na transição real (não em retry do webhook).
+
+Referência completa da API (endpoints, exemplos, limitações): `docs/alerts-api.md`.
+
 ---
 
 ## 5. Schemas da Camada Canônica e Enriquecida

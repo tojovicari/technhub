@@ -4,6 +4,10 @@ import { ProviderIntegrationRepository } from '../../integrations/repositories/p
 import { TenantRepository } from '../../identity/tenant.repository';
 import type { SyncContext } from '../../integrations/core/canonical.types';
 import { requireInternalToken } from '../middleware/require-internal-token';
+import { AlertRepository } from '../../alerts/alert.repository';
+
+/** Integrações mais novas que isso são ignoradas pelo scan de staleness — dá tempo do primeiro sync rodar. */
+const STALE_SCAN_GRACE_PERIOD_MS = 60 * 60 * 1000;
 
 interface SyncError {
   readonly tenantId: string;
@@ -32,6 +36,7 @@ export function registerInternalRoutes(
   tenantRepository: TenantRepository = new TenantRepository(),
   integrationRepository: ProviderIntegrationRepository = new ProviderIntegrationRepository(),
   syncOrchestrator: SyncOrchestrator = new SyncOrchestrator(),
+  alertRepository: AlertRepository = new AlertRepository(),
 ): void {
   /**
    * Avança **toda** integração `ACTIVE` *ou* `ERROR` de todo tenant `ACTIVE`
@@ -103,11 +108,17 @@ export function registerInternalRoutes(
       targets.map(async (target, index) => {
         const result = results[index];
 
-        await integrationRepository.markSyncOutcome(target.context.tenantId, target.context.integrationId, {
+        const outcome = await integrationRepository.markSyncOutcome(target.context.tenantId, target.context.integrationId, {
           success: result.success,
           nextCursor: result.nextCursor,
           cursorInvalidated: result.cursorInvalidated,
         });
+        await alertRepository.evaluateReconnectionAlert(
+          target.context.tenantId,
+          target.context.integrationId,
+          target.provider,
+          outcome.consecutiveFailures,
+        );
 
         if (result.success) {
           succeeded += 1;
@@ -128,5 +139,71 @@ export function registerInternalRoutes(
       failed: errors.length,
       errors,
     });
+  });
+
+  /**
+   * Scan leve, read-only na maior parte (poucos INSERT/UPDATE condicionais) —
+   * dispara/fecha o alerta `sync_stale` pra toda integração ACTIVE/ERROR (não
+   * DISABLED) cujo `last_synced_at` não é de hoje. Dedup: só cria se não
+   * houver um alerta ABERTO já daquele tipo/integração; só resolve se
+   * existir um aberto e a integração voltou a estar "fresca".
+   *
+   * "Hoje" = data UTC do momento do scan, não o fuso do tenant.
+   *
+   * Integrações criadas há menos de `STALE_SCAN_GRACE_PERIOD_MS` são
+   * ignoradas de propósito: dar tempo do primeiro sync rodar antes de gritar
+   * "desatualizado" pra uma integração que acabou de ser cadastrada.
+   */
+  server.post('/internal/alerts/scan-stale', { preHandler: [requireInternalToken] }, async (_request, reply) => {
+    const tenants = await tenantRepository.findAllActive();
+    const todayUtc = new Date().toISOString().slice(0, 10);
+
+    let integrationsScanned = 0;
+    let alertsCreated = 0;
+    let alertsResolved = 0;
+
+    await Promise.all(
+      tenants.map(async (tenant) => {
+        const integrations = await integrationRepository.listByTenant(tenant.id);
+
+        await Promise.all(
+          integrations
+            .filter((integration) => integration.status !== 'DISABLED')
+            .filter((integration) => Date.now() - integration.createdAt.getTime() > STALE_SCAN_GRACE_PERIOD_MS)
+            .map(async (integration) => {
+              integrationsScanned += 1;
+              const syncedToday =
+                integration.lastSyncedAt !== null && integration.lastSyncedAt.toISOString().slice(0, 10) === todayUtc;
+
+              try {
+                if (!syncedToday) {
+                  if (!(await alertRepository.hasOpenAlert(tenant.id, 'sync_stale', integration.id))) {
+                    await alertRepository.create(tenant.id, {
+                      type: 'sync_stale',
+                      severity: 'warning',
+                      title: 'Sincronização desatualizada',
+                      message: `A integração "${integration.provider}" não sincroniza com sucesso desde ${
+                        integration.lastSyncedAt?.toISOString() ?? 'nunca'
+                      }.`,
+                      integrationId: integration.id,
+                      metadata: { provider: integration.provider, lastSyncedAt: integration.lastSyncedAt },
+                    });
+                    alertsCreated += 1;
+                  }
+                } else {
+                  await alertRepository.resolveOpenAlerts(tenant.id, 'sync_stale', integration.id);
+                  alertsResolved += 1;
+                }
+              } catch (error) {
+                console.error(
+                  `[internal/alerts/scan-stale] Falha ao avaliar integração ${integration.id}: ${(error as Error).message}`,
+                );
+              }
+            }),
+        );
+      }),
+    );
+
+    return reply.status(200).send({ tenantsScanned: tenants.length, integrationsScanned, alertsCreated, alertsResolved });
   });
 }

@@ -241,21 +241,24 @@ export class ProviderIntegrationRepository {
     tenantId: string,
     integrationId: string,
     outcome: { readonly success: boolean; readonly nextCursor?: string | null; readonly cursorInvalidated?: boolean },
-  ): Promise<void> {
+  ): Promise<{ readonly consecutiveFailures: number }> {
     const status: IntegrationStatus = outcome.success ? 'ACTIVE' : 'ERROR';
     const nextCursor = outcome.nextCursor ?? null;
     const shouldClearCursor = outcome.success || outcome.cursorInvalidated === true;
 
-    await withTenantContext(this.pool, tenantId, (client) =>
-      client.query(
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{ consecutive_failures: number }>(
         `UPDATE provider_integrations
          SET status = $3::varchar,
              last_cursor = CASE WHEN $5 THEN $4 ELSE last_cursor END,
              last_synced_at = CASE WHEN $3::varchar = 'ACTIVE' AND $4 IS NULL THEN NOW() ELSE last_synced_at END,
+             consecutive_failures = CASE WHEN $3::varchar = 'ACTIVE' THEN 0 ELSE consecutive_failures + 1 END,
              updated_at = NOW()
-         WHERE tenant_id = $1 AND id = $2`,
+         WHERE tenant_id = $1 AND id = $2
+         RETURNING consecutive_failures`,
         [tenantId, integrationId, status, nextCursor, shouldClearCursor],
-      ),
-    );
+      );
+      return { consecutiveFailures: result.rows[0]?.consecutive_failures ?? 0 };
+    });
   }
 }

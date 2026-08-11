@@ -32,6 +32,7 @@ import { registerPersonProfileRoutes } from './routes/person-profile.routes';
 import { registerInternalRoutes } from './routes/internal.routes';
 import { registerBillingRoutes } from './routes/billing.routes';
 import { registerBillingWebhookRoutes } from './routes/billing-webhook.routes';
+import { registerAlertRoutes } from './routes/alerts.routes';
 import { registerAdminRoutes } from './routes/admin.routes';
 import { getPool } from '../database/pool';
 
@@ -78,6 +79,7 @@ registerPersonProfileRoutes(server);
 registerInternalRoutes(server);
 registerBillingRoutes(server);
 registerBillingWebhookRoutes(server);
+registerAlertRoutes(server);
 registerAdminRoutes(server);
 
 const port = Number(process.env.PORT ?? 3000);

@@ -6,6 +6,7 @@ import { DeploymentRepository } from '../repositories/deployment.repository';
 import { DiscoveredIdentityRepository } from '../repositories/discovered-identity.repository';
 import { WorkItemStatusTransitionRepository } from '../repositories/work-item-status-transition.repository';
 import { IntegrationRunHistoryRepository } from '../repositories/integration-run-history.repository';
+import { AlertRepository } from '../../alerts/alert.repository';
 import type { SyncContext, SyncResult } from './canonical.types';
 
 /** Quantas integrações `runBatch` processa em paralelo por vez — ver `runBatch`. */
@@ -35,6 +36,7 @@ export class SyncOrchestrator {
     private readonly discoveredIdentityRepository: DiscoveredIdentityRepository = new DiscoveredIdentityRepository(),
     private readonly workItemStatusTransitionRepository: WorkItemStatusTransitionRepository = new WorkItemStatusTransitionRepository(),
     private readonly integrationRunHistoryRepository: IntegrationRunHistoryRepository = new IntegrationRunHistoryRepository(),
+    private readonly alertRepository: AlertRepository = new AlertRepository(),
   ) {}
 
   /**
@@ -66,6 +68,19 @@ export class SyncOrchestrator {
         startedAt: startedAtDate,
         finishedAt: new Date(),
       });
+      await this.alertRepository.create(context.tenantId, {
+        type: 'sync_run_finished',
+        severity: result.success ? 'info' : 'warning',
+        title: result.success ? 'Sincronização concluída' : 'Sincronização concluída com falhas',
+        message: `Integração "${context.providerName}" ${result.success ? 'sincronizou com sucesso' : 'teve falhas ao sincronizar'} (${result.fetchedCount} registro(s)).`,
+        integrationId: context.integrationId,
+        metadata: {
+          provider: context.providerName,
+          success: result.success,
+          fetchedCount: result.fetchedCount,
+          errorMessage: result.errors?.join('; ') ?? null,
+        },
+      });
       return result;
     } catch (error) {
       const durationMs = performance.now() - startedAt;
@@ -83,6 +98,14 @@ export class SyncOrchestrator {
         errorMessage: message,
         startedAt: startedAtDate,
         finishedAt: new Date(),
+      });
+      await this.alertRepository.create(context.tenantId, {
+        type: 'sync_run_finished',
+        severity: 'warning',
+        title: 'Sincronização falhou',
+        message: `Integração "${context.providerName}" falhou ao sincronizar: ${message}`,
+        integrationId: context.integrationId,
+        metadata: { provider: context.providerName, success: false, fetchedCount: 0, errorMessage: message },
       });
 
       return {

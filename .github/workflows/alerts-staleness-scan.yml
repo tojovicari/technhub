@@ -1,0 +1,21 @@
+name: Alerts Staleness Scan
+
+on:
+  # Diferente do cron do sync.yml (desligado de propósito, por causa do
+  # fan-out de chamada de rede por integração) — este scan só faz SELECT +
+  # poucos INSERT/UPDATE condicionais, sem chamar nenhum provider externo.
+  schedule:
+    - cron: '0 */4 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  scan-stale:
+    name: Trigger stale-sync alert scan
+    runs-on: ubuntu-latest
+    concurrency: alerts-staleness-scan
+
+    steps:
+      - name: POST /internal/alerts/scan-stale
+        run: |
+          curl -sf -X POST https://api.moasy.tech/internal/alerts/scan-stale \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_SYNC_TOKEN }}"

@@ -6,6 +6,7 @@ import { SubscriptionRepository } from './subscription.repository';
 import { SubscriptionHistoryRepository } from './subscription-history.repository';
 import { BillingEventRepository } from './billing-event.repository';
 import { StripeSubscriptionIndexRepository } from './stripe-subscription-index.repository';
+import { AlertRepository } from '../alerts/alert.repository';
 import { BillingError } from './billing-errors';
 import type { Plan, Subscription } from './billing.types';
 
@@ -56,6 +57,7 @@ export class BillingService {
     private readonly subscriptionHistoryRepository: SubscriptionHistoryRepository = new SubscriptionHistoryRepository(),
     private readonly billingEventRepository: BillingEventRepository = new BillingEventRepository(),
     private readonly stripeIndexRepository: StripeSubscriptionIndexRepository = new StripeSubscriptionIndexRepository(),
+    private readonly alertRepository: AlertRepository = new AlertRepository(),
   ) {}
 
   async listPlans(): Promise<readonly Plan[]> {
@@ -353,6 +355,7 @@ export class BillingService {
         status: updated.status,
         reason: 'payment_recovered',
       });
+      await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_past_due', null);
     }
 
     await this.billingEventRepository.create(tenantId, {
@@ -388,6 +391,13 @@ export class BillingService {
         planId: updated.planId,
         status: updated.status,
         reason: 'payment_failed',
+      });
+      await this.alertRepository.create(tenantId, {
+        type: 'billing_past_due',
+        severity: 'critical',
+        title: 'Pagamento falhou',
+        message: 'O pagamento da assinatura falhou. Regularize a cobrança para evitar suspensão do acesso.',
+        metadata: { planId: updated.planId, pastDueSince: updated.pastDueSince },
       });
     }
 
@@ -437,6 +447,13 @@ export class BillingService {
       planId: updated.planId,
       status: updated.status,
       reason: 'stripe_subscription_deleted',
+    });
+    await this.alertRepository.create(tenantId, {
+      type: 'billing_subscription_expired',
+      severity: 'critical',
+      title: 'Assinatura cancelada/expirada',
+      message: 'A assinatura foi cancelada ou expirada. Acesse o billing para reativar.',
+      metadata: { planId: updated.planId, reason: 'stripe_subscription_deleted' },
     });
     await this.billingEventRepository.create(tenantId, {
       eventType: 'customer.subscription.deleted',

@@ -3,6 +3,7 @@ import { ProviderFactory } from '../../integrations/core/provider.factory';
 import { SyncOrchestrator } from '../../integrations/core/sync.orchestrator';
 import { ProviderIntegrationRepository } from '../../integrations/repositories/provider-integration.repository';
 import { IntegrationRunHistoryRepository } from '../../integrations/repositories/integration-run-history.repository';
+import { AlertRepository } from '../../alerts/alert.repository';
 import type { ProviderCredentials } from '../../integrations/core/canonical.types';
 import { getPgErrorCode } from '../pg-error';
 import { isValidUuid } from '../uuid';
@@ -46,6 +47,7 @@ export function registerIntegrationRoutes(
   integrationRepository: ProviderIntegrationRepository = new ProviderIntegrationRepository(),
   syncOrchestrator: SyncOrchestrator = new SyncOrchestrator(),
   runHistoryRepository: IntegrationRunHistoryRepository = new IntegrationRunHistoryRepository(),
+  alertRepository: AlertRepository = new AlertRepository(),
 ): void {
   server.post<{ Params: TenantParams; Body: RegisterIntegrationBody }>(
     '/tenants/:tenantId/integrations',
@@ -206,11 +208,17 @@ export function registerIntegrationRoutes(
         since: stored.lastSyncedAt ?? undefined,
       });
 
-      await integrationRepository.markSyncOutcome(tenantId, integrationId, {
+      const outcome = await integrationRepository.markSyncOutcome(tenantId, integrationId, {
         success: result.success,
         nextCursor: result.nextCursor,
         cursorInvalidated: result.cursorInvalidated,
       });
+      await alertRepository.evaluateReconnectionAlert(
+        tenantId,
+        integrationId,
+        integration.provider,
+        outcome.consecutiveFailures,
+      );
 
       return reply.status(200).send(result);
     },
