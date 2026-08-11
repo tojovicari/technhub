@@ -17,6 +17,7 @@ interface TenantAlertParams extends TenantParams {
 
 interface ListAlertsQuery {
   readonly unread?: string;
+  readonly limit?: string;
 }
 
 /**
@@ -31,12 +32,22 @@ export function registerAlertRoutes(
   server: FastifyInstance,
   alertRepository: AlertRepository = new AlertRepository(),
 ): void {
+  /** Mais recentes primeiro. `limit` default 50, máx 200 — mesmo padrão de `GET {prefix}/audit-log` (`admin.routes.ts`). */
   server.get<{ Params: TenantParams; Querystring: ListAlertsQuery }>(
     '/tenants/:tenantId/alerts',
     { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
     async (request, reply) => {
       const { tenantId } = request.params;
-      const alerts = await alertRepository.findAllByTenant(tenantId, { unreadOnly: request.query.unread === 'true' });
+
+      const parsedLimit = request.query.limit ? Number(request.query.limit) : 50;
+      if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 200) {
+        return reply.status(400).send({ error: '"limit" precisa ser um inteiro entre 1 e 200.' });
+      }
+
+      const alerts = await alertRepository.findAllByTenant(tenantId, {
+        unreadOnly: request.query.unread === 'true',
+        limit: parsedLimit,
+      });
       return reply.status(200).send(alerts);
     },
   );

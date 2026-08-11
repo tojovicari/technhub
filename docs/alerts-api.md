@@ -21,6 +21,7 @@ Lista os alertas do tenant, mais recentes primeiro.
 | Nome     | Formato               | Obrigatório | Default |
 | -------- | ---------------------- | ----------- | ------- |
 | `unread` | `"true"` (string literal) | Não     | lista todos (lidos e não-lidos) |
+| `limit`  | inteiro (1–200)        | Não         | 50 (`400` fora do intervalo, mesmo padrão de `GET {prefix}/audit-log`) |
 
 ### Exemplo de request
 
@@ -101,6 +102,7 @@ Um sync bem-sucedido resolve automaticamente qualquer alerta `sync_stale`/`integ
 | Staleness não é tempo real | O alerta `sync_stale` nasce de um scan agendado (a cada ~4h), não de um monitor contínuo — pode levar até esse intervalo pra aparecer/sumir. |
 | "Hoje" é UTC, não o fuso do tenant | O scan compara `last_synced_at` contra a data UTC corrente, não o fuso horário do tenant. |
 | `sync_run_finished` pode ser barulhento | Dispara em **todo** run de sync, inclusive os do disparo em lote/cron — considerar agrupar/filtrar na UI se o volume incomodar. |
+| `limit` corta a resposta, não o total de não-lidos | O cap (`?limit=`) limita quantos alertas voltam nessa chamada, não quantos existem — um tenant com muito alerta acumulado pode ter mais não-lidos do que o `limit` mostra. Não é paginação de cursor de verdade (sem `?cursor=`/`?offset=`), só um teto. |
 | Leitura é por tenant | Não existe estado "lido" por usuário — é uma lista compartilhada entre todo ADMIN/GESTOR do tenant. |
 | Cancelamento pelo próprio ADMIN não gera alerta | Só eventos "surpresa" via webhook do Stripe (pagamento falhou, assinatura expirou) alertam — um cancelamento feito na UI pelo próprio ADMIN não. |
 
@@ -108,6 +110,7 @@ Um sync bem-sucedido resolve automaticamente qualquer alerta `sync_stale`/`integ
 
 | Status | Quando |
 | --- | --- |
+| `400` | `limit` (`GET .../alerts`) não é um inteiro entre 1 e 200. |
 | `401` | Token ausente/inválido/expirado. |
 | `403` | Token válido, mas de um tenant diferente do `:tenantId` da URL, ou usuário `USUARIO` (sem `ADMIN`/`GESTOR`). |
 | `404` | `alertId` não existe (ou não pertence a este tenant) em `PATCH .../read`. |
