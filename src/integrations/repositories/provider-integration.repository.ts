@@ -184,6 +184,18 @@ export class ProviderIntegrationRepository {
     });
   }
 
+  /** Usado pelo gate de limite de plano (`billing.service.ts`) — mais barato que `listByTenant(...).length`. */
+  async countByTenant(tenantId: string): Promise<number> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM provider_integrations WHERE tenant_id = $1',
+        [tenantId],
+      );
+
+      return Number(result.rows[0].count);
+    });
+  }
+
   /** Carrega e decifra a credencial cadastrada pelo `id`, ou `null` se não houver integração. */
   async getDecryptedCredentialsById(tenantId: string, integrationId: string): Promise<DecryptedIntegration | null> {
     return withTenantContext(this.pool, tenantId, async (client) => {

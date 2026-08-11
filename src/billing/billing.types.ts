@@ -18,6 +18,10 @@ export interface Plan {
   readonly trialDays: number;
   readonly isPublic: boolean;
   readonly isActive: boolean;
+  /** `null` = ilimitado. */
+  readonly maxUsers: number | null;
+  readonly maxTeams: number | null;
+  readonly maxIntegrations: number | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

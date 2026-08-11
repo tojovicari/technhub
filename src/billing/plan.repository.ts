@@ -14,6 +14,9 @@ interface PlanRow {
   readonly trial_days: number;
   readonly is_public: boolean;
   readonly is_active: boolean;
+  readonly max_users: number | null;
+  readonly max_teams: number | null;
+  readonly max_integrations: number | null;
   readonly created_at: Date;
   readonly updated_at: Date;
 }
@@ -30,13 +33,16 @@ function mapRowToPlan(row: PlanRow): Plan {
     trialDays: Number(row.trial_days),
     isPublic: row.is_public,
     isActive: row.is_active,
+    maxUsers: row.max_users === null ? null : Number(row.max_users),
+    maxTeams: row.max_teams === null ? null : Number(row.max_teams),
+    maxIntegrations: row.max_integrations === null ? null : Number(row.max_integrations),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
 const PLAN_COLUMNS =
-  'id, name, display_name, price_cents, currency, billing_period, stripe_price_id, trial_days, is_public, is_active, created_at, updated_at';
+  'id, name, display_name, price_cents, currency, billing_period, stripe_price_id, trial_days, is_public, is_active, max_users, max_teams, max_integrations, created_at, updated_at';
 
 export interface CreatePlanInput {
   readonly name: string;
@@ -49,9 +55,13 @@ export interface CreatePlanInput {
   readonly trialDays: number;
   readonly isPublic: boolean;
   readonly isActive: boolean;
+  /** `null`/omitido = ilimitado. Nenhum dos três é obrigatório ao criar plano. */
+  readonly maxUsers?: number | null;
+  readonly maxTeams?: number | null;
+  readonly maxIntegrations?: number | null;
 }
 
-/** Campo omitido preserva o valor atual — mesmo padrão de `ProviderIntegrationRepository.update`. `stripePriceId: null` explícito limpa o campo (diferente de omitido). */
+/** Campo omitido preserva o valor atual — mesmo padrão de `ProviderIntegrationRepository.update`. `stripePriceId: null` explícito limpa o campo (diferente de omitido); mesma convenção pros 3 campos de limite (`null` explícito = "virou ilimitado"). */
 export interface UpdatePlanInput {
   readonly displayName?: string;
   readonly priceCents?: number;
@@ -61,6 +71,9 @@ export interface UpdatePlanInput {
   readonly trialDays?: number;
   readonly isPublic?: boolean;
   readonly isActive?: boolean;
+  readonly maxUsers?: number | null;
+  readonly maxTeams?: number | null;
+  readonly maxIntegrations?: number | null;
 }
 
 /**
@@ -101,8 +114,8 @@ export class PlanRepository {
 
   async create(input: CreatePlanInput): Promise<Plan> {
     const result = await this.pool.query<PlanRow>(
-      `INSERT INTO plans (name, display_name, price_cents, currency, billing_period, stripe_price_id, trial_days, is_public, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO plans (name, display_name, price_cents, currency, billing_period, stripe_price_id, trial_days, is_public, is_active, max_users, max_teams, max_integrations)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING ${PLAN_COLUMNS}`,
       [
         input.name,
@@ -114,6 +127,9 @@ export class PlanRepository {
         input.trialDays,
         input.isPublic,
         input.isActive,
+        input.maxUsers ?? null,
+        input.maxTeams ?? null,
+        input.maxIntegrations ?? null,
       ],
     );
 
@@ -132,6 +148,9 @@ export class PlanRepository {
          trial_days = CASE WHEN $12::boolean THEN $13::int ELSE trial_days END,
          is_public = CASE WHEN $14::boolean THEN $15::boolean ELSE is_public END,
          is_active = CASE WHEN $16::boolean THEN $17::boolean ELSE is_active END,
+         max_users = CASE WHEN $18::boolean THEN $19::int ELSE max_users END,
+         max_teams = CASE WHEN $20::boolean THEN $21::int ELSE max_teams END,
+         max_integrations = CASE WHEN $22::boolean THEN $23::int ELSE max_integrations END,
          updated_at = NOW()
        WHERE id = $1
        RETURNING ${PLAN_COLUMNS}`,
@@ -153,6 +172,12 @@ export class PlanRepository {
         patch.isPublic ?? null,
         patch.isActive !== undefined,
         patch.isActive ?? null,
+        patch.maxUsers !== undefined,
+        patch.maxUsers ?? null,
+        patch.maxTeams !== undefined,
+        patch.maxTeams ?? null,
+        patch.maxIntegrations !== undefined,
+        patch.maxIntegrations ?? null,
       ],
     );
 

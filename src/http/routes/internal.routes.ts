@@ -8,6 +8,7 @@ import { AlertRepository } from '../../alerts/alert.repository';
 import { UserRepository } from '../../identity/user.repository';
 import { TeamRepository } from '../../identity/team.repository';
 import { TeamMembershipRepository } from '../../identity/team-membership.repository';
+import { BillingService } from '../../billing/billing.service';
 
 /** Integrações mais novas que isso são ignoradas pelo scan de staleness — dá tempo do primeiro sync rodar. */
 const STALE_SCAN_GRACE_PERIOD_MS = 60 * 60 * 1000;
@@ -43,6 +44,7 @@ export function registerInternalRoutes(
   userRepository: UserRepository = new UserRepository(),
   teamRepository: TeamRepository = new TeamRepository(),
   teamMembershipRepository: TeamMembershipRepository = new TeamMembershipRepository(),
+  billingService: BillingService = new BillingService(),
 ): void {
   /**
    * Avança **toda** integração `ACTIVE` *ou* `ERROR` de todo tenant `ACTIVE`
@@ -161,6 +163,14 @@ export function registerInternalRoutes(
    *    do ADMIN bootstrap (ver `AlertRepository.evaluateOnboardingAlert`).
    * 3. `team_without_contributors` — cada time do tenant sem nenhuma linha
    *    em `team_memberships` (ver `AlertRepository.evaluateTeamContributorsAlert`).
+   * 4. `users_limit_reached`/`teams_limit_reached`/`integrations_limit_reached`
+   *    — resolve sozinho quando a contagem volta a caber sob o teto do
+   *    plano (`BillingService.getResourceLimit`), e também cria
+   *    proativamente se um tenant já estiver acima do limite sem ninguém
+   *    ter tentado criar nada recentemente (ex: downgrade de plano) — o
+   *    bloqueio em si (`403`) acontece na hora, nas rotas de criação
+   *    (`users.routes.ts`/`teams.routes.ts`/`integrations.routes.ts`), não
+   *    aqui.
    *
    * Todos com o mesmo padrão de dedup: só cria se não houver um alerta
    * ABERTO já daquele tipo/assunto; só resolve se existir um aberto e a
@@ -225,6 +235,30 @@ export function registerInternalRoutes(
             const stillOpen = await alertRepository.hasOpenAlert(tenant.id, 'onboarding_incomplete', null);
             if (!hadOpen && stillOpen) alertsCreated += 1;
             if (hadOpen && !stillOpen) alertsResolved += 1;
+          })(),
+
+          (async () => {
+            const [maxUsers, maxTeams, maxIntegrations] = await Promise.all([
+              billingService.getResourceLimit(tenant.id, 'maxUsers'),
+              billingService.getResourceLimit(tenant.id, 'maxTeams'),
+              billingService.getResourceLimit(tenant.id, 'maxIntegrations'),
+            ]);
+
+            await Promise.all(
+              (
+                [
+                  ['users_limit_reached', userCount, maxUsers],
+                  ['teams_limit_reached', teams.length, maxTeams],
+                  ['integrations_limit_reached', integrations.length, maxIntegrations],
+                ] as const
+              ).map(async ([type, currentCount, limit]) => {
+                const hadOpen = await alertRepository.hasOpenAlert(tenant.id, type, null);
+                await alertRepository.evaluateResourceLimitAlert(tenant.id, type, currentCount, limit);
+                const stillOpen = await alertRepository.hasOpenAlert(tenant.id, type, null);
+                if (!hadOpen && stillOpen) alertsCreated += 1;
+                if (hadOpen && !stillOpen) alertsResolved += 1;
+              }),
+            );
           })(),
 
           ...teams.map(async (team) => {

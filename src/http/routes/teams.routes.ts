@@ -16,6 +16,8 @@ import { isValidUuid } from '../uuid';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
 import { requireSameTenant } from '../middleware/require-same-tenant';
+import { BillingService } from '../../billing/billing.service';
+import { AlertRepository } from '../../alerts/alert.repository';
 
 const requireAdminOrManager = requireRole('ADMIN', 'GESTOR');
 const VALID_PLANNING_CYCLES: readonly PlanningCycle[] = ['MONTHLY', 'WEEKLY', 'BIWEEKLY_SPRINT'];
@@ -113,6 +115,8 @@ export function registerTeamRoutes(
   incidentRepository: IncidentRepository = new IncidentRepository(),
   workItemRepository: WorkItemRepository = new WorkItemRepository(),
   deploymentRepository: DeploymentRepository = new DeploymentRepository(),
+  billingService: BillingService = new BillingService(),
+  alertRepository: AlertRepository = new AlertRepository(),
 ): void {
   /**
    * Candidatos a vínculo: recursos externos (time do Waroom, repositório do
@@ -244,6 +248,15 @@ export function registerTeamRoutes(
         return reply
           .status(400)
           .send({ error: `"planningCycle" inválido. Use um de: ${VALID_PLANNING_CYCLES.join(', ')}.` });
+      }
+
+      const teamCount = await teamRepository.countByTenant(tenantId);
+      const maxTeams = await billingService.getResourceLimit(tenantId, 'maxTeams');
+      if (maxTeams !== null && teamCount >= maxTeams) {
+        await alertRepository.evaluateResourceLimitAlert(tenantId, 'teams_limit_reached', teamCount, maxTeams);
+        return reply
+          .status(403)
+          .send({ error: `Limite de times do plano atingido (${maxTeams}). Faça upgrade para criar mais times.` });
       }
 
       try {

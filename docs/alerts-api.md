@@ -1,6 +1,6 @@
 # API de Alertas — referência pro time de front
 
-Documenta o sistema de alertas **in-app** (sem e-mail): uma lista de eventos operacionais por tenant — sync desatualizada, sync concluída, integração precisando reconexão, problemas de cobrança e dois alertas de onboarding (workspace vazio, time sem contribuidores) — pensada pra alimentar um sino de notificações na UI.
+Documenta o sistema de alertas **in-app** (sem e-mail): uma lista de eventos operacionais por tenant — sync desatualizada, sync concluída, integração precisando reconexão, problemas de cobrança, dois alertas de onboarding (workspace vazio, time sem contribuidores) e três alertas de limite de plano (usuários, times, integrações) — pensada pra alimentar um sino de notificações na UI.
 
 **Não confundir com `src/notifications/`** — aquele módulo existe há mais tempo e é outra coisa: e-mail transacional outbound (hoje só convite de usuário), sem nenhuma relação com o que está documentado aqui.
 
@@ -80,7 +80,7 @@ Authorization: Bearer <accessToken>
 
 ### Campos
 
-- **`type`** — um de `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `onboarding_incomplete`, `team_without_contributors`.
+- **`type`** — um de `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `onboarding_incomplete`, `team_without_contributors`, `users_limit_reached`, `teams_limit_reached`, `integrations_limit_reached`.
 - **`severity`** — `info` | `warning` | `critical`.
 - **`integrationId`** — só preenchido em `sync_stale`/`integration_reconnect_required`. Nesses dois tipos, **use esse valor pra disparar a ação do alerta** (ver seção abaixo).
 - **`teamId`** — só preenchido em `team_without_contributors`. Use pra linkar direto pro time (ex: `GET /tenants/:tenantId/dashboard/dora?teamId=...` ou a tela de membros do time) — não tem endpoint de ação associado, é só um ponteiro.
@@ -112,13 +112,15 @@ Authorization: Bearer <accessToken>
 
 Um sync bem-sucedido resolve automaticamente qualquer alerta `sync_stale`/`integration_reconnect_required` aberto pra essa integração — não é preciso chamar nada além do sync.
 
-`onboarding_incomplete` e `team_without_contributors` **não têm ação associada** — são só um empurrão pra UI (texto estilo tutorial em `message`), resolvidos sozinhos quando o time é criado/ganha membro ou alguém é convidado, sem precisar de nenhuma chamada específica.
+`onboarding_incomplete`, `team_without_contributors` e os três `*_limit_reached` **não têm ação associada** — são só um empurrão pra UI (texto estilo tutorial em `message`), resolvidos sozinhos quando o time é criado/ganha membro, alguém é convidado, ou (pros de limite) o plano é ampliado ou recursos são removidos.
+
+**`users_limit_reached` / `teams_limit_reached` / `integrations_limit_reached`**: diferente dos outros, esses três também causam um **`403` na hora**, não só o alerta — `POST /tenants/:tenantId/users`, `POST /tenants/:tenantId/teams` e `POST /tenants/:tenantId/integrations` bloqueiam a criação assim que a contagem atual do tenant atinge `plans.maxUsers`/`maxTeams`/`maxIntegrations` (`null` = ilimitado). O corpo do `403` é `{ "error": "Limite de <recurso> do plano atingido (N). Faça upgrade para <ação>." }` — a UI pode mostrar esse texto direto ou tratar o `403` como sinal pra abrir o fluxo de upgrade.
 
 ## Limitações conhecidas
 
 | Comportamento | Detalhe |
 | --- | --- |
-| Staleness não é tempo real | Os alertas `sync_stale`, `onboarding_incomplete` e `team_without_contributors` nascem do mesmo scan agendado (a cada ~4h), não de um monitor contínuo — pode levar até esse intervalo pra aparecer/sumir depois que a condição muda. |
+| Staleness não é tempo real | Os alertas `sync_stale`, `onboarding_incomplete`, `team_without_contributors` e os três `*_limit_reached` nascem/resolvem no mesmo scan agendado (a cada ~4h) — exceto a **criação** dos `*_limit_reached`, que também acontece na hora, junto do `403` (ver seção anterior). A resolução (plano ampliado, recurso removido) sempre depende do próximo scan, sem monitor contínuo. |
 | "Hoje" é UTC, não o fuso do tenant | O scan compara `last_synced_at` contra a data UTC corrente, não o fuso horário do tenant. |
 | `sync_run_finished` pode ser barulhento | Dispara em **todo** run de sync, inclusive os do disparo em lote/cron — considerar agrupar/filtrar na UI se o volume incomodar. |
 | `limit` corta a resposta, não o total de não-lidos | O cap (`?limit=`) limita quantos alertas voltam nessa chamada, não quantos existem — um tenant com muito alerta acumulado pode ter mais não-lidos do que o `limit` mostra. Não é paginação de cursor de verdade (sem `?cursor=`/`?offset=`), só um teto. |
@@ -132,4 +134,5 @@ Um sync bem-sucedido resolve automaticamente qualquer alerta `sync_stale`/`integ
 | `400` | `limit` (`GET .../alerts`) não é um inteiro entre 1 e 200. |
 | `401` | Token ausente/inválido/expirado. |
 | `403` | Token válido, mas de um tenant diferente do `:tenantId` da URL, ou usuário `USUARIO` (sem `ADMIN`/`GESTOR`). |
+| `403` | Fora das rotas de alerta: `POST /tenants/:tenantId/users`, `.../teams` ou `.../integrations` devolvem isso (com o mesmo `evaluateResourceLimitAlert` criando o `*_limit_reached` correspondente) quando o tenant atinge o teto de recursos do plano — ver "Como disparar a ação" acima. |
 | `404` | `alertId` não existe (ou não pertence a este tenant) em `PATCH .../read`. |

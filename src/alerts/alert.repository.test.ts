@@ -181,4 +181,30 @@ describe('AlertRepository', () => {
     await alertRepository.evaluateTeamContributorsAlert(tenantAId, team.id, team.name, true);
     assert.equal(await alertRepository.hasOpenAlert(tenantAId, 'team_without_contributors', null, team.id), false);
   });
+
+  it('evaluateResourceLimitAlert: cria no limiar, não duplica, resolve abaixo do limite, nunca cria sem limite', async () => {
+    await alertRepository.evaluateResourceLimitAlert(tenantAId, 'teams_limit_reached', 2, 3);
+    assert.equal(
+      await alertRepository.hasOpenAlert(tenantAId, 'teams_limit_reached', null),
+      false,
+      'abaixo do limite não deveria criar',
+    );
+
+    await alertRepository.evaluateResourceLimitAlert(tenantAId, 'teams_limit_reached', 3, 3);
+    assert.equal(await alertRepository.hasOpenAlert(tenantAId, 'teams_limit_reached', null), true);
+
+    // Reavaliar no limite (ou acima) não duplica.
+    await alertRepository.evaluateResourceLimitAlert(tenantAId, 'teams_limit_reached', 4, 3);
+    const open = (await alertRepository.findAllByTenant(tenantAId)).filter(
+      (a) => a.type === 'teams_limit_reached' && a.resolvedAt === null,
+    );
+    assert.equal(open.length, 1);
+
+    await alertRepository.evaluateResourceLimitAlert(tenantAId, 'teams_limit_reached', 2, 3);
+    assert.equal(await alertRepository.hasOpenAlert(tenantAId, 'teams_limit_reached', null), false);
+
+    // limit === null (ilimitado) nunca cria, mesmo com contagem alta.
+    await alertRepository.evaluateResourceLimitAlert(tenantAId, 'users_limit_reached', 999, null);
+    assert.equal(await alertRepository.hasOpenAlert(tenantAId, 'users_limit_reached', null), false);
+  });
 });

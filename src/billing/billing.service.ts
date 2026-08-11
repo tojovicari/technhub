@@ -138,6 +138,27 @@ export class BillingService {
   }
 
   /**
+   * Resolve o teto de recursos do plano vigente do tenant. `null` = sem
+   * limite — tanto quando o próprio plano deixa o campo em branco quanto
+   * quando não há subscription/plano resolvível (fail-open de propósito: um
+   * tenant com billing malconfigurado não deveria travar criação de
+   * usuário/time/integração por um bug de resolução, só por uma decisão de
+   * limite de verdade).
+   */
+  async getResourceLimit(
+    tenantId: string,
+    resource: 'maxUsers' | 'maxTeams' | 'maxIntegrations',
+  ): Promise<number | null> {
+    const subscription = await this.subscriptionRepository.findByTenantId(tenantId);
+    if (!subscription) return null;
+
+    const plan = await this.planRepository.findById(subscription.planId);
+    if (!plan) return null;
+
+    return plan[resource];
+  }
+
+  /**
    * Provisionamento automático — chamado pelo `POST /tenants` assim que o
    * tenant é criado. Lança se o plano Free não existir (dependência rígida
    * de propósito, mesmo espírito do sistema antigo).

@@ -134,4 +134,16 @@ export class TeamRepository {
       return result.rows.map(mapRowToTeam);
     });
   }
+
+  /** Usado pelo gate de limite de plano (`billing.service.ts`) — mais barato que `findAllByTenant(...).length`. */
+  async countByTenant(tenantId: string): Promise<number> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{ count: string }>(
+        'SELECT count(*)::text AS count FROM teams WHERE tenant_id = $1',
+        [tenantId],
+      );
+
+      return Number(result.rows[0].count);
+    });
+  }
 }

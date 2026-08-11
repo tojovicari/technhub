@@ -5,7 +5,10 @@ export type AlertType =
   | 'billing_past_due'
   | 'billing_subscription_expired'
   | 'onboarding_incomplete'
-  | 'team_without_contributors';
+  | 'team_without_contributors'
+  | 'users_limit_reached'
+  | 'teams_limit_reached'
+  | 'integrations_limit_reached';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 

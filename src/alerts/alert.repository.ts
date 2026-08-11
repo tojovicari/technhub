@@ -263,4 +263,51 @@ export class AlertRepository {
       );
     }
   }
+
+  /**
+   * Alerta de nível de tenant pra teto de recursos do plano
+   * (`BillingService.getResourceLimit`) — `type` já distingue qual recurso
+   * (usuários/times/integrações), por isso `integrationId`/`teamId` ficam
+   * sempre `null`, mesma ideia de `evaluateOnboardingAlert`. Chamado tanto
+   * no momento do bloqueio (`403` nas rotas de criação, cria) quanto no
+   * scan periódico (resolve quando volta a caber sob o limite — e também
+   * cria proativamente se um tenant já estiver acima do limite sem
+   * ninguém ter tentado criar nada recentemente, ex: downgrade de plano).
+   * Nunca lança.
+   */
+  async evaluateResourceLimitAlert(
+    tenantId: string,
+    type: 'users_limit_reached' | 'teams_limit_reached' | 'integrations_limit_reached',
+    currentCount: number,
+    limit: number | null,
+  ): Promise<void> {
+    try {
+      const atLimit = limit !== null && currentCount >= limit;
+
+      if (!atLimit) {
+        await this.resolveOpenAlerts(tenantId, type, null);
+        return;
+      }
+      if (await this.hasOpenAlert(tenantId, type, null)) return;
+
+      const copy: Record<typeof type, { readonly title: string; readonly noun: string }> = {
+        users_limit_reached: { title: 'Limite de usuários atingido', noun: 'usuário(s)' },
+        teams_limit_reached: { title: 'Limite de times atingido', noun: 'time(s)' },
+        integrations_limit_reached: { title: 'Limite de integrações atingido', noun: 'integração(ões)' },
+      };
+      const { title, noun } = copy[type];
+
+      await this.create(tenantId, {
+        type,
+        severity: 'warning',
+        title,
+        message: `Seu plano permite até ${limit} ${noun} e esse limite já foi atingido. Faça upgrade do plano para continuar.`,
+        metadata: { currentCount, limit },
+      });
+    } catch (error) {
+      console.error(
+        `[AlertRepository] Falha ao avaliar alerta de limite (tenant ${tenantId}, tipo ${type}): ${(error as Error).message}`,
+      );
+    }
+  }
 }

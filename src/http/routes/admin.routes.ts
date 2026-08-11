@@ -53,6 +53,9 @@ interface CreatePlanBody {
   readonly trialDays?: number;
   readonly isPublic?: boolean;
   readonly isActive?: boolean;
+  readonly maxUsers?: number | null;
+  readonly maxTeams?: number | null;
+  readonly maxIntegrations?: number | null;
 }
 
 interface UpdatePlanBody {
@@ -63,6 +66,9 @@ interface UpdatePlanBody {
   readonly trialDays?: number;
   readonly isPublic?: boolean;
   readonly isActive?: boolean;
+  readonly maxUsers?: number | null;
+  readonly maxTeams?: number | null;
+  readonly maxIntegrations?: number | null;
 }
 
 const BILLING_ERROR_STATUS: Record<BillingError['code'], number> = {
@@ -293,7 +299,8 @@ export function registerAdminRoutes(
     `${prefix}/plans`,
     { preHandler: [requirePlatformOperator] },
     async (request, reply) => {
-      const { name, displayName, priceCents, currency, billingPeriod, trialDays, isPublic, isActive } = request.body;
+      const { name, displayName, priceCents, currency, billingPeriod, trialDays, isPublic, isActive, maxUsers, maxTeams, maxIntegrations } =
+        request.body;
 
       if (!name || !displayName || priceCents === undefined || !currency || !billingPeriod) {
         return reply.status(400).send({
@@ -310,6 +317,9 @@ export function registerAdminRoutes(
         trialDays: trialDays ?? 0,
         isPublic: isPublic ?? true,
         isActive: isActive ?? true,
+        maxUsers: maxUsers ?? null,
+        maxTeams: maxTeams ?? null,
+        maxIntegrations: maxIntegrations ?? null,
       };
 
       const plan = await billingService.createPlan(input);

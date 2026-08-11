@@ -10,6 +10,8 @@ import { requireRole } from '../middleware/require-role';
 import { requireSameTenant } from '../middleware/require-same-tenant';
 import { NotificationService } from '../../notifications/notification.service';
 import { getPublicApiUrl } from '../../config/public-api-url';
+import { BillingService } from '../../billing/billing.service';
+import { AlertRepository } from '../../alerts/alert.repository';
 
 const VALID_SYSTEM_ROLES: readonly SystemRole[] = ['ADMIN', 'GESTOR', 'USUARIO'];
 const requireAdmin = requireRole('ADMIN');
@@ -103,6 +105,8 @@ export function registerUserRoutes(
   discoveredIdentityRepository: DiscoveredIdentityRepository = new DiscoveredIdentityRepository(),
   notificationService: NotificationService = new NotificationService(),
   tenantRepository: TenantRepository = new TenantRepository(),
+  billingService: BillingService = new BillingService(),
+  alertRepository: AlertRepository = new AlertRepository(),
 ): void {
   server.post<{ Params: TenantParams; Body: CreateUserBody }>(
     '/tenants/:tenantId/users',
@@ -129,6 +133,14 @@ export function registerUserRoutes(
         if (reply.sent) return;
         await requireSameTenant(request, reply);
         if (reply.sent) return;
+
+        const maxUsers = await billingService.getResourceLimit(tenantId, 'maxUsers');
+        if (maxUsers !== null && existingUserCount >= maxUsers) {
+          await alertRepository.evaluateResourceLimitAlert(tenantId, 'users_limit_reached', existingUserCount, maxUsers);
+          return reply
+            .status(403)
+            .send({ error: `Limite de usuários do plano atingido (${maxUsers}). Faça upgrade para convidar mais pessoas.` });
+        }
       }
 
       try {

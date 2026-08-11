@@ -10,6 +10,7 @@ import { isValidUuid } from '../uuid';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
 import { requireSameTenant } from '../middleware/require-same-tenant';
+import { BillingService } from '../../billing/billing.service';
 
 const requireAdmin = requireRole('ADMIN');
 const requireAdminOrManager = requireRole('ADMIN', 'GESTOR');
@@ -48,6 +49,7 @@ export function registerIntegrationRoutes(
   syncOrchestrator: SyncOrchestrator = new SyncOrchestrator(),
   runHistoryRepository: IntegrationRunHistoryRepository = new IntegrationRunHistoryRepository(),
   alertRepository: AlertRepository = new AlertRepository(),
+  billingService: BillingService = new BillingService(),
 ): void {
   server.post<{ Params: TenantParams; Body: RegisterIntegrationBody }>(
     '/tenants/:tenantId/integrations',
@@ -66,6 +68,20 @@ export function registerIntegrationRoutes(
       }
       if (!isPlainObject(credentials)) {
         return reply.status(400).send({ error: 'O campo "credentials" é obrigatório e deve ser um objeto.' });
+      }
+
+      const integrationCount = await integrationRepository.countByTenant(tenantId);
+      const maxIntegrations = await billingService.getResourceLimit(tenantId, 'maxIntegrations');
+      if (maxIntegrations !== null && integrationCount >= maxIntegrations) {
+        await alertRepository.evaluateResourceLimitAlert(
+          tenantId,
+          'integrations_limit_reached',
+          integrationCount,
+          maxIntegrations,
+        );
+        return reply.status(403).send({
+          error: `Limite de integrações do plano atingido (${maxIntegrations}). Faça upgrade para conectar mais ferramentas.`,
+        });
       }
 
       const providerInstance = ProviderFactory.create(provider);
