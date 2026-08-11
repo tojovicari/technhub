@@ -13,6 +13,7 @@ interface AlertRow {
   readonly title: string;
   readonly message: string;
   readonly integration_id: string | null;
+  readonly team_id: string | null;
   readonly metadata: unknown;
   readonly read_at: Date | null;
   readonly resolved_at: Date | null;
@@ -28,6 +29,7 @@ function mapRowToEntry(row: AlertRow): AlertEntry {
     title: row.title,
     message: row.message,
     integrationId: row.integration_id,
+    teamId: row.team_id,
     metadata: row.metadata,
     readAt: row.read_at,
     resolvedAt: row.resolved_at,
@@ -36,14 +38,20 @@ function mapRowToEntry(row: AlertRow): AlertEntry {
 }
 
 /**
- * Persistência de `alerts` (`db/migrations/0046_create_alerts.sql`) —
- * alertas in-app, não confundir com `src/notifications/` (e-mail outbound).
+ * Persistência de `alerts` (`db/migrations/0046_create_alerts.sql`,
+ * `0048_add_onboarding_alerts.sql`) — alertas in-app, não confundir com
+ * `src/notifications/` (e-mail outbound).
  *
- * `create`/`resolveOpenAlerts`/`evaluateReconnectionAlert` nunca lançam —
- * são chamados de dentro do caminho quente de sync/billing e não podem
- * derrubar uma operação que já rodou de verdade (mesmo espírito do
+ * `create`/`resolveOpenAlerts`/`evaluate*Alert` nunca lançam — são chamados
+ * de dentro do caminho quente de sync/billing/scan e não podem derrubar uma
+ * operação que já rodou de verdade (mesmo espírito do
  * `IntegrationRunHistoryRepository.record()`). `findAllByTenant`/`markRead`/
  * `markAllRead`/`hasOpenAlert` são de rota HTTP e podem lançar normalmente.
+ *
+ * Dedup/resolução de "alerta aberto" é sempre por `(tenant, type, subject)`,
+ * onde `subject` é `integrationId` (alertas de sync/reconexão) ou `teamId`
+ * (alertas de time) — os dois `null` identifica o alerta de onboarding,
+ * que é de nível de tenant, sem um recurso específico.
  */
 export class AlertRepository {
   constructor(private readonly pool: Pool = getPool()) {}
@@ -52,8 +60,8 @@ export class AlertRepository {
     try {
       await withTenantContext(this.pool, tenantId, (client) =>
         client.query(
-          `INSERT INTO alerts (tenant_id, type, severity, title, message, integration_id, metadata)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          `INSERT INTO alerts (tenant_id, type, severity, title, message, integration_id, team_id, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             tenantId,
             input.type,
@@ -61,6 +69,7 @@ export class AlertRepository {
             input.title,
             input.message,
             input.integrationId ?? null,
+            input.teamId ?? null,
             input.metadata !== undefined ? JSON.stringify(input.metadata) : null,
           ],
         ),
@@ -78,7 +87,7 @@ export class AlertRepository {
   ): Promise<readonly AlertEntry[]> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<AlertRow>(
-        `SELECT id, tenant_id, type, severity, title, message, integration_id, metadata, read_at, resolved_at, created_at
+        `SELECT id, tenant_id, type, severity, title, message, integration_id, team_id, metadata, read_at, resolved_at, created_at
          FROM alerts
          WHERE tenant_id = $1 AND ($2::boolean IS NOT TRUE OR read_at IS NULL)
          ORDER BY created_at DESC
@@ -110,26 +119,38 @@ export class AlertRepository {
     });
   }
 
-  async hasOpenAlert(tenantId: string, type: AlertType, integrationId: string | null): Promise<boolean> {
+  async hasOpenAlert(
+    tenantId: string,
+    type: AlertType,
+    integrationId: string | null,
+    teamId: string | null = null,
+  ): Promise<boolean> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query(
         `SELECT 1 FROM alerts
-         WHERE tenant_id = $1 AND type = $2 AND integration_id IS NOT DISTINCT FROM $3 AND resolved_at IS NULL
+         WHERE tenant_id = $1 AND type = $2 AND integration_id IS NOT DISTINCT FROM $3
+           AND team_id IS NOT DISTINCT FROM $4 AND resolved_at IS NULL
          LIMIT 1`,
-        [tenantId, type, integrationId],
+        [tenantId, type, integrationId, teamId],
       );
       return result.rows.length > 0;
     });
   }
 
-  /** Fecha (auto-resolve) qualquer alerta aberto deste tipo/integração. Nunca lança. */
-  async resolveOpenAlerts(tenantId: string, type: AlertType, integrationId: string | null): Promise<void> {
+  /** Fecha (auto-resolve) qualquer alerta aberto deste tipo/assunto. Nunca lança. */
+  async resolveOpenAlerts(
+    tenantId: string,
+    type: AlertType,
+    integrationId: string | null,
+    teamId: string | null = null,
+  ): Promise<void> {
     try {
       await withTenantContext(this.pool, tenantId, (client) =>
         client.query(
           `UPDATE alerts SET resolved_at = NOW()
-           WHERE tenant_id = $1 AND type = $2 AND integration_id IS NOT DISTINCT FROM $3 AND resolved_at IS NULL`,
-          [tenantId, type, integrationId],
+           WHERE tenant_id = $1 AND type = $2 AND integration_id IS NOT DISTINCT FROM $3
+             AND team_id IS NOT DISTINCT FROM $4 AND resolved_at IS NULL`,
+          [tenantId, type, integrationId, teamId],
         ),
       );
     } catch (error) {
@@ -174,6 +195,71 @@ export class AlertRepository {
     } catch (error) {
       console.error(
         `[AlertRepository] Falha ao avaliar alerta de reconexão (integração ${integrationId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Alerta de nível de tenant (sem `integrationId`/`teamId`): "workspace
+   * ainda não configurado" — nenhum time criado e ninguém além do ADMIN que
+   * criou a conta (`isBootstrap` em `users.routes.ts`) foi materializado.
+   * Resolve sozinho assim que qualquer uma das duas condições deixar de
+   * valer (criou um time OU convidou/materializou alguém). Nunca lança.
+   */
+  async evaluateOnboardingAlert(tenantId: string, teamCount: number, userCount: number): Promise<void> {
+    try {
+      const incomplete = teamCount === 0 && userCount <= 1;
+
+      if (!incomplete) {
+        await this.resolveOpenAlerts(tenantId, 'onboarding_incomplete', null);
+        return;
+      }
+      if (await this.hasOpenAlert(tenantId, 'onboarding_incomplete', null)) return;
+
+      await this.create(tenantId, {
+        type: 'onboarding_incomplete',
+        severity: 'info',
+        title: 'Finalize a configuração do seu workspace',
+        message:
+          'Seu workspace ainda não tem nenhum time criado nem outras pessoas convidadas além de você. Crie um time e convide sua equipe para começar a ver métricas de DORA e Flow.',
+        metadata: { teamCount, userCount },
+      });
+    } catch (error) {
+      console.error(`[AlertRepository] Falha ao avaliar alerta de onboarding (tenant ${tenantId}): ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Alerta por time: existe, mas não tem nenhuma linha em
+   * `team_memberships` — métricas escopadas a esse time (`?teamId=` no
+   * dashboard) ficam vazias não por falta de dado real, mas por falta de
+   * gente cadastrada nele. Resolve sozinho quando o time ganha o primeiro
+   * membro. Nunca lança.
+   */
+  async evaluateTeamContributorsAlert(
+    tenantId: string,
+    teamId: string,
+    teamName: string,
+    hasContributors: boolean,
+  ): Promise<void> {
+    try {
+      if (hasContributors) {
+        await this.resolveOpenAlerts(tenantId, 'team_without_contributors', null, teamId);
+        return;
+      }
+      if (await this.hasOpenAlert(tenantId, 'team_without_contributors', null, teamId)) return;
+
+      await this.create(tenantId, {
+        type: 'team_without_contributors',
+        severity: 'info',
+        title: 'Time sem contribuidores',
+        message: `O time "${teamName}" ainda não tem nenhum contribuidor cadastrado. Adicione membros a esse time para que as métricas dele comecem a ser calculadas.`,
+        teamId,
+        metadata: { teamId, teamName },
+      });
+    } catch (error) {
+      console.error(
+        `[AlertRepository] Falha ao avaliar alerta de contribuidores (time ${teamId}): ${(error as Error).message}`,
       );
     }
   }

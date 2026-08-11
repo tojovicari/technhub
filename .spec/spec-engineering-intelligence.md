@@ -269,9 +269,10 @@ Isolamento multi-tenant (Seção 1, Princípio 5) é garantido em duas camadas i
 
 Sistema de alertas operacionais dentro do produto (não confundir com `src/notifications/`, que é e-mail transacional outbound). Tabela tenant-scoped `alerts`, RLS no mesmo padrão da Seção 4.3, colunas principais:
 
-- `type` (`CHECK`, só 5 valores fechados): `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`.
+- `type` (`CHECK`, 7 valores fechados): `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `onboarding_incomplete`, `team_without_contributors`.
 - `severity` (`CHECK`): `info` | `warning` | `critical`.
-- `integration_id` — `NULL` para alertas de billing; `ON DELETE CASCADE` de `provider_integrations`.
+- `integration_id` — só preenchido em alertas de sync/reconexão; `ON DELETE CASCADE` de `provider_integrations`.
+- `team_id` (`0048_add_onboarding_alerts.sql`) — só preenchido em `team_without_contributors`; `ON DELETE CASCADE` de `teams`. Junto com `integration_id`, forma a chave de dedup/resolução de "alerta aberto" (`(tenant_id, type, integration_id, team_id)`, índice parcial `WHERE resolved_at IS NULL`) — os dois `NULL` identifica o único alerta de nível de tenant (`onboarding_incomplete`).
 - `read_at` — estado lido/não-lido é por **tenant**, não por usuário.
 - `resolved_at` — `NULL` = alerta aberto; preenchido quando a causa desaparece sozinha. Nunca é apagado (histórico).
 
@@ -281,6 +282,8 @@ Gatilhos (todos disparam via chamada direta de função, sem fila/pub-sub — me
 2. **`sync_run_finished`** — todo run de `SyncOrchestrator.runSyncForIntegration` (sucesso ou falha), manual ou em lote.
 3. **`integration_reconnect_required`** — `provider_integrations.consecutive_failures` (contador dedicado, já que `status` sozinho volta a `ACTIVE` no próximo sucesso) atinge um limiar fixo em código.
 4. **`billing_past_due`** / **`billing_subscription_expired`** — webhooks Stripe `invoice.payment_failed` e `customer.subscription.deleted`, só na transição real (não em retry do webhook).
+5. **`onboarding_incomplete`** — mesmo scan de `sync_stale`: tenant sem nenhum time (`teams`) e sem ninguém materializado além do ADMIN bootstrap (`users` count ≤ 1). Nível de tenant, `integration_id`/`team_id` sempre `NULL`.
+6. **`team_without_contributors`** — mesmo scan, por time: nenhuma linha em `team_memberships` para aquele `team_id`.
 
 Referência completa da API (endpoints, exemplos, limitações): `docs/alerts-api.md`.
 

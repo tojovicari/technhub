@@ -5,6 +5,9 @@ import { TenantRepository } from '../../identity/tenant.repository';
 import type { SyncContext } from '../../integrations/core/canonical.types';
 import { requireInternalToken } from '../middleware/require-internal-token';
 import { AlertRepository } from '../../alerts/alert.repository';
+import { UserRepository } from '../../identity/user.repository';
+import { TeamRepository } from '../../identity/team.repository';
+import { TeamMembershipRepository } from '../../identity/team-membership.repository';
 
 /** Integrações mais novas que isso são ignoradas pelo scan de staleness — dá tempo do primeiro sync rodar. */
 const STALE_SCAN_GRACE_PERIOD_MS = 60 * 60 * 1000;
@@ -37,6 +40,9 @@ export function registerInternalRoutes(
   integrationRepository: ProviderIntegrationRepository = new ProviderIntegrationRepository(),
   syncOrchestrator: SyncOrchestrator = new SyncOrchestrator(),
   alertRepository: AlertRepository = new AlertRepository(),
+  userRepository: UserRepository = new UserRepository(),
+  teamRepository: TeamRepository = new TeamRepository(),
+  teamMembershipRepository: TeamMembershipRepository = new TeamMembershipRepository(),
 ): void {
   /**
    * Avança **toda** integração `ACTIVE` *ou* `ERROR` de todo tenant `ACTIVE`
@@ -142,32 +148,44 @@ export function registerInternalRoutes(
   });
 
   /**
-   * Scan leve, read-only na maior parte (poucos INSERT/UPDATE condicionais) —
-   * dispara/fecha o alerta `sync_stale` pra toda integração ACTIVE/ERROR (não
-   * DISABLED) cujo `last_synced_at` não é de hoje. Dedup: só cria se não
-   * houver um alerta ABERTO já daquele tipo/integração; só resolve se
-   * existir um aberto e a integração voltou a estar "fresca".
+   * Scan leve, read-only na maior parte (poucos INSERT/UPDATE condicionais),
+   * rodado periodicamente (`.github/workflows/alerts-staleness-scan.yml`)
+   * pra tudo que precisa ser *checado* em vez de reagir a um evento — hoje
+   * três coisas, todas por tenant:
    *
-   * "Hoje" = data UTC do momento do scan, não o fuso do tenant.
+   * 1. `sync_stale` — dispara/fecha pra toda integração ACTIVE/ERROR (não
+   *    DISABLED) cujo `last_synced_at` não é de hoje. Integrações criadas
+   *    há menos de `STALE_SCAN_GRACE_PERIOD_MS` são ignoradas de propósito:
+   *    dar tempo do primeiro sync rodar antes de gritar "desatualizado".
+   * 2. `onboarding_incomplete` — tenant sem nenhum time e sem ninguém além
+   *    do ADMIN bootstrap (ver `AlertRepository.evaluateOnboardingAlert`).
+   * 3. `team_without_contributors` — cada time do tenant sem nenhuma linha
+   *    em `team_memberships` (ver `AlertRepository.evaluateTeamContributorsAlert`).
    *
-   * Integrações criadas há menos de `STALE_SCAN_GRACE_PERIOD_MS` são
-   * ignoradas de propósito: dar tempo do primeiro sync rodar antes de gritar
-   * "desatualizado" pra uma integração que acabou de ser cadastrada.
+   * Todos com o mesmo padrão de dedup: só cria se não houver um alerta
+   * ABERTO já daquele tipo/assunto; só resolve se existir um aberto e a
+   * condição deixou de valer. "Hoje" (item 1) é data UTC do momento do
+   * scan, não o fuso do tenant.
    */
   server.post('/internal/alerts/scan-stale', { preHandler: [requireInternalToken] }, async (_request, reply) => {
     const tenants = await tenantRepository.findAllActive();
     const todayUtc = new Date().toISOString().slice(0, 10);
 
     let integrationsScanned = 0;
+    let teamsScanned = 0;
     let alertsCreated = 0;
     let alertsResolved = 0;
 
     await Promise.all(
       tenants.map(async (tenant) => {
-        const integrations = await integrationRepository.listByTenant(tenant.id);
+        const [integrations, teams, userCount] = await Promise.all([
+          integrationRepository.listByTenant(tenant.id),
+          teamRepository.findAllByTenant(tenant.id),
+          userRepository.countByTenant(tenant.id),
+        ]);
 
-        await Promise.all(
-          integrations
+        await Promise.all([
+          ...integrations
             .filter((integration) => integration.status !== 'DISABLED')
             .filter((integration) => Date.now() - integration.createdAt.getTime() > STALE_SCAN_GRACE_PERIOD_MS)
             .map(async (integration) => {
@@ -200,10 +218,37 @@ export function registerInternalRoutes(
                 );
               }
             }),
-        );
+
+          (async () => {
+            const hadOpen = await alertRepository.hasOpenAlert(tenant.id, 'onboarding_incomplete', null);
+            await alertRepository.evaluateOnboardingAlert(tenant.id, teams.length, userCount);
+            const stillOpen = await alertRepository.hasOpenAlert(tenant.id, 'onboarding_incomplete', null);
+            if (!hadOpen && stillOpen) alertsCreated += 1;
+            if (hadOpen && !stillOpen) alertsResolved += 1;
+          })(),
+
+          ...teams.map(async (team) => {
+            teamsScanned += 1;
+            const memberships = await teamMembershipRepository.findByTeamWithUser(tenant.id, team.id);
+            const hasContributors = memberships.length > 0;
+
+            try {
+              const hadOpen = await alertRepository.hasOpenAlert(tenant.id, 'team_without_contributors', null, team.id);
+              await alertRepository.evaluateTeamContributorsAlert(tenant.id, team.id, team.name, hasContributors);
+              if (!hadOpen && !hasContributors) alertsCreated += 1;
+              if (hadOpen && hasContributors) alertsResolved += 1;
+            } catch (error) {
+              console.error(
+                `[internal/alerts/scan-stale] Falha ao avaliar contribuidores do time ${team.id}: ${(error as Error).message}`,
+              );
+            }
+          }),
+        ]);
       }),
     );
 
-    return reply.status(200).send({ tenantsScanned: tenants.length, integrationsScanned, alertsCreated, alertsResolved });
+    return reply
+      .status(200)
+      .send({ tenantsScanned: tenants.length, integrationsScanned, teamsScanned, alertsCreated, alertsResolved });
   });
 }

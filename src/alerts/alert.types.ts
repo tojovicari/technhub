@@ -3,7 +3,9 @@ export type AlertType =
   | 'sync_run_finished'
   | 'integration_reconnect_required'
   | 'billing_past_due'
-  | 'billing_subscription_expired';
+  | 'billing_subscription_expired'
+  | 'onboarding_incomplete'
+  | 'team_without_contributors';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 
@@ -15,6 +17,7 @@ export interface AlertEntry {
   readonly title: string;
   readonly message: string;
   readonly integrationId: string | null;
+  readonly teamId: string | null;
   readonly metadata: unknown;
   readonly readAt: Date | null;
   readonly resolvedAt: Date | null;
@@ -27,5 +30,6 @@ export interface CreateAlertInput {
   readonly title: string;
   readonly message: string;
   readonly integrationId?: string | null;
+  readonly teamId?: string | null;
   readonly metadata?: unknown;
 }

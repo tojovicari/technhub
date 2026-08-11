@@ -1,6 +1,6 @@
 # API de Alertas — referência pro time de front
 
-Documenta o sistema de alertas **in-app** (sem e-mail): uma lista de eventos operacionais por tenant — sync desatualizada, sync concluída, integração precisando reconexão e problemas de cobrança — pensada pra alimentar um sino de notificações na UI.
+Documenta o sistema de alertas **in-app** (sem e-mail): uma lista de eventos operacionais por tenant — sync desatualizada, sync concluída, integração precisando reconexão, problemas de cobrança e dois alertas de onboarding (workspace vazio, time sem contribuidores) — pensada pra alimentar um sino de notificações na UI.
 
 **Não confundir com `src/notifications/`** — aquele módulo existe há mais tempo e é outra coisa: e-mail transacional outbound (hoje só convite de usuário), sem nenhuma relação com o que está documentado aqui.
 
@@ -55,19 +55,36 @@ Authorization: Bearer <accessToken>
     "title": "Pagamento falhou",
     "message": "O pagamento da assinatura falhou. Regularize a cobrança para evitar suspensão do acesso.",
     "integrationId": null,
+    "teamId": null,
     "metadata": { "planId": "a1b2...", "pastDueSince": "2026-08-10T12:00:00.000Z" },
     "readAt": null,
     "resolvedAt": null,
     "createdAt": "2026-08-10T12:00:01.000Z"
+  },
+  {
+    "id": "7d3e1a80-...",
+    "tenantId": "c94be6fb-9a26-488a-a624-fb2c891c1168",
+    "type": "team_without_contributors",
+    "severity": "info",
+    "title": "Time sem contribuidores",
+    "message": "O time \"Plataforma\" ainda não tem nenhum contribuidor cadastrado. Adicione membros a esse time para que as métricas dele comecem a ser calculadas.",
+    "integrationId": null,
+    "teamId": "f67b8639-...",
+    "metadata": { "teamId": "f67b8639-...", "teamName": "Plataforma" },
+    "readAt": null,
+    "resolvedAt": null,
+    "createdAt": "2026-08-11T08:00:00.000Z"
   }
 ]
 ```
 
 ### Campos
 
-- **`type`** — um de `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`.
+- **`type`** — um de `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `onboarding_incomplete`, `team_without_contributors`.
 - **`severity`** — `info` | `warning` | `critical`.
-- **`integrationId`** — `null` pros dois tipos de billing (não ligados a uma integração). Nos tipos `sync_stale` e `integration_reconnect_required`, **use esse valor pra disparar a ação do alerta** (ver seção abaixo).
+- **`integrationId`** — só preenchido em `sync_stale`/`integration_reconnect_required`. Nesses dois tipos, **use esse valor pra disparar a ação do alerta** (ver seção abaixo).
+- **`teamId`** — só preenchido em `team_without_contributors`. Use pra linkar direto pro time (ex: `GET /tenants/:tenantId/dashboard/dora?teamId=...` ou a tela de membros do time) — não tem endpoint de ação associado, é só um ponteiro.
+- **`onboarding_incomplete`** é o único tipo tenant-level de verdade: `integrationId` e `teamId` sempre `null`.
 - **`metadata`** — formato livre por `type`, pensado pra debug/detalhe na UI, não pra lógica de negócio (não confiar em campos além dos documentados acima).
 - **`readAt`** — `null` = não lido. Estado é **por tenant, não por usuário**: qualquer ADMIN/GESTOR que marcar como lido, marca pra todo mundo.
 - **`resolvedAt`** — `null` = alerta aberto (a causa ainda existe). Preenchido = a causa desapareceu sozinha (sync voltou a rodar, integração voltou a sincronizar, cobrança foi regularizada). Um alerta resolvido continua na lista (histórico), só some do filtro `?unread=true` se também estiver lido.
@@ -95,11 +112,13 @@ Authorization: Bearer <accessToken>
 
 Um sync bem-sucedido resolve automaticamente qualquer alerta `sync_stale`/`integration_reconnect_required` aberto pra essa integração — não é preciso chamar nada além do sync.
 
+`onboarding_incomplete` e `team_without_contributors` **não têm ação associada** — são só um empurrão pra UI (texto estilo tutorial em `message`), resolvidos sozinhos quando o time é criado/ganha membro ou alguém é convidado, sem precisar de nenhuma chamada específica.
+
 ## Limitações conhecidas
 
 | Comportamento | Detalhe |
 | --- | --- |
-| Staleness não é tempo real | O alerta `sync_stale` nasce de um scan agendado (a cada ~4h), não de um monitor contínuo — pode levar até esse intervalo pra aparecer/sumir. |
+| Staleness não é tempo real | Os alertas `sync_stale`, `onboarding_incomplete` e `team_without_contributors` nascem do mesmo scan agendado (a cada ~4h), não de um monitor contínuo — pode levar até esse intervalo pra aparecer/sumir depois que a condição muda. |
 | "Hoje" é UTC, não o fuso do tenant | O scan compara `last_synced_at` contra a data UTC corrente, não o fuso horário do tenant. |
 | `sync_run_finished` pode ser barulhento | Dispara em **todo** run de sync, inclusive os do disparo em lote/cron — considerar agrupar/filtrar na UI se o volume incomodar. |
 | `limit` corta a resposta, não o total de não-lidos | O cap (`?limit=`) limita quantos alertas voltam nessa chamada, não quantos existem — um tenant com muito alerta acumulado pode ter mais não-lidos do que o `limit` mostra. Não é paginação de cursor de verdade (sem `?cursor=`/`?offset=`), só um teto. |

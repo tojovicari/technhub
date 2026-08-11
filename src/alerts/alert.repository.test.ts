@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { getPool } from '../database/pool';
 import { TenantRepository } from '../identity/tenant.repository';
 import { ProviderIntegrationRepository } from '../integrations/repositories/provider-integration.repository';
+import { TeamRepository } from '../identity/team.repository';
 import { AlertRepository, RECONNECT_FAILURE_THRESHOLD } from './alert.repository';
 
 /**
@@ -14,6 +15,7 @@ describe('AlertRepository', () => {
   const pool = getPool();
   const tenantRepository = new TenantRepository();
   const integrationRepository = new ProviderIntegrationRepository();
+  const teamRepository = new TeamRepository();
   const alertRepository = new AlertRepository();
 
   let tenantAId: string;
@@ -36,6 +38,9 @@ describe('AlertRepository', () => {
 
   after(async () => {
     await pool.query('DELETE FROM alerts WHERE tenant_id = ANY($1)', [[tenantAId, tenantBId]]);
+    // teams.tenant_id não tem ON DELETE CASCADE (diferente de provider_integrations) —
+    // precisa limpar antes de apagar o tenant, senão a FK barra o DELETE.
+    await pool.query('DELETE FROM teams WHERE tenant_id = ANY($1)', [[tenantAId, tenantBId]]);
     await pool.query('DELETE FROM tenants WHERE id = ANY($1)', [[tenantAId, tenantBId]]);
     await pool.end();
   });
@@ -142,5 +147,38 @@ describe('AlertRepository', () => {
       await alertRepository.hasOpenAlert(tenantAId, 'integration_reconnect_required', integrationId),
       false,
     );
+  });
+
+  it('evaluateOnboardingAlert: só cria quando 0 times e ≤1 usuário, resolve quando qualquer um deixa de valer', async () => {
+    await alertRepository.evaluateOnboardingAlert(tenantAId, 0, 1);
+    assert.equal(await alertRepository.hasOpenAlert(tenantAId, 'onboarding_incomplete', null), true);
+
+    // Reavaliar com a mesma condição não deve duplicar.
+    await alertRepository.evaluateOnboardingAlert(tenantAId, 0, 1);
+    const open = (await alertRepository.findAllByTenant(tenantAId)).filter(
+      (a) => a.type === 'onboarding_incomplete' && a.resolvedAt === null,
+    );
+    assert.equal(open.length, 1);
+
+    // Ganhar um time resolve, mesmo com userCount ainda ≤1.
+    await alertRepository.evaluateOnboardingAlert(tenantAId, 1, 1);
+    assert.equal(await alertRepository.hasOpenAlert(tenantAId, 'onboarding_incomplete', null), false);
+  });
+
+  it('evaluateTeamContributorsAlert: cria por time sem membro, resolve quando ganha um', async () => {
+    const team = await teamRepository.create(tenantAId, { name: `Time sem contribuidor ${Date.now()}` });
+
+    await alertRepository.evaluateTeamContributorsAlert(tenantAId, team.id, team.name, false);
+    assert.equal(await alertRepository.hasOpenAlert(tenantAId, 'team_without_contributors', null, team.id), true);
+
+    // Reavaliar sem mudança não duplica.
+    await alertRepository.evaluateTeamContributorsAlert(tenantAId, team.id, team.name, false);
+    const open = (await alertRepository.findAllByTenant(tenantAId)).filter(
+      (a) => a.type === 'team_without_contributors' && a.teamId === team.id && a.resolvedAt === null,
+    );
+    assert.equal(open.length, 1);
+
+    await alertRepository.evaluateTeamContributorsAlert(tenantAId, team.id, team.name, true);
+    assert.equal(await alertRepository.hasOpenAlert(tenantAId, 'team_without_contributors', null, team.id), false);
   });
 });
