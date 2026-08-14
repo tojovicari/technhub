@@ -94,11 +94,11 @@ Authorization: Bearer <accessToken>
 
 ### Campos
 
-- **`type`** — um de `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`, `onboarding_incomplete`, `team_without_contributors`, `users_limit_reached`, `teams_limit_reached`, `integrations_limit_reached`.
+- **`type`** — um de `sync_stale`, `sync_run_finished`, `integration_reconnect_required`, `billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`, `billing_plan_changed_to_free`, `onboarding_incomplete`, `team_without_contributors`, `users_limit_reached`, `teams_limit_reached`, `integrations_limit_reached`.
 - **`severity`** — `info` | `warning` | `critical`.
 - **`integrationId`** — só preenchido em `sync_stale`/`integration_reconnect_required`. Nesses dois tipos, **use esse valor pra disparar a ação do alerta** (ver seção abaixo).
 - **`teamId`** — só preenchido em `team_without_contributors`. Use pra linkar direto pro time (ex: `GET /tenants/:tenantId/dashboard/dora?teamId=...` ou a tela de membros do time) — não tem endpoint de ação associado, é só um ponteiro.
-- Tipos de nível de tenant (sem recurso específico associado — `integrationId` e `teamId` sempre `null`): `onboarding_incomplete`, `billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`.
+- Tipos de nível de tenant (sem recurso específico associado — `integrationId` e `teamId` sempre `null`): `onboarding_incomplete`, `billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`, `billing_plan_changed_to_free`.
 - **`metadata`** — formato livre por `type`, pensado pra debug/detalhe na UI, não pra lógica de negócio (não confiar em campos além dos documentados acima).
 - **`readAt`** — `null` = não lido. Estado é **por tenant, não por usuário**: qualquer ADMIN/GESTOR que marcar como lido, marca pra todo mundo.
 - **`resolvedAt`** — `null` = alerta aberto (a causa ainda existe). Preenchido = a causa desapareceu sozinha (sync voltou a rodar, integração voltou a sincronizar, cobrança foi regularizada). Um alerta resolvido continua na lista (histórico), só some do filtro `?unread=true` se também estiver lido.
@@ -126,11 +126,13 @@ Authorization: Bearer <accessToken>
 
 Um sync bem-sucedido resolve automaticamente qualquer alerta `sync_stale`/`integration_reconnect_required` aberto pra essa integração — não é preciso chamar nada além do sync.
 
-`onboarding_incomplete`, `team_without_contributors`, os três `*_limit_reached` e os quatro tipos de billing (`billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`) **não têm ação associada** — são só um empurrão pra UI (texto estilo tutorial em `message`), resolvidos sozinhos quando o time é criado/ganha membro, alguém é convidado, o plano é ampliado/recursos são removidos, ou a cobrança se regulariza.
+`onboarding_incomplete`, `team_without_contributors`, os três `*_limit_reached` e os cinco tipos de billing (`billing_past_due`, `billing_subscription_expired`, `billing_subscription_confirmed`, `billing_subscription_cancelled`, `billing_plan_changed_to_free`) **não têm ação associada** — são só um empurrão pra UI (texto estilo tutorial em `message`), resolvidos sozinhos quando o time é criado/ganha membro, alguém é convidado, o plano é ampliado/recursos são removidos, ou a cobrança se regulariza.
 
 **`users_limit_reached` / `teams_limit_reached` / `integrations_limit_reached`**: diferente dos outros, esses três também causam um **`403` na hora**, não só o alerta — `POST /tenants/:tenantId/users`, `POST /tenants/:tenantId/teams` e `POST /tenants/:tenantId/integrations` bloqueiam a criação assim que a contagem atual do tenant atinge `plans.maxUsers`/`maxTeams`/`maxIntegrations` (`null` = ilimitado). O corpo do `403` é `{ "error": "Limite de <recurso> do plano atingido (N). Faça upgrade para <ação>." }` — a UI pode mostrar esse texto direto ou tratar o `403` como sinal pra abrir o fluxo de upgrade.
 
 **`billing_subscription_confirmed`**: dispara uma vez, na confirmação inicial de um checkout concluído (upgrade self-service ou link enterprise — é o mesmo evento Stripe pros dois casos) — não dispara de novo em toda renovação mensal rotineira, só na primeira confirmação (ou troca de plano). **`billing_subscription_cancelled`**: dispara tanto quando o próprio ADMIN cancela pela UI quanto quando o cancelamento vem "de surpresa" via Portal do Stripe — `message` já traz até quando o acesso continua (`metadata.accessUntil`).
+
+**`billing_plan_changed_to_free`** (novo): dispara quando o tenant é movido direto pra um plano `priceCents: 0` — pelo painel do gestor do SaaS (`POST {prefix}/tenants/:tenantId/assign-free-plan`) ou pelo self-service do próprio `ADMIN` (`POST /tenants/:tenantId/billing/downgrade-to-free`). Diferente dos outros tipos de billing, esse é o único caminho pra sair de uma assinatura `cancelled`/`expired` sem passar pelo Stripe — `metadata.planId` traz o novo plano.
 
 ## Limitações conhecidas
 

@@ -8,6 +8,7 @@ export type PlatformOperatorAuditAction =
   | 'CREATE_PLAN'
   | 'UPDATE_PLAN'
   | 'CREATE_ENTERPRISE_CHECKOUT_LINK'
+  | 'ASSIGN_FREE_PLAN'
   | 'START_IMPERSONATION'
   | 'END_IMPERSONATION'
   /**

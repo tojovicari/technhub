@@ -10,7 +10,8 @@ export type AlertType =
   | 'teams_limit_reached'
   | 'integrations_limit_reached'
   | 'billing_subscription_confirmed'
-  | 'billing_subscription_cancelled';
+  | 'billing_subscription_cancelled'
+  | 'billing_plan_changed_to_free';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 

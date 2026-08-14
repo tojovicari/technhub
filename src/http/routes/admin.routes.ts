@@ -78,6 +78,10 @@ interface CreateEnterpriseCheckoutLinkBody {
   readonly contactEmail?: string;
 }
 
+interface AssignFreePlanBody {
+  readonly planId?: string;
+}
+
 const BILLING_ERROR_STATUS: Record<BillingError['code'], number> = {
   NOT_FOUND: 404,
   VALIDATION_ERROR: 400,
@@ -330,6 +334,43 @@ export function registerAdminRoutes(
           targetTenantId: request.params.tenantId,
         });
         return reply.status(200).send(result);
+      } catch (error) {
+        if (error instanceof BillingError) {
+          return reply.status(BILLING_ERROR_STATUS[error.code]).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  /**
+   * Move o tenant direto pra um plano sem cobrança (`priceCents: 0`) — sem
+   * Checkout Session, já que não tem pagamento nenhum pra proteger. Único
+   * caminho pra sair de um plano pago (ou de uma assinatura `cancelled`/
+   * `expired`, que ficavam presas no `plan_id` antigo pra sempre) sem
+   * passar pelo Stripe. Ver `BillingService.assignFreePlan`.
+   */
+  server.post<{ Params: TenantIdParams; Body: AssignFreePlanBody }>(
+    `${prefix}/tenants/:tenantId/assign-free-plan`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const { tenantId } = request.params;
+      const { planId } = request.body;
+
+      if (!planId) {
+        return reply.status(400).send({ error: 'O campo "planId" é obrigatório.' });
+      }
+
+      try {
+        const subscription = await billingService.assignFreePlan(tenantId, planId);
+        await auditLogRepository.record({
+          operatorExternalUserId: request.platformOperator!.externalUserId,
+          operatorEmail: request.platformOperator!.primaryEmail,
+          action: 'ASSIGN_FREE_PLAN',
+          targetTenantId: tenantId,
+          metadata: { planId },
+        });
+        return reply.status(200).send(subscription);
       } catch (error) {
         if (error instanceof BillingError) {
           return reply.status(BILLING_ERROR_STATUS[error.code]).send({ error: error.message });

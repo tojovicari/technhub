@@ -155,6 +155,17 @@ export class BillingService {
     const subscription = await this.subscriptionRepository.findByTenantId(tenantId);
     if (!subscription) return null;
 
+    // Assinatura `expired` (terminal, sem Stripe subscription viva por trás)
+    // resolve contra os limites do Free até alguém mover o plano de
+    // verdade — sem isso, um tenant expirado continuaria com os limites do
+    // plano pago antigo indefinidamente. `past_due`/`cancelled` continuam
+    // resolvendo pelo plano atual de propósito: acesso ainda vale durante a
+    // graça de pagamento / até `currentPeriodEnd`.
+    if (subscription.status === 'expired') {
+      const freePlan = await this.planRepository.findByName('free');
+      return freePlan ? freePlan[resource] : null;
+    }
+
     const plan = await this.planRepository.findById(subscription.planId);
     if (!plan) return null;
 
@@ -336,6 +347,86 @@ export class BillingService {
     });
 
     return { subscription: updated, accessUntil: updated.currentPeriodEnd };
+  }
+
+  /**
+   * Move um tenant direto pra um plano sem cobrança (`priceCents: 0`) —
+   * único caminho que existe pra isso hoje. `createCheckoutSession`/
+   * `createEnterpriseCheckoutLink` exigem `plan.stripePriceId`, que um
+   * plano `priceCents: 0` nunca tem (mesma convenção do seed do Free);
+   * `cancelSubscription`/o webhook `customer.subscription.deleted` também
+   * nunca reatribuem `plan_id` — um tenant cancelado/expirado ficava preso
+   * no `plan_id` pago antigo pra sempre, sem nenhuma saída. Sem Stripe
+   * Checkout Session de propósito: não tem pagamento nenhum pra proteger
+   * aqui, diferente do motivo que exige Checkout Session pros planos pagos.
+   *
+   * Cancela a assinatura Stripe (se houver) imediatamente, não
+   * `cancel_at_period_end` como `cancelSubscription` — o tenant já está de
+   * saída do plano pago agora, não faz sentido continuar cobrando até
+   * `currentPeriodEnd`.
+   */
+  async assignFreePlan(tenantId: string, planId: string): Promise<Subscription> {
+    const plan = await this.planRepository.findById(planId);
+    if (!plan) {
+      throw new BillingError('Plano não encontrado.', 'NOT_FOUND');
+    }
+    if (plan.priceCents !== 0) {
+      throw new BillingError(
+        'Este endpoint só assume planos sem cobrança (priceCents: 0). Para planos pagos, use checkout ou enterprise-checkout-link.',
+        'VALIDATION_ERROR',
+      );
+    }
+
+    const subscription = await this.subscriptionRepository.findByTenantId(tenantId);
+    if (!subscription) {
+      throw new BillingError('Assinatura não encontrada.', 'NOT_FOUND');
+    }
+
+    if (
+      subscription.provider === 'stripe' &&
+      subscription.providerSubscriptionId &&
+      subscription.status !== 'expired'
+    ) {
+      const stripe = getStripeClient();
+      await stripe.subscriptions.cancel(subscription.providerSubscriptionId);
+    }
+
+    const now = new Date();
+    const updated = await this.subscriptionRepository.update(tenantId, {
+      planId,
+      status: 'active',
+      cancelledAt: null,
+      pastDueSince: null,
+      currentPeriodStart: now,
+      currentPeriodEnd: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+    });
+    if (!updated) {
+      throw new BillingError('Assinatura não encontrada.', 'NOT_FOUND');
+    }
+
+    await this.subscriptionHistoryRepository.create(tenantId, {
+      subscriptionId: updated.id,
+      planId: updated.planId,
+      status: updated.status,
+      reason: 'moved_to_free_plan',
+    });
+    await this.billingEventRepository.create(tenantId, { eventType: 'subscription.moved_to_free_plan' });
+    await this.alertRepository.create(tenantId, {
+      type: 'billing_plan_changed_to_free',
+      severity: 'info',
+      title: 'Plano alterado',
+      message: `Seu plano foi alterado para "${plan.displayName}" (sem cobrança).`,
+      metadata: { planId },
+    });
+
+    // Nenhum desses alertas ainda faz sentido depois da troca pra um plano
+    // sem cobrança — mesmo espírito de `onCheckoutCompleted` resolvendo
+    // `billing_subscription_cancelled` numa confirmação nova.
+    await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_past_due', null);
+    await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_subscription_cancelled', null);
+    await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_subscription_expired', null);
+
+    return updated;
   }
 
   /**

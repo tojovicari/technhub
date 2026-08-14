@@ -22,6 +22,10 @@ interface PortalBody {
   readonly returnUrl?: string;
 }
 
+interface DowngradeToFreeBody {
+  readonly planId?: string;
+}
+
 const BILLING_ERROR_STATUS: Record<BillingError['code'], number> = {
   NOT_FOUND: 404,
   VALIDATION_ERROR: 400,
@@ -140,6 +144,36 @@ export function registerBillingRoutes(
 
       try {
         const result = await billingService.cancelSubscription(tenantId);
+        return reply.status(200).send(result);
+      } catch (error) {
+        if (error instanceof BillingError) {
+          return reply.status(BILLING_ERROR_STATUS[error.code]).send({ error: error.message });
+        }
+        throw error;
+      }
+    },
+  );
+
+  /**
+   * Move o próprio tenant direto pra um plano sem cobrança (`priceCents: 0`)
+   * — sem Checkout Session, já que não tem pagamento nenhum pra proteger.
+   * Mesmo método usado pelo painel do gestor do SaaS
+   * (`POST {prefix}/tenants/:tenantId/assign-free-plan`), ver
+   * `BillingService.assignFreePlan`.
+   */
+  server.post<{ Params: TenantParams; Body: DowngradeToFreeBody }>(
+    '/tenants/:tenantId/billing/downgrade-to-free',
+    { preHandler: [requireAuth, requireAdmin, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId } = request.params;
+      const { planId } = request.body;
+
+      if (!planId) {
+        return reply.status(400).send({ error: 'O campo "planId" é obrigatório.' });
+      }
+
+      try {
+        const result = await billingService.assignFreePlan(tenantId, planId);
         return reply.status(200).send(result);
       } catch (error) {
         if (error instanceof BillingError) {
