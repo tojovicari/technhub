@@ -25,6 +25,24 @@ deliberadas desta rodada, pra revisar quando fizer sentido:
    cadeia não resolve — o `parentExternalId` aponta pra um `externalId`
    que só existe no lookup de outra integração, fora do alcance de
    `resolveEpicGroup`.
+2.1. **Confirmado com dado real (`GET .../users/:userId/profile/epics` contra
+   tenant real): um épico pode nunca ser sincronizado nem dentro do mesmo
+   projeto** — `parentExternalId` aponta certo pra um `external_id`, mas
+   esse `external_id` nunca existe em `canonical_work_items` (34 de 34
+   itens testados, 0 resolveram épico). Causa: o backfill do Jira só varre
+   `DEFAULT_BACKFILL_DEPTH_DAYS = 365` dias por `created`
+   (`backfill-window.ts`), e depois disso o sync vira permanentemente
+   incremental por `updated`. Um épico criado há mais de 365 dias e raramente
+   editado (comum — épicos costumam ser estáveis, quem muda com frequência
+   são os itens filho) fica fora tanto do backfill quanto do incremental,
+   **pra sempre**, mesmo que os filhos dele continuem sincronizando
+   normalmente. Não é um caso raro/de borda — é o comportamento esperado
+   pra qualquer épico "maduro" que ninguém mais toca. Não corrigido nesta
+   rodada; possíveis caminhos: (a) o backfill de work items passar a
+   considerar também `updated` do épico raiz, não só `created` do item
+   sendo sincronizado; (b) uma sync dedicada, mais rasa, só pra work items
+   tipo "épico" (JQL `issuetype = Epic`, sem o filtro de janela normal,
+   já que o volume de épicos por projeto costuma ser pequeno).
 3. **Azure Boards `$expand: 'relations'` não verificado ao vivo** — mesma
    ressalva já registrada pros outros pontos incertos do conector
    (`azure-boards.provider.ts`). Não confirmado se a API realmente devolve

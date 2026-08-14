@@ -83,4 +83,24 @@ export function registerPersonProfileRoutes(
       return reply.status(200).send(history);
     },
   );
+
+  /**
+   * Quebra de `semantic_category` por épico, cruzando todos os
+   * times/projetos que a pessoa toca — inverso de
+   * `.../teams/:teamId/profile/epics`. Mesmo RBAC do `/profile`.
+   */
+  server.get<{ Params: TenantUserParams }>(
+    '/tenants/:tenantId/users/:userId/profile/epics',
+    { preHandler: [requireAuth, requireSelfOrAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, userId } = request.params;
+
+      const breakdown = await personProfileService.getEpicBreakdown(tenantId, userId);
+      if (!breakdown) {
+        return reply.status(404).send({ error: 'Usuário não encontrado.' });
+      }
+
+      return reply.status(200).send(breakdown);
+    },
+  );
 }

@@ -6,6 +6,9 @@ import { TeamRepository } from '../identity/team.repository';
 import { TeamMembershipRepository } from '../identity/team-membership.repository';
 import type { User } from '../identity/identity.types';
 import { computeLifetimeStats } from './lifetime-stats.util';
+import { buildEpicBreakdown } from './epic-breakdown.util';
+import type { EpicBreakdownMetric } from './team-profile.service';
+import type { UnavailableMetric } from './dashboard.service';
 
 export interface PersonProfileAlias {
   readonly id: string;
@@ -295,6 +298,52 @@ export class PersonProfileService {
         : { available: true, hoursThisMonth: toilHours, capacityHours, ratio: capacityHours > 0 ? toilHours / capacityHours : 0 };
 
     return { ...baseProfile, period: periodEcho, summary, toil, byTeam };
+  }
+
+  /**
+   * Quebra de `semantic_category` por épico — inverso de
+   * `TeamProfileService.getEpicBreakdown` (por pessoa, cruzando todos os
+   * times/projetos que ela toca, em vez de um `team_id` só). Mesma
+   * agregação (`buildEpicBreakdown`), só a query muda: casa por alias da
+   * pessoa (`assignee_external_id`) em vez de filtrar por `team_id`.
+   */
+  async getEpicBreakdown(tenantId: string, userId: string): Promise<EpicBreakdownMetric | UnavailableMetric | null> {
+    const user = await this.userRepository.findById(tenantId, userId);
+    if (!user) {
+      return null;
+    }
+
+    const aliases = await this.userProviderAliasRepository.findByUserId(tenantId, userId);
+    if (aliases.length === 0) {
+      return { available: false, reason: 'Pessoa sem nenhuma identidade externa vinculada ainda.' };
+    }
+
+    const providers = aliases.map((alias) => alias.provider);
+    const externalIds = aliases.map((alias) => alias.externalUserId);
+
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{
+        epic_external_id: string | null;
+        epic_external_name: string | null;
+        semantic_category: string;
+        count: string;
+      }>(
+        `SELECT ewi.epic_external_id, ewi.epic_external_name, ewi.semantic_category, count(*) AS count
+         FROM canonical_work_items cwi
+         JOIN enriched_work_items ewi ON ewi.id = cwi.id
+         JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
+           ON pa.provider = cwi.provider AND pa.external_id = cwi.assignee_external_id
+         WHERE ewi.is_epic_container = false
+         GROUP BY ewi.epic_external_id, ewi.epic_external_name, ewi.semantic_category`,
+        [providers, externalIds],
+      );
+
+      if (result.rows.length === 0) {
+        return { available: false, reason: 'Nenhum work item enriquecido atribuído a essa pessoa ainda.' };
+      }
+
+      return { available: true, epics: buildEpicBreakdown(result.rows) };
+    });
   }
 
   /**

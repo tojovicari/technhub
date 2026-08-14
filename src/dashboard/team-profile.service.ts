@@ -7,6 +7,7 @@ import type { FlowDistributionEntry, UnavailableMetric } from './dashboard.servi
 import { MappingRulesRepository } from '../enrichment/mapping-rules.repository';
 import { evaluateWorkItemType, evaluateWorkflowState } from '../enrichment/rule-evaluator';
 import { computeLifetimeStats } from './lifetime-stats.util';
+import { buildEpicBreakdown } from './epic-breakdown.util';
 
 export interface DeploymentSuccessRateMetric {
   readonly available: true;
@@ -361,37 +362,7 @@ export class TeamProfileService {
         return EPIC_BREAKDOWN_UNAVAILABLE;
       }
 
-      const byEpicId = new Map<
-        string,
-        { readonly epic: { readonly id: string; readonly name: string | null } | null; readonly counts: Map<string, number> }
-      >();
-
-      for (const row of result.rows) {
-        const key = row.epic_external_id ?? '';
-        const existing = byEpicId.get(key);
-        const counts = existing?.counts ?? new Map<string, number>();
-        counts.set(row.semantic_category, Number(row.count));
-
-        if (!existing) {
-          byEpicId.set(key, {
-            epic: row.epic_external_id ? { id: row.epic_external_id, name: row.epic_external_name } : null,
-            counts,
-          });
-        }
-      }
-
-      const epics: EpicWorkBreakdown[] = [...byEpicId.values()].map(({ epic, counts }) => {
-        const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-        const byCategory = [...counts.entries()]
-          .map(([category, count]) => ({ category, count, share: count / total }))
-          .sort((a, b) => a.category.localeCompare(b.category));
-
-        return { epic, total, byCategory };
-      });
-
-      epics.sort((a, b) => (a.epic?.name ?? a.epic?.id ?? '').localeCompare(b.epic?.name ?? b.epic?.id ?? ''));
-
-      return { available: true, epics };
+      return { available: true, epics: buildEpicBreakdown(result.rows) };
     });
   }
 
