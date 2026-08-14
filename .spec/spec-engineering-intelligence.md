@@ -32,21 +32,23 @@ sem alterações (Língua Franca) Domínio/Mapeamentos Flow, SPACE e Ops
 
 O sistema integra 5 categorias de ferramentas para cobrir os principais frameworks da indústria:
 
-- Issue Trackers: Jira / Linear
-- Version Control: GitHub / GitLab
-- CI / CD: GitHub Actions / ArgoCD
+- Issue Trackers: Jira / Linear / Azure Boards
+- Version Control: GitHub / GitLab / Azure Repos
+- CI / CD: GitHub Actions / ArgoCD / Azure Pipelines
 - Incident Mgmt: Waroom / PagerDuty
 - Communication: Slack / Microsoft Teams
 
+Azure Boards, Azure Repos e Azure Pipelines cobrem, juntos, as 3 categorias acima como conectores independentes (`azure_boards`, `azure_repos`, `azure_pipelines`) — mesmo padrão do par GitHub/GitHub Actions. Construídos sem credencial real de teste (mesmo regime do ArgoCD): ver `docs/BACKLOG.md` para os pontos ainda não verificados ao vivo.
+
 ### Matriz de Mapeamento Metrológico:
 
-| Categoria       | Provedores Suportados (MVP) | Métricas / Dimensões Atendidas                                                                                            |
-| :-------------- | :-------------------------- | :------------------------------------------------------------------------------------------------------------------------ |
-| Issue Tracker   | Jira, Linear                | Flow Metrics: Velocity, Distribution, Load (WIP), Time.<br>SPACE: Activity.<br>Operacionais: Toil, Retrabalho.            |
-| Version Control | GitHub, GitLab              | DORA: Lead Time for Changes.<br>SPACE: Activity, Communication & Collaboration.<br>Operacionais: Code Churn / Retrabalho. |
-| CI / CD         | GitHub Actions, ArgoCD      | DORA: Deployment Frequency.                                                                                               |
-| Incidents       | Waroom, PagerDuty           | DORA: Change Failure Rate, MTTR (Failed Service Recovery).                                                                |
-| Communication   | Slack, Microsoft Teams      | SPACE: Communication & Collaboration, Efficiency & Flow (Interrupções/Suporte e Atividade Fora do Horário).               |
+| Categoria       | Provedores Suportados (MVP)          | Métricas / Dimensões Atendidas                                                                                            |
+| :-------------- | :------------------------------------ | :------------------------------------------------------------------------------------------------------------------------ |
+| Issue Tracker   | Jira, Linear, Azure Boards           | Flow Metrics: Velocity, Distribution, Load (WIP), Time.<br>SPACE: Activity.<br>Operacionais: Toil, Retrabalho.            |
+| Version Control | GitHub, GitLab, Azure Repos          | DORA: Lead Time for Changes.<br>SPACE: Activity, Communication & Collaboration.<br>Operacionais: Code Churn / Retrabalho. |
+| CI / CD         | GitHub Actions, ArgoCD, Azure Pipelines | DORA: Deployment Frequency.                                                                                            |
+| Incidents       | Waroom, PagerDuty                    | DORA: Change Failure Rate, MTTR (Failed Service Recovery).                                                                |
+| Communication   | Slack, Microsoft Teams               | SPACE: Communication & Collaboration, Efficiency & Flow (Interrupções/Suporte e Atividade Fora do Horário).               |
 
 ---
 

@@ -13,6 +13,12 @@ import '../integrations/providers/waroom/waroom.provider';
 import '../integrations/providers/github-actions/github-actions.provider';
 // Efeito colateral: registra ArgoCDProvider no ProviderFactory.
 import '../integrations/providers/argocd/argocd.provider';
+// Efeito colateral: registra AzureBoardsProvider no ProviderFactory.
+import '../integrations/providers/azure-boards/azure-boards.provider';
+// Efeito colateral: registra AzureReposProvider no ProviderFactory.
+import '../integrations/providers/azure-repos/azure-repos.provider';
+// Efeito colateral: registra AzurePipelinesProvider no ProviderFactory.
+import '../integrations/providers/azure-pipelines/azure-pipelines.provider';
 // Efeito colateral: registra GitHubAuthProvider no AuthProviderFactory (login).
 import '../auth/providers/github/github-auth.provider';
 // Efeito colateral: registra ResendEmailProvider no NotificationProviderFactory.

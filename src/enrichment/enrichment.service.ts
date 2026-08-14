@@ -215,6 +215,7 @@ export class EnrichmentService {
   ): { readonly provider: ExternalResourceProvider; readonly resourceType: ExternalResourceType } | null {
     if (provider === 'jira') return { provider: 'jira', resourceType: 'jira_project' };
     if (provider === 'linear') return { provider: 'linear', resourceType: 'linear_team' };
+    if (provider === 'azure_boards') return { provider: 'azure_boards', resourceType: 'azure_boards_project' };
     return null;
   }
 
@@ -231,6 +232,7 @@ export class EnrichmentService {
   ): { readonly provider: ExternalResourceProvider; readonly resourceType: ExternalResourceType } | null {
     if (provider === 'argocd') return { provider: 'argocd', resourceType: 'argocd_project' };
     if (provider === 'github_actions') return { provider: 'github', resourceType: 'github_repository' };
+    if (provider === 'azure_pipelines') return { provider: 'azure_pipelines', resourceType: 'azure_pipelines_project' };
     return null;
   }
 

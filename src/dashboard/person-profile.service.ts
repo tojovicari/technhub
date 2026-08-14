@@ -356,7 +356,7 @@ export class PersonProfileService {
           `SELECT cpr.merged_at
            FROM canonical_pull_requests cpr
            JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
-             ON pa.provider = 'github' AND pa.external_id = cpr.author_external_id
+             ON pa.provider = cpr.provider AND pa.external_id = cpr.author_external_id
            WHERE cpr.state = 'MERGED'`,
           [providers, externalIds],
         ),
@@ -464,9 +464,11 @@ export class PersonProfileService {
         `SELECT trl.team_id, count(*) AS merged
          FROM canonical_pull_requests cpr
          JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
-           ON pa.provider = 'github' AND pa.external_id = cpr.author_external_id
+           ON pa.provider = cpr.provider AND pa.external_id = cpr.author_external_id
          LEFT JOIN team_resource_links trl
-           ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+           ON trl.provider = cpr.provider
+           AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+           AND trl.external_resource_id = cpr.repository
          WHERE cpr.state = 'MERGED'
            AND ($3::timestamptz IS NULL OR (cpr.merged_at IS NOT NULL AND cpr.merged_at BETWEEN $3 AND $4))
          GROUP BY trl.team_id`,
@@ -481,9 +483,11 @@ export class PersonProfileService {
         `SELECT trl.team_id, count(*) AS reviewed
          FROM canonical_pull_requests cpr
          JOIN unnest($1::text[], $2::text[]) AS pa(provider, external_id)
-           ON pa.provider = 'github' AND pa.external_id = ANY(cpr.reviewer_external_ids)
+           ON pa.provider = cpr.provider AND pa.external_id = ANY(cpr.reviewer_external_ids)
          LEFT JOIN team_resource_links trl
-           ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+           ON trl.provider = cpr.provider
+           AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+           AND trl.external_resource_id = cpr.repository
          WHERE cpr.state = 'MERGED'
            AND ($3::timestamptz IS NULL OR (cpr.merged_at IS NOT NULL AND cpr.merged_at BETWEEN $3 AND $4))
          GROUP BY trl.team_id`,

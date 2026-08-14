@@ -2,6 +2,13 @@ import type { Pool } from 'pg';
 import { getPool, withTenantContext } from '../../database/pool';
 import type { CanonicalWorkItem, IssueTrackerProvider } from '../core/canonical.types';
 
+/** `team_resource_links.resource_type` correspondente a cada `IssueTrackerProvider`. */
+const GROUP_RESOURCE_TYPE_BY_PROVIDER: Record<IssueTrackerProvider, string> = {
+  jira: 'jira_project',
+  linear: 'linear_team',
+  azure_boards: 'azure_boards_project',
+};
+
 /** Um `CanonicalWorkItem` já persistido, com o `id` gerado pelo banco (necessário pra Enriched Layer). */
 export interface PersistedWorkItem extends CanonicalWorkItem {
   readonly id: string;
@@ -211,7 +218,7 @@ export class WorkItemRepository {
    */
   async findUnlinkedExternalGroups(
     tenantId: string,
-    provider: string,
+    provider: IssueTrackerProvider,
   ): Promise<readonly { readonly key: string; readonly name: string | null }[]> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<{ external_group_key: string; external_group_name: string | null }>(
@@ -228,7 +235,7 @@ export class WorkItemRepository {
                AND trl.external_resource_id = cwi.external_group_key
            )
          ORDER BY external_group_key, synced_at DESC`,
-        [tenantId, provider, provider === 'jira' ? 'jira_project' : 'linear_team'],
+        [tenantId, provider, GROUP_RESOURCE_TYPE_BY_PROVIDER[provider]],
       );
 
       return result.rows.map((row) => ({ key: row.external_group_key, name: row.external_group_name }));

@@ -414,7 +414,9 @@ export class TeamProfileService {
                  avg(cardinality(cpr.reviewer_external_ids)) AS avg_reviewers
                FROM canonical_pull_requests cpr
                JOIN team_resource_links trl
-                 ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+                 ON trl.provider = cpr.provider
+                 AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+                 AND trl.external_resource_id = cpr.repository
                WHERE cpr.state = 'MERGED' AND trl.team_id = $1`,
               [teamId],
             )
@@ -455,7 +457,9 @@ export class TeamProfileService {
               `SELECT cpr.author_external_id, count(*) AS count
                FROM canonical_pull_requests cpr
                JOIN team_resource_links trl
-                 ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+                 ON trl.provider = cpr.provider
+                 AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+                 AND trl.external_resource_id = cpr.repository
                WHERE trl.team_id = $1 AND cpr.state = 'MERGED' AND cpr.author_external_id IS NOT NULL
                GROUP BY cpr.author_external_id
                ORDER BY count(*) DESC`,
@@ -488,7 +492,9 @@ export class TeamProfileService {
                  SELECT cpr.repository, cpr.changed_files, cpr.lines_added, cpr.merged_at
                  FROM canonical_pull_requests cpr
                  JOIN team_resource_links trl
-                   ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+                   ON trl.provider = cpr.provider
+                   AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+                   AND trl.external_resource_id = cpr.repository
                  WHERE trl.team_id = $1 AND cpr.state = 'MERGED' AND cpr.merged_at IS NOT NULL
                )
                SELECT
@@ -863,13 +869,15 @@ export class TeamProfileService {
           [teamId, periodFrom, periodTo],
         ),
         client.query<ProviderExternalIdCountRow>(
-          `SELECT 'github' AS provider, cpr.author_external_id AS external_id, count(*) AS count
+          `SELECT cpr.provider AS provider, cpr.author_external_id AS external_id, count(*) AS count
            FROM canonical_pull_requests cpr
            JOIN team_resource_links trl
-             ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+             ON trl.provider = cpr.provider
+             AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+             AND trl.external_resource_id = cpr.repository
            WHERE trl.team_id = $1 AND cpr.state = 'MERGED' AND cpr.author_external_id IS NOT NULL
              AND ($2::timestamptz IS NULL OR (cpr.merged_at IS NOT NULL AND cpr.merged_at BETWEEN $2 AND $3))
-           GROUP BY cpr.author_external_id`,
+           GROUP BY cpr.provider, cpr.author_external_id`,
           [teamId, periodFrom, periodTo],
         ),
         // Revisor — diferente de author_external_id (quem abriu/mergeou):
@@ -878,14 +886,16 @@ export class TeamProfileService {
         // próprio de revisão nos dados canônicos — usa merged_at do PR
         // mesmo (mesma janela do autor), limitação documentada pro front.
         client.query<ProviderExternalIdCountRow>(
-          `SELECT 'github' AS provider, reviewer_id AS external_id, count(*) AS count
+          `SELECT cpr.provider AS provider, reviewer_id AS external_id, count(*) AS count
            FROM canonical_pull_requests cpr
            JOIN team_resource_links trl
-             ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+             ON trl.provider = cpr.provider
+             AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+             AND trl.external_resource_id = cpr.repository
            CROSS JOIN LATERAL unnest(cpr.reviewer_external_ids) AS reviewer_id
            WHERE trl.team_id = $1 AND cpr.state = 'MERGED'
              AND ($2::timestamptz IS NULL OR (cpr.merged_at IS NOT NULL AND cpr.merged_at BETWEEN $2 AND $3))
-           GROUP BY reviewer_id`,
+           GROUP BY cpr.provider, reviewer_id`,
           [teamId, periodFrom, periodTo],
         ),
         client.query<{ provider: string; external_id: string; total: string; success: string; failure: string }>(
@@ -1092,10 +1102,12 @@ export class TeamProfileService {
           [teamId],
         ),
         client.query<{ provider: string; external_id: string; merged_at: Date }>(
-          `SELECT 'github' AS provider, cpr.author_external_id AS external_id, cpr.merged_at
+          `SELECT cpr.provider AS provider, cpr.author_external_id AS external_id, cpr.merged_at
            FROM canonical_pull_requests cpr
            JOIN team_resource_links trl
-             ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+             ON trl.provider = cpr.provider
+             AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+             AND trl.external_resource_id = cpr.repository
            WHERE trl.team_id = $1 AND cpr.state = 'MERGED' AND cpr.author_external_id IS NOT NULL AND cpr.merged_at IS NOT NULL`,
           [teamId],
         ),

@@ -70,6 +70,40 @@ do seguinte):
 - **Trocar de plano de um tenant diretamente pelo painel** (sem passar pelo
   checkout normal do tenant) — não pedido ainda.
 
+## Conectores Azure DevOps (Boards/Repos/Pipelines) — construídos sem credencial real, revisitar no primeiro teste ao vivo
+
+**Contexto**: `azure_boards`, `azure_repos` e `azure_pipelines`
+(`src/integrations/providers/azure-*`) foram construídos contra a API REST
+documentada da Microsoft, sem PAT/org real pra testar — mesmo regime já
+aceito hoje pro ArgoCD. `npm run build` limpo e smoke test manual (registro
+no `ProviderFactory`, `testConnection` contra org inexistente devolvendo
+erro estruturado sem lançar exceção não tratada, `team-resource-links/candidates`
+vazio sem erro pra tenant sem dados Azure) já passaram, mas isso não
+substitui um teste ao vivo. Três pontos específicos pra revisar assim que
+houver credencial real:
+
+1. **`azure_boards`** — não confirmado se o shape de
+   `updates[].fields['System.State'].oldValue`/`.newValue` (endpoint
+   `_apis/wit/workitems/{id}/updates`) bate com o assumido no mapeamento de
+   transições de status; também não confirmado se WIQL no nível da
+   organização (sem `WHERE [System.TeamProject] = '...'`) de fato varre
+   todos os Projects que o PAT enxerga.
+2. **`azure_repos`** — não confirmado se
+   `_apis/git/pullrequests/{id}/commits` devolve os commits em ordem
+   cronológica ascendente por padrão (usado pra inferir `firstCommitAt`), nem
+   o shape exato de `iterations/{id}/changes` usado pra `linesAdded`/
+   `linesDeleted`/`changedFiles`. `linesAdded`/`linesDeleted`/`commentsCount`
+   ficam sempre `0` de propósito — a API básica de listagem de PR não expõe
+   esses campos, e nenhum valor foi inventado.
+3. **`azure_pipelines`** — maior incerteza dos três: não confirmado se
+   `environmentdeploymentrecords` (`_apis/distributedtask/environments`)
+   carrega o SHA do commit ou só metadata do run/pipeline; se não carregar,
+   `commitSha` fica sempre `null` (degradação aceitável, não bloqueia o
+   resto). Escopo deliberadamente limitado ao paradigma moderno de
+   Environments — pipelines clássicos de Release Management
+   (`_apis/release/releases`) ficam de fora, gap conhecido documentado no
+   docstring do conector.
+
 ## Pool de conexões / `/internal/sync` em escala — resolvido, revisitar com número real
 
 **Contexto**: `DATABASE_POOL_MAX` (default 20, `src/database/pool.ts`) e

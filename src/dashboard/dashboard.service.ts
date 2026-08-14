@@ -414,7 +414,9 @@ export class DashboardService {
              count(*) AS sample_size
            FROM canonical_pull_requests cpr
            JOIN team_resource_links trl
-             ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+             ON trl.provider = cpr.provider
+             AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+             AND trl.external_resource_id = cpr.repository
            WHERE cpr.state = 'MERGED' AND cpr.merged_at BETWEEN $1 AND $2
              AND cpr.${startColumn} IS NOT NULL AND trl.team_id = $3`,
           [from, to, teamId],
@@ -461,7 +463,9 @@ export class DashboardService {
          count(*) AS sample_size
        FROM canonical_pull_requests cpr
        JOIN team_resource_links trl
-         ON trl.provider = 'github' AND trl.resource_type = 'github_repository' AND trl.external_resource_id = cpr.repository
+         ON trl.provider = cpr.provider
+         AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
+         AND trl.external_resource_id = cpr.repository
        JOIN LATERAL (
          SELECT cd.started_at
          FROM canonical_deployments cd

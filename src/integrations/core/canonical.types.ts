@@ -22,13 +22,13 @@ export type ProviderCategory =
   | 'communication';
 
 /** Issue Trackers suportados no MVP. */
-export type IssueTrackerProvider = 'jira' | 'linear';
+export type IssueTrackerProvider = 'jira' | 'linear' | 'azure_boards';
 
 /** Provedores de Version Control suportados no MVP. */
-export type VcsProvider = 'github' | 'gitlab';
+export type VcsProvider = 'github' | 'gitlab' | 'azure_repos';
 
 /** Provedores de CI/CD suportados no MVP. */
-export type CicdProvider = 'github_actions' | 'argocd';
+export type CicdProvider = 'github_actions' | 'argocd' | 'azure_pipelines';
 
 /** Provedores de Incident Management suportados no MVP. */
 export type IncidentProvider = 'waroom' | 'pagerduty';

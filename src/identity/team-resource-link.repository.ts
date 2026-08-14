@@ -2,7 +2,15 @@ import type { Pool } from 'pg';
 import { getPool, withTenantContext } from '../database/pool';
 
 /** Providers cujos recursos externos podem ser vinculados a um time. */
-export type ExternalResourceProvider = 'waroom' | 'github' | 'jira' | 'linear' | 'argocd';
+export type ExternalResourceProvider =
+  | 'waroom'
+  | 'github'
+  | 'jira'
+  | 'linear'
+  | 'argocd'
+  | 'azure_boards'
+  | 'azure_repos'
+  | 'azure_pipelines';
 
 /** Tipo de recurso externo vinculável — cada um pertence a um único `ExternalResourceProvider`. */
 export type ExternalResourceType =
@@ -10,7 +18,10 @@ export type ExternalResourceType =
   | 'github_repository'
   | 'jira_project'
   | 'linear_team'
-  | 'argocd_project';
+  | 'argocd_project'
+  | 'azure_boards_project'
+  | 'azure_repos_repository'
+  | 'azure_pipelines_project';
 
 export interface TeamResourceLink {
   readonly id: string;

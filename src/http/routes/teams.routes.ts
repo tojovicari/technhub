@@ -27,6 +27,9 @@ const VALID_RESOURCE_PROVIDERS: readonly ExternalResourceProvider[] = [
   'jira',
   'linear',
   'argocd',
+  'azure_boards',
+  'azure_repos',
+  'azure_pipelines',
 ];
 const VALID_RESOURCE_TYPES: readonly ExternalResourceType[] = [
   'waroom_team',
@@ -34,6 +37,9 @@ const VALID_RESOURCE_TYPES: readonly ExternalResourceType[] = [
   'jira_project',
   'linear_team',
   'argocd_project',
+  'azure_boards_project',
+  'azure_repos_repository',
+  'azure_pipelines_project',
 ];
 
 interface TenantParams {
@@ -145,7 +151,7 @@ export function registerTeamRoutes(
         // (GitHub Actions), ou os dois — qualquer um dos dois já vinculado
         // resolve o outro também (mesmo par provider/resourceType).
         const [prCandidates, deploymentCandidates] = await Promise.all([
-          pullRequestRepository.findUnlinkedRepositories(tenantId),
+          pullRequestRepository.findUnlinkedRepositories(tenantId, 'github'),
           deploymentRepository.findUnlinkedExternalGroups(tenantId, 'github_actions', 'github_repository'),
         ]);
         const candidates = [...new Set([...prCandidates, ...deploymentCandidates])].sort();
@@ -161,6 +167,22 @@ export function registerTeamRoutes(
       }
       if (provider === 'argocd' && resourceType === 'argocd_project') {
         const candidates = await deploymentRepository.findUnlinkedExternalGroups(tenantId, 'argocd', 'argocd_project');
+        return reply.status(200).send(candidates);
+      }
+      if (provider === 'azure_boards' && resourceType === 'azure_boards_project') {
+        const candidates = await workItemRepository.findUnlinkedExternalGroups(tenantId, 'azure_boards');
+        return reply.status(200).send(candidates);
+      }
+      if (provider === 'azure_repos' && resourceType === 'azure_repos_repository') {
+        const candidates = await pullRequestRepository.findUnlinkedRepositories(tenantId, 'azure_repos');
+        return reply.status(200).send(candidates);
+      }
+      if (provider === 'azure_pipelines' && resourceType === 'azure_pipelines_project') {
+        const candidates = await deploymentRepository.findUnlinkedExternalGroups(
+          tenantId,
+          'azure_pipelines',
+          'azure_pipelines_project',
+        );
         return reply.status(200).send(candidates);
       }
 

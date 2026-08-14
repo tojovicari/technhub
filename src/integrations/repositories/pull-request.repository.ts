@@ -1,6 +1,16 @@
 import type { Pool } from 'pg';
 import { getPool, withTenantContext } from '../../database/pool';
-import type { CanonicalPullRequest } from '../core/canonical.types';
+import type { CanonicalPullRequest, VcsProvider } from '../core/canonical.types';
+
+/**
+ * `team_resource_links.resource_type` correspondente a cada `VcsProvider`
+ * capaz de PR — `gitlab` fica de fora de propósito (sem par de vínculo
+ * ainda, `ExternalResourceType` não tem `'gitlab_repository'`).
+ */
+const REPOSITORY_RESOURCE_TYPE_BY_PROVIDER: Partial<Record<VcsProvider, string>> = {
+  github: 'github_repository',
+  azure_repos: 'azure_repos_repository',
+};
 
 const UPSERT_SQL = `
   INSERT INTO canonical_pull_requests (
@@ -124,25 +134,35 @@ export class PullRequestRepository {
   }
 
   /**
-   * Repositórios (`repository`, formato "owner/repo") já vistos em PRs
-   * sincronizados que ainda não estão vinculados a nenhum time da plataforma
-   * — alimenta `GET /team-resource-links/candidates?provider=github&resourceType=github_repository`.
+   * Repositórios (`repository`, formato "owner/repo" ou "project/repo")
+   * daquele `provider` específico já vistos em PRs sincronizados que ainda
+   * não estão vinculados a nenhum time da plataforma — alimenta
+   * `GET /team-resource-links/candidates?provider=<github|azure_repos>&resourceType=...`.
+   * `provider` é parâmetro (não mais fixo em `'github'`) desde que o
+   * Azure Repos passou a gerar `CanonicalPullRequest` também — cada
+   * provider só vê seus próprios repositórios, nunca mistura os dois.
    */
-  async findUnlinkedRepositories(tenantId: string): Promise<readonly string[]> {
+  async findUnlinkedRepositories(tenantId: string, provider: VcsProvider): Promise<readonly string[]> {
+    const resourceType = REPOSITORY_RESOURCE_TYPE_BY_PROVIDER[provider];
+    if (!resourceType) {
+      return [];
+    }
+
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<{ repository: string }>(
         `SELECT DISTINCT repository
          FROM canonical_pull_requests cpr
          WHERE cpr.tenant_id = $1
+           AND cpr.provider = $2
            AND NOT EXISTS (
              SELECT 1 FROM team_resource_links trl
              WHERE trl.tenant_id = cpr.tenant_id
-               AND trl.provider = 'github'
-               AND trl.resource_type = 'github_repository'
+               AND trl.provider = $2
+               AND trl.resource_type = $3
                AND trl.external_resource_id = cpr.repository
            )
          ORDER BY repository`,
-        [tenantId],
+        [tenantId, provider, resourceType],
       );
 
       return result.rows.map((row) => row.repository);
