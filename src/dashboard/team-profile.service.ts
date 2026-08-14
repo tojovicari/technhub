@@ -58,6 +58,23 @@ export interface ReworkRateMetric {
   readonly rate: number;
 }
 
+/**
+ * Quebra de `semantic_category` por épico — ver `src/enrichment/epic-resolver.ts`.
+ * `share` é fração (0-1), mesma convenção de `topContributorShare`/
+ * `DeploymentSuccessRateMetric.rate`, não percentual.
+ */
+export interface EpicWorkBreakdown {
+  /** `null` = itens sem épico resolvido — bucket explícito, não é erro (mesmo espírito de `team: null` em `PersonProfileTeamBreakdown`). */
+  readonly epic: { readonly id: string; readonly name: string | null } | null;
+  readonly total: number;
+  readonly byCategory: readonly { readonly category: string; readonly count: number; readonly share: number }[];
+}
+
+export interface EpicBreakdownMetric {
+  readonly available: true;
+  readonly epics: readonly EpicWorkBreakdown[];
+}
+
 export interface TeamProfile {
   readonly team: Team;
   readonly roster: readonly TeamMembershipWithUser[];
@@ -82,6 +99,11 @@ const DEPLOYMENT_SUCCESS_RATE_UNAVAILABLE: UnavailableMetric = {
 const PR_REVIEW_HEALTH_UNAVAILABLE: UnavailableMetric = {
   available: false,
   reason: 'Nenhum PR mergeado de repositório vinculado a este time ainda.',
+};
+
+const EPIC_BREAKDOWN_UNAVAILABLE: UnavailableMetric = {
+  available: false,
+  reason: 'Nenhum work item enriquecido pra este time ainda.',
 };
 
 function workItemConcentrationUnavailable(): UnavailableMetric {
@@ -303,6 +325,74 @@ export class TeamProfileService {
       toilRatio: this.computeToilRatio(team, roster, toilHours),
       reworkRate,
     };
+  }
+
+  /**
+   * Quebra de `semantic_category` por épico — `is_epic_container = false`
+   * exclui o próprio item-container da conta (não conta a si mesmo,
+   * decisão de produto). `epic_external_id IS NULL` vira o bucket "sem
+   * épico" no array de resposta (`epic: null`), agrupamento feito em
+   * TypeScript, não SQL — mesmo padrão de `PersonProfileService`
+   * (`UNLINKED_KEY`) pra não inventar um rótulo mágico em português no
+   * banco.
+   */
+  async getEpicBreakdown(tenantId: string, teamId: string): Promise<EpicBreakdownMetric | UnavailableMetric | null> {
+    const team = await this.teamRepository.findById(tenantId, teamId);
+    if (!team) {
+      return null;
+    }
+
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{
+        epic_external_id: string | null;
+        epic_external_name: string | null;
+        semantic_category: string;
+        count: string;
+      }>(
+        `SELECT ewi.epic_external_id, ewi.epic_external_name, ewi.semantic_category, count(*) AS count
+         FROM canonical_work_items cwi
+         JOIN enriched_work_items ewi ON ewi.id = cwi.id
+         WHERE ewi.team_id = $1 AND ewi.is_epic_container = false
+         GROUP BY ewi.epic_external_id, ewi.epic_external_name, ewi.semantic_category`,
+        [teamId],
+      );
+
+      if (result.rows.length === 0) {
+        return EPIC_BREAKDOWN_UNAVAILABLE;
+      }
+
+      const byEpicId = new Map<
+        string,
+        { readonly epic: { readonly id: string; readonly name: string | null } | null; readonly counts: Map<string, number> }
+      >();
+
+      for (const row of result.rows) {
+        const key = row.epic_external_id ?? '';
+        const existing = byEpicId.get(key);
+        const counts = existing?.counts ?? new Map<string, number>();
+        counts.set(row.semantic_category, Number(row.count));
+
+        if (!existing) {
+          byEpicId.set(key, {
+            epic: row.epic_external_id ? { id: row.epic_external_id, name: row.epic_external_name } : null,
+            counts,
+          });
+        }
+      }
+
+      const epics: EpicWorkBreakdown[] = [...byEpicId.values()].map(({ epic, counts }) => {
+        const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
+        const byCategory = [...counts.entries()]
+          .map(([category, count]) => ({ category, count, share: count / total }))
+          .sort((a, b) => a.category.localeCompare(b.category));
+
+        return { epic, total, byCategory };
+      });
+
+      epics.sort((a, b) => (a.epic?.name ?? a.epic?.id ?? '').localeCompare(b.epic?.name ?? b.epic?.id ?? ''));
+
+      return { available: true, epics };
+    });
   }
 
   /**

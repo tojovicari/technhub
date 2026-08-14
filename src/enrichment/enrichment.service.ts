@@ -23,10 +23,12 @@ import { IntegrationRunHistoryRepository } from '../integrations/repositories/in
 import {
   evaluateDeploymentEnvironment,
   evaluateIncidentSeverity,
+  evaluateIsEpicBoundary,
   evaluateWorkItemLifecycle,
   evaluateWorkItemType,
   evaluateWorkflowState,
 } from './rule-evaluator';
+import { resolveEpicGroup } from './epic-resolver';
 import type { EffectiveRules, EnrichedDeployment, EnrichedIncident, EnrichedWorkItem } from './domain-context.types';
 
 export interface EnrichmentSummary {
@@ -183,6 +185,12 @@ export class EnrichmentService {
       ),
     );
 
+    // Lookup pra `resolveEpicGroup` subir a cadeia de `parentExternalId` sem
+    // query nova — reenriquecimento já busca a integração inteira
+    // (`findByIntegration` acima), então o pai/épico de qualquer item já
+    // está neste mesmo array, épico incluso (sincroniza como item normal).
+    const itemsByExternalId = new Map(workItems.map((item) => [item.externalId, item]));
+
     const enrichedItems = workItems.map((item, index) => {
       const resolvedTeamId = resolvedTeamIds[index];
       const effectiveRules = effectiveRulesByTeamId.get(resolvedTeamId);
@@ -196,6 +204,7 @@ export class EnrichmentService {
         resolvedTeamId,
         effectiveRules,
         transitionsByExternalId.get(item.externalId) ?? [],
+        itemsByExternalId,
       );
     });
     await this.enrichedWorkItemRepository.upsertMany(enrichedItems);
@@ -377,6 +386,7 @@ export class EnrichmentService {
     teamId: string | null,
     effective: EffectiveRules,
     transitions: readonly CanonicalWorkItemStatusTransition[],
+    itemsByExternalId: ReadonlyMap<string, PersistedWorkItem>,
   ): EnrichedWorkItem {
     const semanticCategory = evaluateWorkItemType(item.rawIssueType, item.rawLabels, effective.rules);
     const { state, isActiveTime } = evaluateWorkflowState(item.rawStatus, effective.rules);
@@ -386,6 +396,8 @@ export class EnrichmentService {
       item.createdAt,
       effective.rules,
     );
+    const isEpicContainer = evaluateIsEpicBoundary(item.rawIssueType, item.rawLabels, effective.rules);
+    const epicGroup = isEpicContainer ? null : resolveEpicGroup(item, itemsByExternalId, effective.rules);
 
     return {
       id: item.id,
@@ -396,6 +408,9 @@ export class EnrichmentService {
       isActiveWork: isActiveTime,
       startedWorkingAt,
       completedAt,
+      epicExternalId: epicGroup?.epicExternalId ?? null,
+      epicExternalName: epicGroup?.epicExternalName ?? null,
+      isEpicContainer,
       processedAt: new Date(),
       appliedRuleVersion: effective.appliedRuleVersion,
     };

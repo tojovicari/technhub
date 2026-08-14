@@ -130,4 +130,23 @@ export function registerTeamProfileRoutes(
       return reply.status(200).send(history);
     },
   );
+
+  /**
+   * Quebra de `semantic_category` por épico (Time → Projeto → Épico →
+   * Item) — ver `src/enrichment/epic-resolver.ts`. Mesmo RBAC do `/profile`.
+   */
+  server.get<{ Params: TenantTeamParams }>(
+    '/tenants/:tenantId/teams/:teamId/profile/epics',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, teamId } = request.params;
+
+      const breakdown = await teamProfileService.getEpicBreakdown(tenantId, teamId);
+      if (!breakdown) {
+        return reply.status(404).send({ error: 'Time não encontrado.' });
+      }
+
+      return reply.status(200).send(breakdown);
+    },
+  );
 }

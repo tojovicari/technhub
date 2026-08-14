@@ -49,6 +49,13 @@ interface JiraIssue {
     readonly created: string;
     readonly updated: string;
     readonly project: { readonly key: string; readonly name: string };
+    /**
+     * Só presente em projetos team-managed (padrão em projetos novos) — o
+     * Epic Link clássico de projetos company-managed usa um custom field
+     * sem id fixo (varia por site), fora de escopo desta rodada (ver
+     * docs/BACKLOG.md).
+     */
+    readonly parent?: { readonly key: string };
   };
   /**
    * Presente porque `buildSearchUrl` sempre pede `expand=changelog` — vem
@@ -430,7 +437,7 @@ export class JiraProvider extends BaseProvider {
     const searchUrl = new URL(`${baseUrl}/rest/api/3/search/jql`);
     searchUrl.searchParams.set('jql', jql);
     searchUrl.searchParams.set('maxResults', String(maxResults));
-    searchUrl.searchParams.set('fields', 'issuetype,status,labels,summary,assignee,created,updated,project');
+    searchUrl.searchParams.set('fields', 'issuetype,status,labels,summary,assignee,created,updated,project,parent');
     // Vem embutido na mesma resposta de busca, sem chamada extra por issue
     // (verificado ao vivo contra a API real) — alimenta started_working_at/
     // completed_at na Enriched Layer.
@@ -528,6 +535,7 @@ export class JiraProvider extends BaseProvider {
       assigneeExternalId: issue.fields.assignee?.accountId ?? null,
       externalGroupKey: issue.fields.project.key,
       externalGroupName: issue.fields.project.name,
+      parentExternalId: issue.fields.parent?.key ?? null,
       createdAt: new Date(issue.fields.created),
       updatedAt: new Date(issue.fields.updated),
     };

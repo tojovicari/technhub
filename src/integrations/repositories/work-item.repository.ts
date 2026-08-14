@@ -26,6 +26,8 @@ interface WorkItemRow {
   readonly assignee_external_id: string | null;
   readonly external_group_key: string | null;
   readonly external_group_name: string | null;
+  readonly parent_external_id: string | null;
+  readonly parent_external_name: string | null;
   readonly created_at: Date;
   readonly updated_at: Date;
 }
@@ -43,6 +45,8 @@ function mapRowToPersistedWorkItem(row: WorkItemRow): PersistedWorkItem {
     assigneeExternalId: row.assignee_external_id,
     externalGroupKey: row.external_group_key,
     externalGroupName: row.external_group_name,
+    parentExternalId: row.parent_external_id,
+    parentExternalName: row.parent_external_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -51,11 +55,13 @@ function mapRowToPersistedWorkItem(row: WorkItemRow): PersistedWorkItem {
 const UPSERT_SQL = `
   INSERT INTO canonical_work_items (
     tenant_id, provider, external_id, raw_issue_type, raw_status, raw_labels,
-    title, assignee_external_id, created_at, updated_at, synced_at, provider_integration_id, external_group_key, external_group_name
+    title, assignee_external_id, created_at, updated_at, synced_at, provider_integration_id, external_group_key, external_group_name,
+    parent_external_id, parent_external_name
   )
   VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, NOW(), $11, $12, $13
+    $7, $8, $9, $10, NOW(), $11, $12, $13,
+    $14, $15
   )
   ON CONFLICT ON CONSTRAINT unique_tenant_integration_item DO UPDATE SET
     raw_issue_type = EXCLUDED.raw_issue_type,
@@ -66,7 +72,9 @@ const UPSERT_SQL = `
     updated_at = EXCLUDED.updated_at,
     synced_at = NOW(),
     external_group_key = EXCLUDED.external_group_key,
-    external_group_name = EXCLUDED.external_group_name;
+    external_group_name = EXCLUDED.external_group_name,
+    parent_external_id = EXCLUDED.parent_external_id,
+    parent_external_name = EXCLUDED.parent_external_name;
 `;
 
 function toQueryParams(workItem: CanonicalWorkItem, providerIntegrationId: string): unknown[] {
@@ -84,6 +92,8 @@ function toQueryParams(workItem: CanonicalWorkItem, providerIntegrationId: strin
     providerIntegrationId,
     workItem.externalGroupKey ?? null,
     workItem.externalGroupName ?? null,
+    workItem.parentExternalId ?? null,
+    workItem.parentExternalName ?? null,
   ];
 }
 
@@ -194,7 +204,8 @@ export class WorkItemRepository {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<WorkItemRow>(
         `SELECT id, tenant_id, provider, external_id, raw_issue_type, raw_status, raw_labels,
-                title, assignee_external_id, external_group_key, external_group_name, created_at, updated_at
+                title, assignee_external_id, external_group_key, external_group_name,
+                parent_external_id, parent_external_name, created_at, updated_at
          FROM canonical_work_items
          WHERE tenant_id = $1 AND provider_integration_id = $2`,
         [tenantId, providerIntegrationId],

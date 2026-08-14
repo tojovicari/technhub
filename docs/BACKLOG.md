@@ -5,6 +5,32 @@ um item aqui for pra frente de verdade, o desenho real vai pra
 `.spec/spec-engineering-intelligence.md` (fonte da verdade), não fica só
 aqui.
 
+## Quebra de esforço por épico — gaps conhecidos desta rodada
+
+**Contexto**: `GET /tenants/:tenantId/teams/:teamId/profile/epics` (Time →
+Projeto → Épico → Item) resolve o "pai/container" de 1 salto de cada work
+item (`CanonicalWorkItem.parentExternalId`) e sobe a cadeia até achar um
+ancestral marcado como fronteira de épico (`epicGrouping` em
+`mapping_rules`, ver `src/enrichment/epic-resolver.ts`). Três limitações
+deliberadas desta rodada, pra revisar quando fizer sentido:
+
+1. **Jira Epic Link clássico (company-managed) não é capturado.** Só o
+   campo nativo `parent` (team-managed, padrão em projetos novos) é lido —
+   projetos clássicos guardam o vínculo num custom field sem id fixo
+   (varia por site Jira), precisaria de descoberta via
+   `GET /rest/api/3/field` + cache por integração. Fora de escopo desta
+   rodada, decisão confirmada com o usuário.
+2. **Resolução só dentro da mesma integração/projeto.** Se um épico e sua
+   story estiverem em projetos Jira diferentes (raro, mas possível), a
+   cadeia não resolve — o `parentExternalId` aponta pra um `externalId`
+   que só existe no lookup de outra integração, fora do alcance de
+   `resolveEpicGroup`.
+3. **Azure Boards `$expand: 'relations'` não verificado ao vivo** — mesma
+   ressalva já registrada pros outros pontos incertos do conector
+   (`azure-boards.provider.ts`). Não confirmado se a API realmente devolve
+   o link `System.LinkTypes.Hierarchy-Reverse` no formato assumido, nem se
+   o id do pai sempre aparece como último segmento numérico da `url`.
+
 ## Painel do gestor do SaaS — o que já existe e o que ainda falta
 
 **Contexto**: o painel cross-tenant do gestor do SaaS (autenticação via

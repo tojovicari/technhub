@@ -13,6 +13,7 @@ const EMPTY_RULES: MappingRules = {
   workflowStates: [],
   deploymentEnvironment: [],
   incidentSeverity: [],
+  epicGrouping: [],
 };
 
 describe('evaluateWorkItemType', () => {

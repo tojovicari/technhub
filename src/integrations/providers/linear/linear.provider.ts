@@ -35,6 +35,7 @@ const ISSUES_QUERY = `
         labels { nodes { name } }
         assignee { id name avatarUrl email }
         team { key name }
+        project { id name }
         createdAt
         updatedAt
         history(first: 50) {
@@ -72,6 +73,8 @@ interface LinearIssueNode {
     readonly email: string | null;
   } | null;
   readonly team: { readonly key: string; readonly name: string };
+  /** Análogo mais próximo de "épico" que o Linear tem — não é hierarquia estrita (um Project não é ele mesmo um work item), mas é o container de agrupamento usado na prática. */
+  readonly project: { readonly id: string; readonly name: string } | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   /**
@@ -259,6 +262,8 @@ export class LinearProvider extends BaseProvider {
       assigneeExternalId: node.assignee?.id ?? null,
       externalGroupKey: node.team.key,
       externalGroupName: node.team.name,
+      parentExternalId: node.project?.id ?? null,
+      parentExternalName: node.project?.name ?? null,
       createdAt: new Date(node.createdAt),
       updatedAt: new Date(node.updatedAt),
     };

@@ -55,12 +55,26 @@ export interface IncidentSeverityRule {
   readonly conditions: readonly RuleCondition[];
 }
 
+/**
+ * Marca se um work item é ele mesmo um "container" de nível épico (ex:
+ * `issue_type = 'Epic'`) — não classifica o item em nada, só responde "esse
+ * item é uma fronteira de agrupamento?". Usado por
+ * `src/enrichment/epic-resolver.ts` pra parar de subir a cadeia de
+ * `parentExternalId` (Jira/Azure Boards — Linear resolve direto via
+ * `project`, sem precisar checar boundary, ver Seção 3 da spec).
+ */
+export interface EpicGroupingRule {
+  readonly matchMode: MatchMode;
+  readonly conditions: readonly RuleCondition[];
+}
+
 /** Corpo de `mapping_rules` — guardado em `team_metric_configurations.rules` (JSONB). */
 export interface MappingRules {
   readonly workItemType: readonly WorkItemTypeRule[];
   readonly workflowStates: readonly WorkflowStateRule[];
   readonly deploymentEnvironment: readonly DeploymentEnvironmentRule[];
   readonly incidentSeverity: readonly IncidentSeverityRule[];
+  readonly epicGrouping: readonly EpicGroupingRule[];
 }
 
 /**
@@ -88,6 +102,11 @@ export interface EnrichedWorkItem {
   readonly isActiveWork: boolean;
   readonly startedWorkingAt: Date | null;
   readonly completedAt: Date | null;
+  /** `null` = sem épico resolvido (item de verdade, sem vínculo — não é erro) ou este item é ele mesmo um épico (`isEpicContainer: true`). Resolvido por `src/enrichment/epic-resolver.ts`. */
+  readonly epicExternalId: string | null;
+  readonly epicExternalName: string | null;
+  /** `true` = este item é ele mesmo um container de nível épico — fica de fora de qualquer quebra por épico (não conta a si mesmo). */
+  readonly isEpicContainer: boolean;
   readonly processedAt: Date;
   readonly appliedRuleVersion: Date;
 }

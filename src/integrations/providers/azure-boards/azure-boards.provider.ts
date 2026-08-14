@@ -24,6 +24,8 @@ const API_VERSION = '7.1';
 const WIQL_RESULT_CAP = 20000;
 /** Limite documentado de ids por chamada de `workitemsbatch`. */
 const BATCH_MAX_PER_PAGE = 200;
+/** Identifica o link de "pai" na resposta de `relations` (`$expand: 'relations'`). */
+const PARENT_RELATION_TYPE = 'System.LinkTypes.Hierarchy-Reverse';
 
 const WORK_ITEM_FIELDS = [
   'System.WorkItemType',
@@ -59,6 +61,15 @@ interface AzureWorkItem {
     readonly 'System.CreatedDate': string;
     readonly 'System.ChangedDate': string;
   };
+  /**
+   * Presente porque `fetchWorkItemsBatch` pede `$expand: 'relations'` — não
+   * verificado ao vivo contra a API real (mesma ressalva já documentada
+   * pros outros pontos deste conector). O link de pai fica identificado
+   * por `rel === 'System.LinkTypes.Hierarchy-Reverse'`; o id do pai é o
+   * último segmento numérico da `url` (ex: `.../_apis/wit/workItems/123`),
+   * já que o Azure DevOps não devolve o id do pai como campo solto aqui.
+   */
+  readonly relations?: readonly { readonly rel: string; readonly url: string }[];
 }
 
 interface AzureWorkItemBatchResponse {
@@ -313,7 +324,7 @@ export class AzureBoardsProvider extends BaseProvider {
       {
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids, fields: WORK_ITEM_FIELDS }),
+        body: JSON.stringify({ ids, fields: WORK_ITEM_FIELDS, $expand: 'relations' }),
       },
     );
 
@@ -456,6 +467,21 @@ export class AzureBoardsProvider extends BaseProvider {
     return `SELECT [System.Id] FROM WorkItems${whereClause} ORDER BY [System.ChangedDate] DESC`;
   }
 
+  /**
+   * O link de pai vem como uma `url` apontando pro recurso do work item pai
+   * (ex: `https://dev.azure.com/org/_apis/wit/workItems/123`), não como um
+   * id solto — extrai o último segmento numérico. `undefined`/formato
+   * inesperado devolve `null` (degradação silenciosa, mesmo espírito de
+   * outros campos best-effort deste conector).
+   */
+  private extractParentId(relations: AzureWorkItem['relations']): string | null {
+    const parentRelation = relations?.find((relation) => relation.rel === PARENT_RELATION_TYPE);
+    if (!parentRelation) return null;
+
+    const match = /\/(\d+)$/.exec(parentRelation.url);
+    return match ? match[1] : null;
+  }
+
   private mapToCanonicalWorkItem(item: AzureWorkItem, tenantId: string): CanonicalWorkItem {
     const tags = item.fields['System.Tags'];
 
@@ -473,6 +499,7 @@ export class AzureBoardsProvider extends BaseProvider {
       // Jira (project.key vs. project.name) — os dois campos recebem o mesmo valor.
       externalGroupKey: item.fields['System.TeamProject'],
       externalGroupName: item.fields['System.TeamProject'],
+      parentExternalId: this.extractParentId(item.relations),
       createdAt: new Date(item.fields['System.CreatedDate']),
       updatedAt: new Date(item.fields['System.ChangedDate']),
     };

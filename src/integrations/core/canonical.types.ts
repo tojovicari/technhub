@@ -162,6 +162,18 @@ export interface CanonicalWorkItem {
   readonly externalGroupKey?: string | null;
   /** Nome de exibição do grupo de origem (nome do projeto no Jira, nome do time no Linear) — companheiro de `externalGroupKey`, `null` quando o provider não expõe. */
   readonly externalGroupName?: string | null;
+  /**
+   * Referência de 1 salto ao "pai/container" do item, traduzida do jeito
+   * nativo de cada provider (Jira: `parent.key`, só team-managed — épico
+   * clássico via custom field fica de fora, ver docs/BACKLOG.md; Linear:
+   * `project.id`, que já é terminal, não é outro work item; Azure Boards:
+   * id do work item pai via `System.LinkTypes.Hierarchy-Reverse`). Camada
+   * Canônica só traduz — quem decide "isso já é o épico ou preciso subir
+   * mais" é a Camada Enriquecida (`src/enrichment/epic-resolver.ts`).
+   */
+  readonly parentExternalId?: string | null;
+  /** Só populado quando o provider dá o nome de graça sem chamada extra (hoje só Linear, via `project.name`) — Jira/Azure resolvem o nome do épico via self-join na Enriquecida, não aqui. */
+  readonly parentExternalName?: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

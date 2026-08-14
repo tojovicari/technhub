@@ -5,11 +5,13 @@ import type { EnrichedWorkItem } from './domain-context.types';
 const UPSERT_SQL = `
   INSERT INTO enriched_work_items (
     id, tenant_id, team_id, semantic_category, semantic_state, is_active_work,
-    started_working_at, completed_at, processed_at, applied_rule_version
+    started_working_at, completed_at, processed_at, applied_rule_version,
+    epic_external_id, epic_external_name, is_epic_container
   )
   VALUES (
     $1, $2, $3, $4, $5, $6,
-    $7, $8, NOW(), $9
+    $7, $8, NOW(), $9,
+    $10, $11, $12
   )
   ON CONFLICT (id) DO UPDATE SET
     team_id = EXCLUDED.team_id,
@@ -19,7 +21,10 @@ const UPSERT_SQL = `
     started_working_at = EXCLUDED.started_working_at,
     completed_at = EXCLUDED.completed_at,
     processed_at = NOW(),
-    applied_rule_version = EXCLUDED.applied_rule_version;
+    applied_rule_version = EXCLUDED.applied_rule_version,
+    epic_external_id = EXCLUDED.epic_external_id,
+    epic_external_name = EXCLUDED.epic_external_name,
+    is_epic_container = EXCLUDED.is_epic_container;
 `;
 
 function toQueryParams(item: EnrichedWorkItem): unknown[] {
@@ -33,6 +38,9 @@ function toQueryParams(item: EnrichedWorkItem): unknown[] {
     item.startedWorkingAt ?? null,
     item.completedAt ?? null,
     item.appliedRuleVersion,
+    item.epicExternalId ?? null,
+    item.epicExternalName ?? null,
+    item.isEpicContainer,
   ];
 }
 

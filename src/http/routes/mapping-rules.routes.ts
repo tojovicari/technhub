@@ -50,7 +50,8 @@ function isValidMappingRules(value: unknown): value is MappingRules {
     Array.isArray(candidate.workItemType) &&
     Array.isArray(candidate.workflowStates) &&
     Array.isArray(candidate.deploymentEnvironment) &&
-    Array.isArray(candidate.incidentSeverity)
+    Array.isArray(candidate.incidentSeverity) &&
+    Array.isArray(candidate.epicGrouping)
   );
 }
 

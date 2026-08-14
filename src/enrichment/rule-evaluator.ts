@@ -98,6 +98,23 @@ export function evaluateWorkflowState(
 }
 
 /**
+ * Responde só "esse item é ele mesmo uma fronteira de agrupamento de nível
+ * épico?" — não classifica em nada, é um predicado usado por
+ * `epic-resolver.ts` pra parar de subir a cadeia de `parentExternalId`.
+ * Mesma defesa contra JSONB antigo descrita em `evaluateDeploymentEnvironment`
+ * (`rules.epicGrouping ?? []`).
+ */
+export function evaluateIsEpicBoundary(
+  rawIssueType: string,
+  rawLabels: readonly string[],
+  rules: MappingRules,
+): boolean {
+  return (rules.epicGrouping ?? []).some((rule) =>
+    evaluateConditions(rule.conditions, rule.matchMode, rawIssueType, rawLabels),
+  );
+}
+
+/**
  * Checagem de interseção pra regras com um único valor de entrada
  * (`environment`, `severity`) — ao contrário de work items, que avaliam
  * dois campos possíveis (`issue_type`/`labels`), essas regras sempre

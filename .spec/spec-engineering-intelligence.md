@@ -109,6 +109,8 @@ Como cada time utiliza as ferramentas de maneira distinta, o sistema adota um mo
 }
 }
 
+**Nota**: o JSON acima é ilustrativo, não exaustivo — `mapping_rules` também tem as famílias `deploymentEnvironment` (ambiente semântico de deploy), `incidentSeverity` (classificação de Change Failure) e `epicGrouping` (fronteira de agrupamento de nível épico, ver Seção 5 — `enriched_work_items.epic_external_id`). `epicGrouping` não classifica nada, só responde "esse item é ele mesmo um épico/feature/container?" (mesmo shape de `workItemType`, sem `target_category`) — usado por `src/enrichment/epic-resolver.ts` pra parar de subir a cadeia de `parentExternalId` (Jira/Azure Boards; Linear resolve direto via Project, sem passar por essa checagem — ver Seção 5).
+
 ---
 
 ## 4. Módulo de Gestão de Identidades e Times (Unified Identity & Access Engine)
@@ -322,6 +324,12 @@ synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     CONSTRAINT unique_tenant_provider_item UNIQUE (tenant_id, provider, external_id)
 
 );
+-- `db/migrations/0054_add_parent_to_canonical_work_items.sql` acrescenta
+-- `parent_external_id`/`parent_external_name VARCHAR(255)` (nullable) —
+-- referência de 1 salto ao pai/container (épico), traduzida por cada
+-- conector (Jira: `parent.key`, só team-managed; Linear: `project.id`/`.name`;
+-- Azure Boards: id do work item pai via `System.LinkTypes.Hierarchy-Reverse`).
+-- Ver `CanonicalWorkItem.parentExternalId` e Seção 3 (`epicGrouping`).
 
 CREATE TABLE canonical_chat_stats (
 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -415,6 +423,13 @@ team_id UUID NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
     applied_rule_version TIMESTAMP WITH TIME ZONE NOT NULL
 
 );
+-- `db/migrations/0055_add_epic_grouping_to_enriched_work_items.sql`
+-- acrescenta `epic_external_id`/`epic_external_name VARCHAR(255)`
+-- (nullable, resolvidos por `src/enrichment/epic-resolver.ts`) e
+-- `is_epic_container BOOLEAN NOT NULL DEFAULT false` (item é ele mesmo um
+-- épico/container — fica de fora de qualquer quebra por épico, não conta a
+-- si mesmo). `epic_external_id/name` nulos = sem épico resolvido, não é
+-- erro (mesmo espírito de `team_id` nullable em `enriched_incidents`).
 
 ---
 

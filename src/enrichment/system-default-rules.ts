@@ -81,6 +81,15 @@ export const SYSTEM_DEFAULT_RULES: MappingRules = {
       conditions: [{ field: 'severity', operator: 'IN', values: ['SEV1', 'SEV2'] }],
     },
   ],
+  // Cobre Jira e Azure Boards por padrão (os dois usam "Epic" como nome do
+  // tipo) — Linear nem passa por essa checagem, resolve direto via
+  // `project` (ver epic-resolver.ts).
+  epicGrouping: [
+    {
+      matchMode: 'ANY',
+      conditions: [{ field: 'issue_type', operator: 'IN', values: ['Epic'] }],
+    },
+  ],
 };
 
 /** Categoria/estado usados quando nenhuma regra (do time, da org ou do fallback) bate com o dado. */
