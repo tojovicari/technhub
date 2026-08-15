@@ -30,6 +30,7 @@ const VALID_RESOURCE_PROVIDERS: readonly ExternalResourceProvider[] = [
   'azure_boards',
   'azure_repos',
   'azure_pipelines',
+  'vercel',
 ];
 const VALID_RESOURCE_TYPES: readonly ExternalResourceType[] = [
   'waroom_team',
@@ -40,6 +41,7 @@ const VALID_RESOURCE_TYPES: readonly ExternalResourceType[] = [
   'azure_boards_project',
   'azure_repos_repository',
   'azure_pipelines_project',
+  'vercel_project',
 ];
 
 interface TenantParams {
@@ -183,6 +185,10 @@ export function registerTeamRoutes(
           'azure_pipelines',
           'azure_pipelines_project',
         );
+        return reply.status(200).send(candidates);
+      }
+      if (provider === 'vercel' && resourceType === 'vercel_project') {
+        const candidates = await deploymentRepository.findUnlinkedExternalGroups(tenantId, 'vercel', 'vercel_project');
         return reply.status(200).send(candidates);
       }
 
