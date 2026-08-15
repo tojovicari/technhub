@@ -298,6 +298,31 @@ export class AzureBoardsProvider extends BaseProvider {
     }
   }
 
+  /**
+   * Busca work items específicos pelo id, fora do fluxo normal de WIQL —
+   * usado pelo `SyncOrchestrator` pra reconciliar "parents órfãos" (ver
+   * `BaseProvider.fetchByExternalIds`). Sem transições de status/descoberta
+   * de identidade (mais barato — um parent órfão só precisa existir como
+   * linha, pra `resolveEpicGroup` conseguir subir a cadeia e o self-join de
+   * nome funcionar).
+   */
+  async fetchByExternalIds(context: SyncContext, externalIds: readonly string[]): Promise<readonly CanonicalWorkItem[]> {
+    const apiToken = this.resolveApiToken(context.credentials);
+    const organization = this.resolveOrganization(context.credentials);
+    const headers = this.buildHeaders(apiToken);
+
+    const ids = externalIds.map(Number).filter((id) => Number.isInteger(id));
+    const workItems: CanonicalWorkItem[] = [];
+
+    for (let offset = 0; offset < ids.length; offset += BATCH_MAX_PER_PAGE) {
+      const page = ids.slice(offset, offset + BATCH_MAX_PER_PAGE);
+      const items = await this.fetchWorkItemsBatch(organization, headers, page);
+      workItems.push(...items.map((item) => this.mapToCanonicalWorkItem(item, context.tenantId)));
+    }
+
+    return workItems;
+  }
+
   private async runWiql(organization: string, headers: Record<string, string>, wiql: string): Promise<readonly number[]> {
     const response = await fetch(`https://dev.azure.com/${organization}/_apis/wit/wiql?api-version=${API_VERSION}`, {
       method: 'POST',

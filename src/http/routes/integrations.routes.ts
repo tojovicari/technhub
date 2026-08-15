@@ -222,12 +222,14 @@ export function registerIntegrationRoutes(
         credentials: stored.credentials,
         cursor: stored.lastCursor,
         since: stored.lastSyncedAt ?? undefined,
+        epicLinkFieldId: stored.epicLinkFieldId,
       });
 
       const outcome = await integrationRepository.markSyncOutcome(tenantId, integrationId, {
         success: result.success,
         nextCursor: result.nextCursor,
         cursorInvalidated: result.cursorInvalidated,
+        epicLinkFieldId: result.epicLinkFieldId,
       });
       await alertRepository.evaluateReconnectionAlert(
         tenantId,

@@ -1,4 +1,5 @@
 import { ProviderFactory } from './provider.factory';
+import type { BaseProvider } from './base.provider';
 import { PullRequestRepository } from '../repositories/pull-request.repository';
 import { WorkItemRepository } from '../repositories/work-item.repository';
 import { IncidentRepository } from '../repositories/incident.repository';
@@ -11,6 +12,14 @@ import type { SyncContext, SyncResult } from './canonical.types';
 
 /** Quantas integrações `runBatch` processa em paralelo por vez — ver `runBatch`. */
 const SYNC_BATCH_CONCURRENCY = 10;
+/**
+ * Teto de "parents órfãos" (`WorkItemRepository.findDanglingParentExternalIds`)
+ * resolvidos por execução de sync — protege contra um primeiro sync caro
+ * logo que a reconciliação for pro ar, num tenant com muitos órfãos
+ * acumulados. O resto autocura nas syncs seguintes (a query de órfãos roda
+ * de novo toda vez, sem estado próprio pra lembrar "já tentei esse").
+ */
+const MAX_DANGLING_PARENTS_PER_SYNC = 200;
 
 /**
  * Orquestra a execução de sincronizações incrementais sobre os provedores
@@ -56,6 +65,7 @@ export class SyncOrchestrator {
       const knownExternalUserIds = await this.resolveKnownExternalUserIds(context);
       const syncResult = await provider.syncIncremental({ ...context, knownExternalUserIds });
       const result = await this.persist(syncResult, context.integrationId);
+      await this.reconcileDanglingParents(provider, context, result);
 
       this.logOutcome(context.providerName, result, performance.now() - startedAt);
       await this.integrationRunHistoryRepository.record(context.tenantId, {
@@ -244,6 +254,59 @@ export class SyncOrchestrator {
     }
 
     return degraded ? { ...result, success: false, errors } : result;
+  }
+
+  /**
+   * Reconcilia "parents órfãos": work items cujo `parentExternalId` aponta
+   * pra um `external_id` que nunca foi sincronizado (ver
+   * `work-item.repository.ts:findDanglingParentExternalIds` — comum quando
+   * o pai é antigo demais pro backfill e não é editado com frequência, ver
+   * `epic-resolver.ts`). Só roda pra providers que implementam
+   * `fetchByExternalIds` (Jira, Azure Boards — issue trackers com
+   * hierarquia; Linear resolve direto via `project`, sem essa necessidade).
+   *
+   * Nunca lança — mesmo contrato de degradação suave de `persist`: uma
+   * falha aqui não pode derrubar uma sync que já teve sucesso. Não é
+   * recursivo dentro da mesma execução: um parent recém-buscado que por sua
+   * vez tem outro parent órfão (cadeia de vários saltos) resolve na
+   * *próxima* sync, não nesta — mantém o passo simples e limitado, já que
+   * roda toda sync mesmo (autocura ao longo de algumas execuções).
+   */
+  private async reconcileDanglingParents(
+    provider: BaseProvider,
+    context: SyncContext,
+    result: SyncResult,
+  ): Promise<void> {
+    if (!result.success || !provider.fetchByExternalIds) {
+      return;
+    }
+
+    try {
+      const danglingIds = await this.workItemRepository.findDanglingParentExternalIds(
+        context.tenantId,
+        context.integrationId,
+        MAX_DANGLING_PARENTS_PER_SYNC,
+      );
+
+      if (danglingIds.length === 0) {
+        return;
+      }
+
+      // Usa o `epicLinkFieldId` recém-resolvido nesta mesma sync (se
+      // houver) — senão a própria sync que descobre o campo pela primeira
+      // vez perde a chance de já usá-lo aqui, e só usaria na próxima.
+      const reconciliationContext: SyncContext =
+        result.epicLinkFieldId !== undefined ? { ...context, epicLinkFieldId: result.epicLinkFieldId } : context;
+
+      const fetchedParents = await provider.fetchByExternalIds(reconciliationContext, danglingIds);
+      if (fetchedParents.length > 0) {
+        await this.workItemRepository.upsertMany(fetchedParents, context.integrationId);
+      }
+    } catch (error) {
+      console.error(
+        `[SyncOrchestrator] Falha ao reconciliar parents órfãos de "${context.providerName}": ${this.describeError(error)}`,
+      );
+    }
   }
 
   private logOutcome(providerName: string, result: SyncResult, durationMs: number): void {

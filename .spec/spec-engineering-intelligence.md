@@ -327,9 +327,20 @@ synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 -- `db/migrations/0054_add_parent_to_canonical_work_items.sql` acrescenta
 -- `parent_external_id`/`parent_external_name VARCHAR(255)` (nullable) —
 -- referência de 1 salto ao pai/container (épico), traduzida por cada
--- conector (Jira: `parent.key`, só team-managed; Linear: `project.id`/`.name`;
--- Azure Boards: id do work item pai via `System.LinkTypes.Hierarchy-Reverse`).
--- Ver `CanonicalWorkItem.parentExternalId` e Seção 3 (`epicGrouping`).
+-- conector (Jira: `parent.key` team-managed, ou o custom field de Epic
+-- Link em projetos company-managed clássicos, descoberto via
+-- `GET /rest/api/3/field` e cacheado em `provider_integrations.epic_link_field_id`;
+-- Linear: `project.id`/`.name`; Azure Boards: id do work item pai via
+-- `System.LinkTypes.Hierarchy-Reverse`). Ver `CanonicalWorkItem.parentExternalId`
+-- e Seção 3 (`epicGrouping`).
+--
+-- `SyncOrchestrator.reconcileDanglingParents` (`sync.orchestrator.ts`) roda
+-- depois de toda sync bem-sucedida de um provider com `BaseProvider.fetchByExternalIds`
+-- (Jira, Azure Boards): busca work items cujo `parent_external_id` aponta
+-- pra um `external_id` nunca sincronizado (comum quando o pai é antigo
+-- demais pro backfill e raramente editado) diretamente pelo id/key,
+-- limitado a `MAX_DANGLING_PARENTS_PER_SYNC` por execução — autocura ao
+-- longo de várias syncs, não instantâneo numa execução só.
 
 CREATE TABLE canonical_chat_stats (
 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

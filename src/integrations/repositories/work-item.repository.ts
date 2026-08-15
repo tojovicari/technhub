@@ -252,4 +252,42 @@ export class WorkItemRepository {
       return result.rows.map((row) => ({ key: row.external_group_key, name: row.external_group_name }));
     });
   }
+
+  /**
+   * Valores distintos de `parent_external_id` referenciados por work items
+   * desta integração que **não** existem como `external_id` de nenhum
+   * outro item da mesma integração — "parents órfãos", alimenta a
+   * reconciliação do `SyncOrchestrator` (ver `resolveEpicGroup`/
+   * `epic-resolver.ts`: sem o pai sincronizado, a cadeia de épico nunca
+   * resolve). Escopado por `provider_integration_id`, não só `provider` —
+   * duas integrações do mesmo provider não podem cruzar `external_id`.
+   *
+   * `LIMIT` implementa o teto por execução de sync (autocura ao longo de
+   * várias syncs em vez de resolver tudo de uma vez só na primeira).
+   */
+  async findDanglingParentExternalIds(
+    tenantId: string,
+    providerIntegrationId: string,
+    limit: number,
+  ): Promise<readonly string[]> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{ parent_external_id: string }>(
+        `SELECT DISTINCT child.parent_external_id
+         FROM canonical_work_items child
+         WHERE child.tenant_id = $1
+           AND child.provider_integration_id = $2
+           AND child.parent_external_id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM canonical_work_items parent
+             WHERE parent.tenant_id = child.tenant_id
+               AND parent.provider_integration_id = child.provider_integration_id
+               AND parent.external_id = child.parent_external_id
+           )
+         LIMIT $3`,
+        [tenantId, providerIntegrationId, limit],
+      );
+
+      return result.rows.map((row) => row.parent_external_id);
+    });
+  }
 }

@@ -96,6 +96,7 @@ export function registerInternalRoutes(
                 cursor: stored.lastCursor,
                 since: stored.lastSyncedAt ?? undefined,
                 triggeredBy: 'cron',
+                epicLinkFieldId: stored.epicLinkFieldId,
               },
             };
           }),
@@ -120,6 +121,7 @@ export function registerInternalRoutes(
           success: result.success,
           nextCursor: result.nextCursor,
           cursorInvalidated: result.cursorInvalidated,
+          epicLinkFieldId: result.epicLinkFieldId,
         });
         await alertRepository.evaluateReconnectionAlert(
           target.context.tenantId,

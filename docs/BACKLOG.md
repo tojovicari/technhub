@@ -5,45 +5,54 @@ um item aqui for pra frente de verdade, o desenho real vai pra
 `.spec/spec-engineering-intelligence.md` (fonte da verdade), não fica só
 aqui.
 
-## Quebra de esforço por épico — gaps conhecidos desta rodada
+## Quebra de esforço por épico — gaps conhecidos
 
 **Contexto**: `GET /tenants/:tenantId/teams/:teamId/profile/epics` (Time →
 Projeto → Épico → Item) resolve o "pai/container" de 1 salto de cada work
 item (`CanonicalWorkItem.parentExternalId`) e sobe a cadeia até achar um
 ancestral marcado como fronteira de épico (`epicGrouping` em
-`mapping_rules`, ver `src/enrichment/epic-resolver.ts`). Três limitações
-deliberadas desta rodada, pra revisar quando fizer sentido:
+`mapping_rules`, ver `src/enrichment/epic-resolver.ts`).
 
-1. **Jira Epic Link clássico (company-managed) não é capturado.** Só o
-   campo nativo `parent` (team-managed, padrão em projetos novos) é lido —
-   projetos clássicos guardam o vínculo num custom field sem id fixo
-   (varia por site Jira), precisaria de descoberta via
-   `GET /rest/api/3/field` + cache por integração. Fora de escopo desta
-   rodada, decisão confirmada com o usuário.
+1. **Jira Epic Link clássico (company-managed) — feito.** `JiraProvider`
+   agora descobre o custom field via `GET /rest/api/3/field`
+   (`schema.custom === 'com.pyxis.greenhopper.jira:gh-epic-link'`, id
+   numérico varia por site) na primeira sync de cada integração, cacheado
+   em `provider_integrations.epic_link_field_id`/`epic_link_field_resolved`
+   (mesmo mecanismo de ida-e-volta do `cursor`, via `SyncContext`/
+   `SyncResult.epicLinkFieldId`). `parent` (team-managed) sempre vence
+   quando presente; cai pro custom field só quando `parent` é `null`.
+   **Não verificado ao vivo** — shape de `GET /rest/api/3/field` assumido
+   pela documentação pública da Atlassian; testado só estruturalmente
+   (montagem de JQL/URL, precedência `parent` vs. custom field), sem
+   credencial real disponível nesta sessão.
 2. **Resolução só dentro da mesma integração/projeto.** Se um épico e sua
    story estiverem em projetos Jira diferentes (raro, mas possível), a
    cadeia não resolve — o `parentExternalId` aponta pra um `externalId`
    que só existe no lookup de outra integração, fora do alcance de
-   `resolveEpicGroup`.
-2.1. **Confirmado com dado real (`GET .../users/:userId/profile/epics` contra
-   tenant real): um épico pode nunca ser sincronizado nem dentro do mesmo
-   projeto** — `parentExternalId` aponta certo pra um `external_id`, mas
-   esse `external_id` nunca existe em `canonical_work_items` (34 de 34
-   itens testados, 0 resolveram épico). Causa: o backfill do Jira só varre
-   `DEFAULT_BACKFILL_DEPTH_DAYS = 365` dias por `created`
-   (`backfill-window.ts`), e depois disso o sync vira permanentemente
-   incremental por `updated`. Um épico criado há mais de 365 dias e raramente
-   editado (comum — épicos costumam ser estáveis, quem muda com frequência
-   são os itens filho) fica fora tanto do backfill quanto do incremental,
-   **pra sempre**, mesmo que os filhos dele continuem sincronizando
-   normalmente. Não é um caso raro/de borda — é o comportamento esperado
-   pra qualquer épico "maduro" que ninguém mais toca. Não corrigido nesta
-   rodada; possíveis caminhos: (a) o backfill de work items passar a
-   considerar também `updated` do épico raiz, não só `created` do item
-   sendo sincronizado; (b) uma sync dedicada, mais rasa, só pra work items
-   tipo "épico" (JQL `issuetype = Epic`, sem o filtro de janela normal,
-   já que o volume de épicos por projeto costuma ser pequeno).
-3. **Azure Boards `$expand: 'relations'` não verificado ao vivo** — mesma
+   `resolveEpicGroup`. Não corrigido.
+3. **Parents órfãos (épico nunca sincronizado, mesmo dentro do mesmo
+   projeto) — reconciliação automática implementada.** Causa original: o
+   backfill do Jira só varre `DEFAULT_BACKFILL_DEPTH_DAYS = 365` dias por
+   `created` (`backfill-window.ts`), depois disso vira sync permanentemente
+   incremental por `updated` — um épico maduro e raramente editado nunca
+   era sincronizado, mesmo com os filhos sincronizando normalmente
+   (confirmado com dado real: 34/34 itens testados, 0 resolveram épico).
+   Corrigido via `SyncOrchestrator.reconcileDanglingParents`: toda sync
+   bem-sucedida de um provider que implementa `BaseProvider.fetchByExternalIds`
+   (Jira, Azure Boards) busca até `MAX_DANGLING_PARENTS_PER_SYNC = 200`
+   `parent_external_id`s órfãos (`WorkItemRepository.findDanglingParentExternalIds`)
+   diretamente pelo id/key e persiste como work item normal. Autocura ao
+   longo de várias syncs, não instantâneo numa execução só — cadeias de
+   vários saltos (comum no Azure Boards: Task→Story→Feature→Epic) podem
+   levar mais de uma sync pra resolver de vez, decisão deliberada pra
+   manter o passo simples. **Não verificado ao vivo** (mesma ressalva do
+   item 1) — testado estruturalmente: a query de órfãos foi validada contra
+   dado real de produção (achou 104 órfãos distintos, respeitou o teto),
+   `markSyncOutcome`/`getDecryptedCredentialsById` foram validados end-to-end
+   contra o banco real, mas a chamada de `fetchByExternalIds` em si (JQL
+   `key in (...)` do Jira, `workitemsbatch` do Azure) não foi exercitada
+   contra API real nesta sessão.
+4. **Azure Boards `$expand: 'relations'` não verificado ao vivo** — mesma
    ressalva já registrada pros outros pontos incertos do conector
    (`azure-boards.provider.ts`). Não confirmado se a API realmente devolve
    o link `System.LinkTypes.Hierarchy-Reverse` no formato assumido, nem se

@@ -23,6 +23,8 @@ import {
 const DEFAULT_PAGE_SIZE = 50;
 /** Limite prático por página da REST API v3 do Jira Cloud. */
 const SEARCH_MAX_PER_PAGE = 100;
+/** `schema.custom` do campo de Epic Link em projetos company-managed clássicos — estável entre sites Jira, diferente do id numérico (`customfield_NNNNN`), que varia por site. */
+const EPIC_LINK_CUSTOM_FIELD_SCHEMA = 'com.pyxis.greenhopper.jira:gh-epic-link';
 
 /**
  * Envelope de resposta de `GET /rest/api/3/search/jql`.
@@ -49,12 +51,7 @@ interface JiraIssue {
     readonly created: string;
     readonly updated: string;
     readonly project: { readonly key: string; readonly name: string };
-    /**
-     * Só presente em projetos team-managed (padrão em projetos novos) — o
-     * Epic Link clássico de projetos company-managed usa um custom field
-     * sem id fixo (varia por site), fora de escopo desta rodada (ver
-     * docs/BACKLOG.md).
-     */
+    /** Só presente em projetos team-managed (padrão em projetos novos). Projetos company-managed clássicos usam o custom field de Epic Link em vez disso — ver `extractEpicLinkKey`/`resolveEpicLinkFieldId`. */
     readonly parent?: { readonly key: string };
   };
   /**
@@ -90,6 +87,24 @@ interface JiraUserDetail {
   readonly displayName: string;
   readonly emailAddress?: string;
   readonly avatarUrls?: { readonly '48x48'?: string };
+}
+
+/**
+ * Lê o valor do custom field de Epic Link dinamicamente — `JiraIssue.fields`
+ * é uma interface literal (sem index signature, os campos fixos têm tipos
+ * diferentes entre si), então o acesso pela chave dinâmica precisa de um
+ * cast pontual aqui, isolado, em vez de abrir mão da tipagem da interface
+ * inteira. `epicLinkFieldId: null` (nunca resolvido/site sem esse campo)
+ * devolve `null` sem tentar ler nada. Valor não-string (formato inesperado)
+ * também vira `null` — degradação silenciosa, não é erro fatal.
+ */
+function extractEpicLinkKey(fields: JiraIssue['fields'], epicLinkFieldId: string | null): string | null {
+  if (!epicLinkFieldId) {
+    return null;
+  }
+
+  const value = (fields as Record<string, unknown>)[epicLinkFieldId];
+  return typeof value === 'string' ? value : null;
 }
 
 /**
@@ -145,9 +160,29 @@ export class JiraProvider extends BaseProvider {
       const headers = this.buildHeaders(email, apiToken);
       const maxResults = Math.min(context.pageSize ?? DEFAULT_PAGE_SIZE, SEARCH_MAX_PER_PAGE);
 
-      return context.since
-        ? await this.syncSincePage(baseUrl, projectKey, headers, context, maxResults)
-        : await this.syncBackfillPage(baseUrl, projectKey, headers, context, maxResults);
+      // `undefined` = nunca resolvido, tenta descobrir agora (uma vez só —
+      // o resultado, mesmo `null`, é cacheado em `provider_integrations`
+      // pelo SyncOrchestrator via SyncResult.epicLinkFieldId). Falha na
+      // descoberta não derruba a sync inteira: degrada pra `null` só nesta
+      // execução, sem marcar como resolvido, pra tentar de novo na próxima.
+      let epicLinkFieldId: string | null;
+      let epicLinkFieldResolvedThisRun = false;
+      if (context.epicLinkFieldId !== undefined) {
+        epicLinkFieldId = context.epicLinkFieldId;
+      } else {
+        try {
+          epicLinkFieldId = await this.resolveEpicLinkFieldId(baseUrl, headers);
+          epicLinkFieldResolvedThisRun = true;
+        } catch {
+          epicLinkFieldId = null;
+        }
+      }
+
+      const result = context.since
+        ? await this.syncSincePage(baseUrl, projectKey, headers, context, maxResults, epicLinkFieldId)
+        : await this.syncBackfillPage(baseUrl, projectKey, headers, context, maxResults, epicLinkFieldId);
+
+      return epicLinkFieldResolvedThisRun ? { ...result, epicLinkFieldId } : result;
     } catch (error) {
       return {
         success: false,
@@ -157,6 +192,47 @@ export class JiraProvider extends BaseProvider {
     }
   }
 
+  /**
+   * Busca issues específicas pela key, fora do fluxo normal de JQL por
+   * janela — usado pelo `SyncOrchestrator` pra reconciliar "parents
+   * órfãos" (ver `BaseProvider.fetchByExternalIds`). `key in (...)` já é
+   * sempre uma cláusula não-vazia, não precisa do "cinto de segurança"
+   * `created <= now()` que `buildJql` adiciona pros outros modos.
+   */
+  async fetchByExternalIds(context: SyncContext, externalIds: readonly string[]): Promise<readonly CanonicalWorkItem[]> {
+    const apiToken = this.resolveApiToken(context.credentials);
+    const email = this.resolveEmail(context.credentials);
+    const baseUrl = this.resolveBaseUrl(context.credentials);
+    const headers = this.buildHeaders(email, apiToken);
+    const epicLinkFieldId = context.epicLinkFieldId ?? null;
+
+    const workItems: CanonicalWorkItem[] = [];
+
+    for (let offset = 0; offset < externalIds.length; offset += SEARCH_MAX_PER_PAGE) {
+      const page = externalIds.slice(offset, offset + SEARCH_MAX_PER_PAGE);
+      const jql = `key in (${page.map((key) => `"${key}"`).join(',')})`;
+      let pageToken: string | undefined;
+
+      do {
+        const searchUrl = this.buildSearchUrl(baseUrl, jql, pageToken, SEARCH_MAX_PER_PAGE, epicLinkFieldId);
+        const response = await fetch(searchUrl, { headers });
+        if (!response.ok) {
+          throw new Error(
+            `[${this.providerName}] Falha ao buscar issues por key: ${response.status} ${response.statusText}.`,
+          );
+        }
+
+        const searchResult = (await response.json()) as JiraSearchResponse;
+        workItems.push(
+          ...searchResult.issues.map((issue) => this.mapToCanonicalWorkItem(issue, context.tenantId, epicLinkFieldId)),
+        );
+        pageToken = searchResult.nextPageToken;
+      } while (pageToken);
+    }
+
+    return workItems;
+  }
+
   /** Modo simples de sempre — uma query, sem janela, escopada por `updated >= since`. */
   private async syncSincePage(
     baseUrl: string,
@@ -164,11 +240,12 @@ export class JiraProvider extends BaseProvider {
     headers: Record<string, string>,
     context: SyncContext,
     maxResults: number,
+    epicLinkFieldId: string | null,
   ): Promise<SyncResult> {
     const pageToken = context.cursor ?? undefined;
     const filterClauses = context.since ? [`updated >= "${this.formatJqlDateTime(context.since)}"`] : [];
     const jql = `${this.buildJql(projectKey, filterClauses)} ORDER BY updated DESC`.trim();
-    const searchUrl = this.buildSearchUrl(baseUrl, jql, pageToken, maxResults);
+    const searchUrl = this.buildSearchUrl(baseUrl, jql, pageToken, maxResults, epicLinkFieldId);
     const searchResponse = await fetch(searchUrl, { headers });
 
     if (!searchResponse.ok) {
@@ -188,6 +265,7 @@ export class JiraProvider extends BaseProvider {
       context,
       baseUrl,
       headers,
+      epicLinkFieldId,
     );
 
     return {
@@ -208,6 +286,7 @@ export class JiraProvider extends BaseProvider {
     headers: Record<string, string>,
     context: SyncContext,
     maxResults: number,
+    epicLinkFieldId: string | null,
   ): Promise<SyncResult> {
     const floor = computeBackfillFloor();
     const parsedCursor = parseBackfillCursor(context.cursor);
@@ -228,7 +307,7 @@ export class JiraProvider extends BaseProvider {
       `created <= "${this.formatJqlDateTime(windowEnd)}"`,
     ];
     const jql = `${this.buildJql(projectKey, filterClauses)} ORDER BY updated DESC`.trim();
-    const searchUrl = this.buildSearchUrl(baseUrl, jql, pageToken, maxResults);
+    const searchUrl = this.buildSearchUrl(baseUrl, jql, pageToken, maxResults, epicLinkFieldId);
     const searchResponse = await fetch(searchUrl, { headers });
 
     if (!searchResponse.ok) {
@@ -257,6 +336,7 @@ export class JiraProvider extends BaseProvider {
       context,
       baseUrl,
       headers,
+      epicLinkFieldId,
     );
 
     // Diferente do GitHub, o endpoint com cursor do Jira (`/search/jql`) não
@@ -333,13 +413,14 @@ export class JiraProvider extends BaseProvider {
     context: SyncContext,
     baseUrl: string,
     headers: Record<string, string>,
+    epicLinkFieldId: string | null,
   ): Promise<{
     readonly workItems: CanonicalWorkItem[];
     readonly statusTransitions: CanonicalWorkItemStatusTransition[];
     readonly discoveredIdentities: CanonicalDiscoveredIdentity[];
     readonly errors: string[];
   }> {
-    const workItems = issues.map((issue) => this.mapToCanonicalWorkItem(issue, context.tenantId));
+    const workItems = issues.map((issue) => this.mapToCanonicalWorkItem(issue, context.tenantId, epicLinkFieldId));
     const statusTransitions = issues.flatMap((issue) => this.mapToStatusTransitions(issue, context.tenantId));
     const { discoveredIdentities, identityErrors } = await this.resolveDiscoveredIdentities(
       workItems,
@@ -433,11 +514,21 @@ export class JiraProvider extends BaseProvider {
     return clauses.join(' AND ');
   }
 
-  private buildSearchUrl(baseUrl: string, jql: string, pageToken: string | undefined, maxResults: number): URL {
+  private buildSearchUrl(
+    baseUrl: string,
+    jql: string,
+    pageToken: string | undefined,
+    maxResults: number,
+    epicLinkFieldId?: string | null,
+  ): URL {
     const searchUrl = new URL(`${baseUrl}/rest/api/3/search/jql`);
     searchUrl.searchParams.set('jql', jql);
     searchUrl.searchParams.set('maxResults', String(maxResults));
-    searchUrl.searchParams.set('fields', 'issuetype,status,labels,summary,assignee,created,updated,project,parent');
+    const fields = ['issuetype', 'status', 'labels', 'summary', 'assignee', 'created', 'updated', 'project', 'parent'];
+    if (epicLinkFieldId) {
+      fields.push(epicLinkFieldId);
+    }
+    searchUrl.searchParams.set('fields', fields.join(','));
     // Vem embutido na mesma resposta de busca, sem chamada extra por issue
     // (verificado ao vivo contra a API real) — alimenta started_working_at/
     // completed_at na Enriched Layer.
@@ -523,7 +614,7 @@ export class JiraProvider extends BaseProvider {
     };
   }
 
-  private mapToCanonicalWorkItem(issue: JiraIssue, tenantId: string): CanonicalWorkItem {
+  private mapToCanonicalWorkItem(issue: JiraIssue, tenantId: string, epicLinkFieldId: string | null): CanonicalWorkItem {
     return {
       tenantId,
       provider: 'jira',
@@ -535,10 +626,42 @@ export class JiraProvider extends BaseProvider {
       assigneeExternalId: issue.fields.assignee?.accountId ?? null,
       externalGroupKey: issue.fields.project.key,
       externalGroupName: issue.fields.project.name,
-      parentExternalId: issue.fields.parent?.key ?? null,
+      // `parent` (team-managed) sempre vence quando presente; cai pro
+      // custom field de Epic Link (company-managed clássico) só quando
+      // `parent` é null — os dois nunca coexistem na prática (um projeto é
+      // ou team-managed ou company-managed, não os dois).
+      parentExternalId: issue.fields.parent?.key ?? extractEpicLinkKey(issue.fields, epicLinkFieldId),
       createdAt: new Date(issue.fields.created),
       updatedAt: new Date(issue.fields.updated),
     };
+  }
+
+  /**
+   * Descoberta do custom field de Epic Link em projetos company-managed
+   * clássicos — o id numérico (`customfield_NNNNN`) varia por site Jira,
+   * só o `schema.custom` é estável entre sites. `null` = site sem esse
+   * campo (100% team-managed) ou nada reconhecível na resposta — resultado
+   * válido, não erro. Chamada só uma vez por integração (ver
+   * `syncIncremental`/`SyncContext.epicLinkFieldId`), resultado cacheado
+   * em `provider_integrations.epic_link_field_id`.
+   *
+   * **Não verificado ao vivo** — shape de `GET /rest/api/3/field` assumido
+   * a partir da documentação pública da Atlassian, mesma ressalva já usada
+   * nos outros pontos incertos desta rodada.
+   */
+  private async resolveEpicLinkFieldId(baseUrl: string, headers: Record<string, string>): Promise<string | null> {
+    const response = await fetch(`${baseUrl}/rest/api/3/field`, { headers });
+    if (!response.ok) {
+      throw new Error(`GET /rest/api/3/field retornou ${response.status} ${response.statusText}.`);
+    }
+
+    const fields = (await response.json()) as readonly {
+      readonly id: string;
+      readonly schema?: { readonly custom?: string };
+    }[];
+    const epicLinkField = fields.find((field) => field.schema?.custom === EPIC_LINK_CUSTOM_FIELD_SCHEMA);
+
+    return epicLinkField?.id ?? null;
   }
 
   /**

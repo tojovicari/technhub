@@ -1,4 +1,5 @@
 import type {
+  CanonicalWorkItem,
   ProviderCategory,
   ProviderCredentials,
   SyncContext,
@@ -36,6 +37,25 @@ export abstract class BaseProvider {
    * canônicos coletados e o cursor a ser reutilizado na próxima execução.
    */
   abstract syncIncremental(context: SyncContext): Promise<SyncResult>;
+
+  /**
+   * Busca work items específicos pelo `externalId`, fora do fluxo normal
+   * de sync (sem cursor, sem janela de tempo) — usado pelo
+   * `SyncOrchestrator` pra reconciliar "parents órfãos": um
+   * `parentExternalId` que aponta pra um item nunca sincronizado (comum
+   * quando o item é antigo demais pro backfill e não é editado com
+   * frequência, ver `epic-resolver.ts`).
+   *
+   * Opcional: só providers de issue tracker com hierarquia de work items
+   * (Jira, Azure Boards) implementam. Providers sem esse conceito (Linear,
+   * que resolve agrupamento direto via `project`, sem cadeia de work
+   * items) simplesmente não têm essa propriedade — o orquestrador checa
+   * a presença antes de chamar.
+   */
+  fetchByExternalIds?(
+    context: SyncContext,
+    externalIds: readonly string[],
+  ): Promise<readonly CanonicalWorkItem[]>;
 
   /**
    * Garante que todos os campos obrigatórios de `ProviderCredentials` para

@@ -125,6 +125,15 @@ export interface SyncContext {
   readonly knownExternalUserIds?: ReadonlySet<string>;
   /** Quem disparou esta sync — `'manual'` (rota `.../sync`) ou `'cron'` (`/internal/sync`). Usado só para o histórico de execução (`integration_run_history`); default `'manual'` se omitido. */
   readonly triggeredBy?: 'manual' | 'cron';
+  /**
+   * Estado derivado cacheado por integração, análogo a `cursor` mas sem
+   * relação com paginação — hoje só usado pelo Jira pra guardar o id do
+   * custom field de Epic Link em projetos company-managed (descoberto uma
+   * vez via `GET /rest/api/3/field`, ver `jira.provider.ts`).
+   * `undefined` = nunca resolvido; `null` = já tentou resolver, o site não
+   * tem esse campo (não tenta de novo toda sync).
+   */
+  readonly epicLinkFieldId?: string | null;
 }
 
 /**
@@ -383,6 +392,8 @@ export interface SyncResult {
    * em vez de por acaso.
    */
   readonly cursorInvalidated?: boolean;
+  /** Análogo a `nextCursor`, pra `SyncContext.epicLinkFieldId` — só preenchido quando o provider resolve/confirma esse estado pela primeira vez. */
+  readonly epicLinkFieldId?: string | null;
 }
 
 /**

@@ -53,6 +53,8 @@ export interface DecryptedIntegration {
   readonly credentials: ProviderCredentials;
   readonly lastCursor: string | null;
   readonly lastSyncedAt: Date | null;
+  /** Estado derivado cacheado, análogo a `lastCursor` — hoje só usado pelo Jira (id do custom field de Epic Link). `undefined` = nunca resolvido; `null` = já resolvido, o site não tem esse campo. */
+  readonly epicLinkFieldId: string | null | undefined;
 }
 
 function requireEncryptionKey(): string {
@@ -203,8 +205,11 @@ export class ProviderIntegrationRepository {
         decrypted_credentials: string;
         last_cursor: string | null;
         last_synced_at: Date | null;
+        epic_link_field_id: string | null;
+        epic_link_field_resolved: boolean;
       }>(
-        `SELECT pgp_sym_decrypt(encrypted_credentials, $3) AS decrypted_credentials, last_cursor, last_synced_at
+        `SELECT pgp_sym_decrypt(encrypted_credentials, $3) AS decrypted_credentials, last_cursor, last_synced_at,
+                epic_link_field_id, epic_link_field_resolved
          FROM provider_integrations
          WHERE tenant_id = $1 AND id = $2`,
         [tenantId, integrationId, this.encryptionKey],
@@ -218,8 +223,16 @@ export class ProviderIntegrationRepository {
         decrypted_credentials: decryptedCredentials,
         last_cursor: lastCursor,
         last_synced_at: lastSyncedAt,
+        epic_link_field_id: epicLinkFieldId,
+        epic_link_field_resolved: epicLinkFieldResolved,
       } = result.rows[0];
-      return { credentials: JSON.parse(decryptedCredentials) as ProviderCredentials, lastCursor, lastSyncedAt };
+      return {
+        credentials: JSON.parse(decryptedCredentials) as ProviderCredentials,
+        lastCursor,
+        lastSyncedAt,
+        // `undefined` = nunca resolvido, provider deve tentar descobrir de novo.
+        epicLinkFieldId: epicLinkFieldResolved ? epicLinkFieldId : undefined,
+      };
     });
   }
 
@@ -252,11 +265,21 @@ export class ProviderIntegrationRepository {
   async markSyncOutcome(
     tenantId: string,
     integrationId: string,
-    outcome: { readonly success: boolean; readonly nextCursor?: string | null; readonly cursorInvalidated?: boolean },
+    outcome: {
+      readonly success: boolean;
+      readonly nextCursor?: string | null;
+      readonly cursorInvalidated?: boolean;
+      readonly epicLinkFieldId?: string | null;
+    },
   ): Promise<{ readonly consecutiveFailures: number }> {
     const status: IntegrationStatus = outcome.success ? 'ACTIVE' : 'ERROR';
     const nextCursor = outcome.nextCursor ?? null;
     const shouldClearCursor = outcome.success || outcome.cursorInvalidated === true;
+    // `undefined` = provider não tentou resolver nesta execução (não é Jira,
+    // ou já tinha resolvido antes e nem reportou de novo) — não mexe nas
+    // colunas. Presente (mesmo `null`) = resolução de verdade aconteceu
+    // agora, grava e marca como resolvido pra nunca mais tentar.
+    const epicLinkFieldAttempted = outcome.epicLinkFieldId !== undefined;
 
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<{ consecutive_failures: number }>(
@@ -265,10 +288,12 @@ export class ProviderIntegrationRepository {
              last_cursor = CASE WHEN $5 THEN $4 ELSE last_cursor END,
              last_synced_at = CASE WHEN $3::varchar = 'ACTIVE' AND $4 IS NULL THEN NOW() ELSE last_synced_at END,
              consecutive_failures = CASE WHEN $3::varchar = 'ACTIVE' THEN 0 ELSE consecutive_failures + 1 END,
+             epic_link_field_id = CASE WHEN $6 THEN $7 ELSE epic_link_field_id END,
+             epic_link_field_resolved = CASE WHEN $6 THEN true ELSE epic_link_field_resolved END,
              updated_at = NOW()
          WHERE tenant_id = $1 AND id = $2
          RETURNING consecutive_failures`,
-        [tenantId, integrationId, status, nextCursor, shouldClearCursor],
+        [tenantId, integrationId, status, nextCursor, shouldClearCursor, epicLinkFieldAttempted, outcome.epicLinkFieldId ?? null],
       );
       return { consecutiveFailures: result.rows[0]?.consecutive_failures ?? 0 };
     });
