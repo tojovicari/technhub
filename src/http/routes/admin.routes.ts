@@ -15,9 +15,14 @@ import { NotificationService } from '../../notifications/notification.service';
 import type { Tenant, User } from '../../identity/identity.types';
 import type { Subscription, Plan, SubscriptionStatus, EnterpriseCheckoutLink } from '../../billing/billing.types';
 import { PlatformOperatorAuditLogRepository } from '../../platform-admin/platform-operator-audit-log.repository';
+import { PlatformTenantNoteRepository } from '../../platform-admin/platform-tenant-note.repository';
+import { SupportTimelineService } from '../../platform-admin/support-timeline.service';
+import { AlertRepository } from '../../alerts/alert.repository';
+import { UserEmailDirectoryRepository } from '../../identity/user-email-directory.repository';
 import { requirePlatformOperator } from '../middleware/require-platform-operator';
 import { signImpersonationToken, verifyAuthToken } from '../../auth/core/jwt';
 import { getPlatformAdminRoutePrefix } from '../../config/platform-admin-route-prefix';
+import { isValidUuid } from '../uuid';
 
 const BEARER_PREFIX = 'Bearer ';
 
@@ -44,6 +49,25 @@ interface TenantIntegrationIdParams {
 interface AuditLogQuery {
   readonly tenantId?: string;
   readonly limit?: string;
+}
+interface TenantNoteIdParams {
+  readonly tenantId: string;
+  readonly noteId: string;
+}
+interface EmailSearchQuery {
+  readonly email?: string;
+}
+interface LimitQuery {
+  readonly limit?: string;
+}
+interface TenantAlertsQuery extends LimitQuery {
+  readonly unread?: string;
+}
+interface CreateTenantNoteBody {
+  readonly body?: string;
+}
+interface ImpersonateBody {
+  readonly reason?: string;
 }
 
 interface CreatePlanBody {
@@ -181,6 +205,10 @@ export function registerAdminRoutes(
   runHistoryRepository: IntegrationRunHistoryRepository = new IntegrationRunHistoryRepository(),
   enterpriseCheckoutLinkRepository: EnterpriseCheckoutLinkRepository = new EnterpriseCheckoutLinkRepository(),
   notificationService: NotificationService = new NotificationService(),
+  alertRepository: AlertRepository = new AlertRepository(),
+  userEmailDirectoryRepository: UserEmailDirectoryRepository = new UserEmailDirectoryRepository(),
+  tenantNoteRepository: PlatformTenantNoteRepository = new PlatformTenantNoteRepository(),
+  supportTimelineService: SupportTimelineService = new SupportTimelineService(),
 ): void {
   const prefix = getPlatformAdminRoutePrefix();
   if (!prefix) {
@@ -238,6 +266,45 @@ export function registerAdminRoutes(
   );
 
   /**
+   * Busca tenant(s) a partir do email de um usuário — apoio a atendimento
+   * ("esse cliente me mandou um email, em qual tenant ele está?").
+   * `UserEmailDirectoryRepository.findTenantIdsByEmail` é o índice
+   * cross-tenant já existente (usado hoje só no login SSO-first); o mesmo
+   * email pode legitimamente aparecer em mais de um tenant, por isso a
+   * resposta é sempre um array. Mesmo formato/composição de
+   * `buildTenantOverview` usado pela listagem/detalhe acima.
+   *
+   * Limitação conhecida: o índice não é reconstruído se um usuário mudar de
+   * email ou for deletado — nenhuma das duas ações existe hoje no código.
+   */
+  server.get<{ Querystring: EmailSearchQuery }>(
+    `${prefix}/tenants/search`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const { email } = request.query;
+      if (!email) {
+        return reply.status(400).send({ error: 'O parâmetro "email" é obrigatório.' });
+      }
+
+      const [tenantIds, plans] = await Promise.all([
+        userEmailDirectoryRepository.findTenantIdsByEmail(email),
+        planRepository.findAll(),
+      ]);
+      const tenants = await tenantRepository.findManyByIds(tenantIds);
+      const planById = new Map(plans.map((plan) => [plan.id, plan]));
+
+      const overview = await Promise.all(
+        tenants.map(async (tenant) => {
+          const subscription = await subscriptionRepository.findByTenantId(tenant.id);
+          return buildTenantOverview(tenant, subscription, planById);
+        }),
+      );
+
+      return reply.status(200).send(overview);
+    },
+  );
+
+  /**
    * Drilldown de leitura — reaproveita os mesmos repositórios já usados
    * pelas rotas tenant-scoped equivalentes (`GET /tenants/:tenantId/users`
    * etc.), só chamados com o `tenantId` da URL em vez de vir do token (não
@@ -283,6 +350,120 @@ export function registerAdminRoutes(
       const { tenantId, integrationId } = request.params;
       const history = await runHistoryRepository.findByIntegration(tenantId, integrationId);
       return reply.status(200).send(history);
+    },
+  );
+
+  /** Mesmo espelho de leitura do drilldown acima — alertas in-app de um tenant, mesma validação de `limit` de `alerts.routes.ts`. */
+  server.get<{ Params: TenantIdParams; Querystring: TenantAlertsQuery }>(
+    `${prefix}/tenants/:tenantId/alerts`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const parsedLimit = request.query.limit ? Number(request.query.limit) : 50;
+      if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 200) {
+        return reply.status(400).send({ error: '"limit" precisa ser um inteiro entre 1 e 200.' });
+      }
+
+      const alerts = await alertRepository.findAllByTenant(request.params.tenantId, {
+        unreadOnly: request.query.unread === 'true',
+        limit: parsedLimit,
+      });
+      return reply.status(200).send(alerts);
+    },
+  );
+
+  /**
+   * Notas internas de atendimento — visíveis só a operadores, nunca ao
+   * tenant. `POST`/`DELETE` gravam no audit log, mesmo padrão de toda
+   * escrita do painel.
+   */
+  server.post<{ Params: TenantIdParams; Body: CreateTenantNoteBody }>(
+    `${prefix}/tenants/:tenantId/notes`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const { tenantId } = request.params;
+      const { body } = request.body;
+      if (!body) {
+        return reply.status(400).send({ error: 'O campo "body" é obrigatório.' });
+      }
+
+      const note = await tenantNoteRepository.create(
+        tenantId,
+        request.platformOperator!.externalUserId,
+        request.platformOperator!.primaryEmail,
+        body,
+      );
+      await auditLogRepository.record({
+        operatorExternalUserId: request.platformOperator!.externalUserId,
+        operatorEmail: request.platformOperator!.primaryEmail,
+        action: 'CREATE_TENANT_NOTE',
+        targetTenantId: tenantId,
+        metadata: { noteId: note.id },
+      });
+      return reply.status(201).send(note);
+    },
+  );
+
+  server.get<{ Params: TenantIdParams; Querystring: LimitQuery }>(
+    `${prefix}/tenants/:tenantId/notes`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const parsedLimit = request.query.limit ? Number(request.query.limit) : 50;
+      if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 200) {
+        return reply.status(400).send({ error: '"limit" precisa ser um inteiro entre 1 e 200.' });
+      }
+
+      const notes = await tenantNoteRepository.findByTenant(request.params.tenantId, parsedLimit);
+      return reply.status(200).send(notes);
+    },
+  );
+
+  server.delete<{ Params: TenantNoteIdParams }>(
+    `${prefix}/tenants/:tenantId/notes/:noteId`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const { tenantId, noteId } = request.params;
+      if (!isValidUuid(noteId)) {
+        return reply.status(404).send({ error: 'Nota não encontrada para este tenant.' });
+      }
+
+      const found = await tenantNoteRepository.delete(tenantId, noteId);
+      if (!found) {
+        return reply.status(404).send({ error: 'Nota não encontrada para este tenant.' });
+      }
+
+      await auditLogRepository.record({
+        operatorExternalUserId: request.platformOperator!.externalUserId,
+        operatorEmail: request.platformOperator!.primaryEmail,
+        action: 'DELETE_TENANT_NOTE',
+        targetTenantId: tenantId,
+        metadata: { noteId },
+      });
+      return reply.status(204).send();
+    },
+  );
+
+  /** Timeline unificada — audit log + billing events + alertas + notas, mesclados por data. Ver `SupportTimelineService`. */
+  server.get<{ Params: TenantIdParams; Querystring: LimitQuery }>(
+    `${prefix}/tenants/:tenantId/timeline`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const parsedLimit = request.query.limit ? Number(request.query.limit) : 50;
+      if (!Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 200) {
+        return reply.status(400).send({ error: '"limit" precisa ser um inteiro entre 1 e 200.' });
+      }
+
+      const timeline = await supportTimelineService.getTimeline(request.params.tenantId, parsedLimit);
+      return reply.status(200).send(timeline);
+    },
+  );
+
+  /** Sinais crus de saúde do tenant — sem pontuação/fórmula, o front decide como visualizar. Ver `SupportTimelineService.getHealthSnapshot`. */
+  server.get<{ Params: TenantIdParams }>(
+    `${prefix}/tenants/:tenantId/support-snapshot`,
+    { preHandler: [requirePlatformOperator] },
+    async (request, reply) => {
+      const snapshot = await supportTimelineService.getHealthSnapshot(request.params.tenantId);
+      return reply.status(200).send(snapshot);
     },
   );
 
@@ -550,8 +731,12 @@ export function registerAdminRoutes(
    * verdade — é só o `systemRole` do token que é elevado.
    * `markLoggedIn`/`last_login_at` não são tocados: isso não é um login de
    * verdade do usuário-alvo.
+   *
+   * `Body.reason` é **opcional** por enquanto (decisão deliberada — não
+   * quebra um front que ainda não manda corpo nenhum nessa rota); quando
+   * presente, vai só pro `metadata` do audit log, sem validação de conteúdo.
    */
-  server.post<{ Params: ImpersonateParams }>(
+  server.post<{ Params: ImpersonateParams; Body: ImpersonateBody }>(
     `${prefix}/tenants/:tenantId/impersonate/:userId`,
     { preHandler: [requirePlatformOperator] },
     async (request, reply) => {
@@ -570,12 +755,14 @@ export function registerAdminRoutes(
         impersonatedBy: request.platformOperator!.externalUserId,
       });
 
+      const { reason } = request.body ?? {};
       await auditLogRepository.record({
         operatorExternalUserId: request.platformOperator!.externalUserId,
         operatorEmail: request.platformOperator!.primaryEmail,
         action: 'START_IMPERSONATION',
         targetTenantId: tenantId,
         targetUserId: user.id,
+        metadata: reason ? { reason } : null,
       });
 
       return reply.status(200).send({ accessToken, expiresIn: IMPERSONATION_TOKEN_EXPIRES_IN_SECONDS, user });

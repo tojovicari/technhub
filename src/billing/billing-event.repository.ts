@@ -57,6 +57,22 @@ export class BillingEventRepository {
     });
   }
 
+  /** Mais recentes primeiro (por `occurred_at`, o timestamp de negócio do evento — não `created_at`). */
+  async findByTenant(tenantId: string, limit: number): Promise<readonly BillingEvent[]> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<BillingEventRow>(
+        `SELECT id, tenant_id, event_type, provider, provider_event_id, raw_payload, occurred_at, created_at
+         FROM billing_events
+         WHERE tenant_id = $1
+         ORDER BY occurred_at DESC
+         LIMIT $2`,
+        [tenantId, limit],
+      );
+
+      return result.rows.map(mapRowToBillingEvent);
+    });
+  }
+
   /** Idempotência: um `providerEventId` (Stripe `event.id`) já processado não deve ser reprocessado. */
   async existsByProviderEventId(tenantId: string, providerEventId: string): Promise<boolean> {
     return withTenantContext(this.pool, tenantId, async (client) => {

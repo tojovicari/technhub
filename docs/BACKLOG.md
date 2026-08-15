@@ -149,6 +149,29 @@ do seguinte):
   `'payment_recovered'`) na transição de verdade pra/de `past_due` (não em
   toda falha/pagamento repetido do mesmo ciclo) — `funnel.delinquency` no
   `/metrics`. Deixou de ser o gap documentado antes aqui.
+5. **Ferramentas de atendimento ao cliente — feito.** 6 gaps fechados numa
+   rodada só, todos read-only ou dado de plataforma sem RLS (mesmo padrão
+   do resto deste painel):
+   - `GET {prefix}/tenants/search?email=` — busca tenant(s) a partir do
+     email de um usuário, via `UserEmailDirectoryRepository.findTenantIdsByEmail`
+     (índice cross-tenant já existente, antes só usado no login SSO-first).
+   - `GET {prefix}/tenants/:tenantId/alerts` — mesmo espelho de leitura do
+     resto do drilldown, pros alertas in-app de um tenant.
+   - Notas internas de atendimento (`platform_tenant_notes`,
+     `db/migrations/0059`, sem RLS — dado do operador, não editável, só
+     cria/apaga): `POST`/`GET`/`DELETE {prefix}/tenants/:tenantId/notes[/:noteId]`.
+   - `GET {prefix}/tenants/:tenantId/timeline` — funde audit log + billing
+     events + alertas + notas numa lista só, ordenada por data
+     (`SupportTimelineService.getTimeline`).
+   - `Body.reason` **opcional** em `POST .../impersonate/:userId` — vai pro
+     `metadata` do `START_IMPERSONATION` no audit log quando presente, sem
+     validação de obrigatoriedade (decisão deliberada: não quebra um front
+     que ainda não manda corpo nenhum nessa rota).
+   - `GET {prefix}/tenants/:tenantId/support-snapshot` — sinais crus de
+     saúde do tenant (assinatura, contagem de alertas abertos por tipo, uso
+     vs. limite dos 3 recursos, onboarding incompleto), **sem pontuação/
+     fórmula inventada** — decisão explícita, mesmo princípio de "Semântica
+     Flexível" do resto do projeto (`SupportTimelineService.getHealthSnapshot`).
 - **Deletar/arquivar plano** — só `create`/`update` hoje, ainda não pedido.
 - **Trocar de plano de um tenant diretamente pelo painel** (sem passar pelo
   checkout normal do tenant) — não pedido ainda.

@@ -11,6 +11,8 @@ export type PlatformOperatorAuditAction =
   | 'ASSIGN_FREE_PLAN'
   | 'START_IMPERSONATION'
   | 'END_IMPERSONATION'
+  | 'CREATE_TENANT_NOTE'
+  | 'DELETE_TENANT_NOTE'
   /**
    * Toda escrita (`POST`/`PATCH`/`DELETE`) feita numa sessão impersonada
    * (`AuthTokenPayload.impersonatedBy` presente) — impersonation dá acesso

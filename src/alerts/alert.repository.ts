@@ -121,6 +121,19 @@ export class AlertRepository {
     });
   }
 
+  /** Contagem de alertas abertos (`resolved_at IS NULL`), agrupada por `type` — só os tipos com pelo menos 1 alerta aberto aparecem. */
+  async countOpenByType(tenantId: string): Promise<Readonly<Record<string, number>>> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{ type: AlertType; count: string }>(
+        `SELECT type, COUNT(*) AS count FROM alerts
+         WHERE tenant_id = $1 AND resolved_at IS NULL
+         GROUP BY type`,
+        [tenantId],
+      );
+      return Object.fromEntries(result.rows.map((row) => [row.type, Number(row.count)]));
+    });
+  }
+
   async hasOpenAlert(
     tenantId: string,
     type: AlertType,
