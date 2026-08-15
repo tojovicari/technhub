@@ -9,6 +9,15 @@ jobs:
     name: Deploy to Fly.io
     runs-on: ubuntu-latest
     concurrency: deploy-production
+    # Sem isso, o GitHub nunca cria um Deployment de verdade (API
+    # `/repos/{repo}/deployments`) — é o único jeito de um job "avisar" o
+    # GitHub que essa execução representa um deploy, e é exatamente o que o
+    # conector `github_actions` (`GitHubActionsProvider`) lê pra alimentar
+    # Deployment Frequency. `fly deploy` sozinho não cria isso. O nome
+    # "production" já bate com o fallback padrão de classificação de
+    # ambiente (`system-default-rules.ts`), então não precisa de config
+    # adicional pra isso contar como PRODUCTION.
+    environment: production
 
     steps:
       - uses: actions/checkout@v7
