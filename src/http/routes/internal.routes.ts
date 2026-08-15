@@ -80,7 +80,25 @@ export function registerInternalRoutes(
 
         const resolved = await Promise.all(
           activeIntegrations.map(async (integration): Promise<ScheduledSyncTarget | null> => {
-            const stored = await integrationRepository.getDecryptedCredentialsById(tenant.id, integration.id);
+            // Nunca deixa uma credencial que falha ao descriptografar
+            // (dado corrompido, ou a chave de criptografia mudou) derrubar
+            // o `Promise.all` inteiro — isso quebraria o cron pra todas as
+            // outras integrações deste tenant (ou de todos, dependendo de
+            // como a rejeição se propagaria pra fora), o oposto do
+            // isolamento de falha por integração que este endpoint já
+            // documenta acima. Mesmo espírito de `resolveKnownExternalUserIds`
+            // em `sync.orchestrator.ts`: falha soft, loga, segue sem essa
+            // integração nesta rodada.
+            let stored;
+            try {
+              stored = await integrationRepository.getDecryptedCredentialsById(tenant.id, integration.id);
+            } catch (error) {
+              console.error(
+                `[internal/sync] Falha ao descriptografar credenciais da integração ${integration.id} (${integration.provider}, tenant ${tenant.id}): ${error instanceof Error ? error.message : String(error)}`,
+              );
+              return null;
+            }
+
             if (!stored) {
               return null;
             }

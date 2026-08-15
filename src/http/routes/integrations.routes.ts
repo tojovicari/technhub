@@ -209,7 +209,24 @@ export function registerIntegrationRoutes(
       }
 
       const integration = await integrationRepository.getById(tenantId, integrationId);
-      const stored = await integrationRepository.getDecryptedCredentialsById(tenantId, integrationId);
+
+      let stored;
+      try {
+        stored = await integrationRepository.getDecryptedCredentialsById(tenantId, integrationId);
+      } catch (error) {
+        // `39000` = erro do pgcrypto (`pgp_sym_decrypt`) — a credencial
+        // guardada não descriptografa com a `INTEGRATION_ENCRYPTION_KEY`
+        // atual (dado corrompido/seed inválido, ou a chave mudou sem
+        // reprocessar as credenciais existentes). Não deixa estourar cru
+        // como 500 sem contexto — devolve um erro acionável.
+        if (getPgErrorCode(error) === '39000') {
+          return reply.status(422).send({
+            error: 'Não foi possível descriptografar as credenciais desta integração. Recadastre a integração.',
+          });
+        }
+        throw error;
+      }
+
       if (!integration || !stored) {
         return reply.status(404).send({ error: 'Integração não encontrada para este tenant.' });
       }
