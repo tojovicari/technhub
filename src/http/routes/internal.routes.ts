@@ -10,6 +10,8 @@ import { TeamRepository } from '../../identity/team.repository';
 import { TeamMembershipRepository } from '../../identity/team-membership.repository';
 import { BillingService } from '../../billing/billing.service';
 import { RetentionPurgeService } from '../../retention/retention-purge.service';
+import { DeploymentRepository } from '../../integrations/repositories/deployment.repository';
+import { MetricTriggerConfigRepository } from '../../dashboard/metric-trigger-config.repository';
 
 /** Integrações mais novas que isso são ignoradas pelo scan de staleness — dá tempo do primeiro sync rodar. */
 const STALE_SCAN_GRACE_PERIOD_MS = 60 * 60 * 1000;
@@ -47,6 +49,8 @@ export function registerInternalRoutes(
   teamMembershipRepository: TeamMembershipRepository = new TeamMembershipRepository(),
   billingService: BillingService = new BillingService(),
   retentionPurgeService: RetentionPurgeService = new RetentionPurgeService(),
+  deploymentRepository: DeploymentRepository = new DeploymentRepository(),
+  metricTriggerConfigRepository: MetricTriggerConfigRepository = new MetricTriggerConfigRepository(),
 ): void {
   /**
    * Avança **toda** integração `ACTIVE` *ou* `ERROR` de todo tenant `ACTIVE`
@@ -307,6 +311,38 @@ export function registerInternalRoutes(
               );
             }
           }),
+
+          (async () => {
+            const ambiguousTeams = await deploymentRepository.findTeamsWithMultipleProductionProviders(tenant.id);
+
+            await Promise.all(
+              ambiguousTeams.map(async ({ teamId, providers }) => {
+                try {
+                  const effective = await metricTriggerConfigRepository.getEffectiveTriggerConfig(tenant.id, teamId);
+                  const isConfigured = (effective.config.deploymentFrequency.sourceProviders?.length ?? 0) > 0;
+
+                  const hadOpen = await alertRepository.hasOpenAlert(
+                    tenant.id,
+                    'deployment_frequency_source_ambiguous',
+                    null,
+                    teamId,
+                  );
+                  await alertRepository.evaluateDeploymentFrequencySourceAmbiguousAlert(
+                    tenant.id,
+                    teamId,
+                    providers,
+                    isConfigured,
+                  );
+                  if (!hadOpen && !isConfigured) alertsCreated += 1;
+                  if (hadOpen && isConfigured) alertsResolved += 1;
+                } catch (error) {
+                  console.error(
+                    `[internal/alerts/scan-stale] Falha ao avaliar ambiguidade de Deployment Frequency (time ${teamId}): ${(error as Error).message}`,
+                  );
+                }
+              }),
+            );
+          })(),
         ]);
       }),
     );

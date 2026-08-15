@@ -1,4 +1,5 @@
 import type { SemanticCategory } from '../enrichment/domain-context.types';
+import type { CicdProvider } from '../integrations/core/canonical.types';
 
 /**
  * Gatilhos configuráveis de DORA por time (Seção 6 da spec: "Valor da
@@ -23,6 +24,18 @@ export interface DeploymentFrequencyTriggerConfig {
   readonly startEvent: DeploymentFrequencyStartEvent;
   /** Só usado com `startEvent: 'WORKFLOW_DONE_TRANSITION'` — sem filtro, conta toda categoria. */
   readonly categoryFilter?: readonly SemanticCategory[];
+  /**
+   * Só usado com `startEvent: 'CICD_DEPLOY'` — quais providers de CI/CD
+   * contam pra Deployment Frequency deste time. Existe pra resolver
+   * contagem duplicada quando duas integrações podem representar o mesmo
+   * deploy de verdade (ex: `github_actions` + `vercel`, já que o app oficial
+   * da Vercel no GitHub também cria um Deployment lá). Vazio/ausente com só
+   * 1 provider distinto de deploy de produção presente = conta normal, sem
+   * exigir nada. Vazio/ausente com **mais de 1** provider distinto presente
+   * = a métrica fica indisponível (`available: false`) até configurar —
+   * nunca soma os dois calados. Ver `docs/reprocessing-guide.md`/`DashboardService.queryDeploymentFrequency`.
+   */
+  readonly sourceProviders?: readonly CicdProvider[];
 }
 
 /** `CICD_DEPLOY` como fim é inferido por proximidade temporal (mesmo padrão do Change Failure Rate) — não existe vínculo PR→deploy explícito nos dados. */

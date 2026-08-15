@@ -242,6 +242,7 @@ export class EnrichmentService {
     if (provider === 'argocd') return { provider: 'argocd', resourceType: 'argocd_project' };
     if (provider === 'github_actions') return { provider: 'github', resourceType: 'github_repository' };
     if (provider === 'azure_pipelines') return { provider: 'azure_pipelines', resourceType: 'azure_pipelines_project' };
+    if (provider === 'vercel') return { provider: 'vercel', resourceType: 'vercel_project' };
     return null;
   }
 

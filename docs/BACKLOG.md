@@ -210,6 +210,52 @@ houver credencial real:
    (`_apis/release/releases`) ficam de fora, gap conhecido documentado no
    docstring do conector.
 
+## Conector Vercel (CI/CD) + resolução de deploy duplicado entre providers — feito
+
+**Contexto**: faltava um conector pra Vercel. Planejando isso, achamos um gap
+mais importante: `queryDeploymentFrequencyFromCicdDeploy` (`dashboard.service.ts`)
+contava **todo** deploy `PRODUCTION` do time sem filtrar por `provider` — se
+um time tivesse duas integrações CI/CD que podem representar o mesmo deploy
+de verdade (ex: `github_actions` + `vercel`, já que o app oficial da Vercel
+no GitHub também cria um Deployment lá), cada deploy real era contado duas
+vezes.
+
+- **`VercelProvider`** (`src/integrations/providers/vercel/vercel.provider.ts`)
+  — `GET /v6/deployments`, API REST oficial documentada (diferente do
+  Fly.io, ver abaixo). Paginação real via `until` (não "descobre tudo de uma
+  vez" como ArgoCD/Azure Pipelines — volume de deploy da Vercel inclui
+  preview de PR). `credentials.extra.projectId` opcional (escopado a 1
+  projeto) / `extra.vercelTeamId` opcional (conta de time/org da Vercel, não
+  confundir com `teamId` da plataforma). `environment` cru, sem
+  classificação (`target: production|staging|null`), mesma filosofia do
+  resto — quem decide "é produção" é a Enriched Layer.
+- **Sem conector dedicado pro Fly.io, decisão deliberada**: a única forma de
+  listar releases do Fly.io é uma API GraphQL não-documentada (nem a própria
+  Fly garante estabilidade nela — diferente do regime "sem teste ao vivo,
+  mas contra REST documentada" já aceito pro ArgoCD/Azure). Como o deploy no
+  Fly.io deste próprio tenant já roda dentro de um job do GitHub Actions com
+  `environment: production`, o conector `github_actions` já cobre isso via
+  GitHub Deployments API — sem precisar de conector novo e frágil.
+- **`DeploymentFrequencyTriggerConfig.sourceProviders`** (`metric-trigger-config.types.ts`)
+  — time escolhe explicitamente quais providers de CI/CD contam pra
+  Deployment Frequency. Sem heurística de dedup por commit SHA (mais frágil,
+  mais "mágico") — o time decide. Com só 1 provider distinto presente,
+  continua funcionando como sempre, sem exigir config. Com **mais de 1** e
+  sem configurar, `deploymentFrequency` vira `{ available: false, reason }`
+  em vez de mostrar um número errado, e o scan periódico
+  (`POST /internal/alerts/scan-stale`) dispara o alerta
+  `deployment_frequency_source_ambiguous` (`AlertRepository.evaluateDeploymentFrequencySourceAmbiguousAlert`,
+  `DeploymentRepository.findTeamsWithMultipleProductionProviders`) —
+  resolve sozinho quando o time configura ou a ambiguidade deixa de existir.
+- **Escopo deliberadamente contido**: só `deploymentFrequency` ganhou o
+  filtro/gate. `changeFailureRate` e as contagens cruas de
+  `team-profile.service.ts` (`deploymentSuccessRate`, `deploymentsTriggered`
+  em contribuidores) têm o mesmo gap de fundo (nenhuma delas filtra por
+  `provider`), mas ficam de fora — a matemática da taxa de CFR é mais
+  resiliente à duplicação (numerador e denominador inflam proporcionalmente)
+  do que uma contagem crua de Deployment Frequency, que fica visivelmente
+  2x errada. Revisitar se virar reclamação real.
+
 ## Pool de conexões / `/internal/sync` em escala — resolvido, revisitar com número real
 
 **Contexto**: `DATABASE_POOL_MAX` (default 20, `src/database/pool.ts`) e

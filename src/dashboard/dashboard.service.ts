@@ -9,6 +9,7 @@ import type {
   TriggerConfigSource,
 } from './metric-trigger-config.types';
 import type { SemanticCategory } from '../enrichment/domain-context.types';
+import type { CicdProvider } from '../integrations/core/canonical.types';
 
 /** Presente só quando `teamId` é passado na query — distingue métrica calculada por time de métrica ainda tenant-wide. */
 export type MetricScope = 'team' | 'tenant';
@@ -43,7 +44,7 @@ export interface AvailableChangeFailureRateMetric {
 
 export interface DoraMetrics {
   readonly period: { readonly from: string; readonly to: string };
-  readonly deploymentFrequency: DeploymentFrequencyMetric;
+  readonly deploymentFrequency: DeploymentFrequencyMetric | UnavailableMetric;
   readonly leadTimeForChanges: AvailableDurationMetric | UnavailableMetric;
   readonly meanTimeToRestore: AvailableDurationMetric | UnavailableMetric;
   readonly changeFailureRate: AvailableChangeFailureRateMetric | UnavailableMetric;
@@ -98,7 +99,7 @@ export interface FlowMetrics {
  */
 export interface DoraHistoryPoint {
   readonly date: string;
-  readonly deploymentFrequency: DeploymentFrequencyMetric;
+  readonly deploymentFrequency: DeploymentFrequencyMetric | UnavailableMetric;
   readonly changeFailureRate: AvailableChangeFailureRateMetric | UnavailableMetric;
 }
 
@@ -295,12 +296,35 @@ export class DashboardService {
     to: Date,
     teamId: string | undefined,
     config: DeploymentFrequencyTriggerConfig,
-  ): Promise<DeploymentFrequencyMetric> {
-    const rows =
-      config.startEvent === 'WORKFLOW_DONE_TRANSITION'
-        ? await this.queryDeploymentFrequencyFromWorkflowDone(client, from, to, teamId, config.categoryFilter)
-        : await this.queryDeploymentFrequencyFromCicdDeploy(client, from, to, teamId);
+  ): Promise<DeploymentFrequencyMetric | UnavailableMetric> {
+    if (config.startEvent === 'WORKFLOW_DONE_TRANSITION') {
+      const rows = await this.queryDeploymentFrequencyFromWorkflowDone(client, from, to, teamId, config.categoryFilter);
+      return this.toDeploymentFrequencyMetric(rows, teamId);
+    }
 
+    // Ambiguidade real: mais de um provider de CI/CD distinto com deploy de
+    // produção neste escopo/período, sem o time ter escolhido qual conta —
+    // mesmo deploy pode estar contado 2x (ex: github_actions + vercel, que
+    // podem representar o mesmo release). Devolve indisponível em vez de um
+    // número errado; `AlertRepository.evaluateDeploymentFrequencySourceAmbiguousAlert`
+    // (via scan periódico) avisa proativamente sobre a mesma condição, sem
+    // escopo de período (ver `DeploymentRepository.findTeamsWithMultipleProductionProviders`).
+    const distinctProviders = await this.queryDistinctCicdProviders(client, from, to, teamId);
+    if (distinctProviders.length > 1 && (!config.sourceProviders || config.sourceProviders.length === 0)) {
+      return {
+        available: false,
+        reason: `Mais de uma integração de CI/CD (${distinctProviders.join(', ')}) tem deploy de produção registrado ${teamId ? 'para este time' : 'neste tenant'} — pode estar contando o mesmo deploy duas vezes. Configure "deploymentFrequency.sourceProviders" pra escolher qual conta.`,
+      };
+    }
+
+    const rows = await this.queryDeploymentFrequencyFromCicdDeploy(client, from, to, teamId, config.sourceProviders);
+    return this.toDeploymentFrequencyMetric(rows, teamId);
+  }
+
+  private toDeploymentFrequencyMetric(
+    rows: readonly { readonly day: Date; readonly count: string }[],
+    teamId: string | undefined,
+  ): DeploymentFrequencyMetric {
     const byDay = rows.map((row) => ({
       date: row.day.toISOString().slice(0, 10),
       count: Number(row.count),
@@ -310,21 +334,49 @@ export class DashboardService {
     return { total, byDay, ...(teamId ? { scope: 'team' as const } : {}) };
   }
 
+  private async queryDistinctCicdProviders(
+    client: PoolClient,
+    from: Date,
+    to: Date,
+    teamId: string | undefined,
+  ): Promise<readonly string[]> {
+    const result = await client.query<{ provider: string }>(
+      `SELECT DISTINCT cd.provider
+       FROM enriched_deployments ed
+       JOIN canonical_deployments cd ON cd.id = ed.id
+       WHERE ed.semantic_environment = 'PRODUCTION' AND cd.started_at BETWEEN $1 AND $2
+       ${teamId ? 'AND ed.team_id = $3' : ''}`,
+      teamId ? [from, to, teamId] : [from, to],
+    );
+
+    return result.rows.map((row) => row.provider);
+  }
+
   private async queryDeploymentFrequencyFromCicdDeploy(
     client: PoolClient,
     from: Date,
     to: Date,
     teamId: string | undefined,
+    sourceProviders: readonly CicdProvider[] | undefined,
   ): Promise<readonly { readonly day: Date; readonly count: string }[]> {
+    const hasSourceFilter = sourceProviders !== undefined && sourceProviders.length > 0;
+    const teamParamIndex = 3;
+    const sourceParamIndex = teamId ? 4 : 3;
+
+    const params: unknown[] = [from, to];
+    if (teamId) params.push(teamId);
+    if (hasSourceFilter) params.push(sourceProviders);
+
     const result = await client.query<{ day: Date; count: string }>(
       `SELECT date_trunc('day', cd.started_at) AS day, count(*) AS count
        FROM enriched_deployments ed
        JOIN canonical_deployments cd ON cd.id = ed.id
        WHERE ed.semantic_environment = 'PRODUCTION' AND cd.started_at BETWEEN $1 AND $2
-       ${teamId ? 'AND ed.team_id = $3' : ''}
+       ${teamId ? `AND ed.team_id = $${teamParamIndex}` : ''}
+       ${hasSourceFilter ? `AND cd.provider = ANY($${sourceParamIndex})` : ''}
        GROUP BY 1
        ORDER BY 1`,
-      teamId ? [from, to, teamId] : [from, to],
+      params,
     );
 
     return result.rows;

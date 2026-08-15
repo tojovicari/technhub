@@ -182,6 +182,33 @@ export class DeploymentRepository {
   }
 
   /**
+   * Times com mais de um `provider` distinto gerando deploy de produção
+   * (`enriched_deployments.semantic_environment = 'PRODUCTION'`) — sinal de
+   * possível contagem duplicada em Deployment Frequency (ex: `github_actions`
+   * + `vercel` podem representar o mesmo deploy). Usado pelo scan periódico
+   * (`POST /internal/alerts/scan-stale`) pra avaliar o alerta
+   * `deployment_frequency_source_ambiguous`; a mesma checagem roda de novo,
+   * já escopada ao período pedido, dentro de `DashboardService.queryDeploymentFrequency`.
+   */
+  async findTeamsWithMultipleProductionProviders(
+    tenantId: string,
+  ): Promise<readonly { readonly teamId: string; readonly providers: readonly string[] }[]> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{ team_id: string; providers: string[] }>(
+        `SELECT ed.team_id, array_agg(DISTINCT cd.provider) AS providers
+         FROM canonical_deployments cd
+         JOIN enriched_deployments ed ON ed.id = cd.id
+         WHERE cd.tenant_id = $1 AND ed.semantic_environment = 'PRODUCTION' AND ed.team_id IS NOT NULL
+         GROUP BY ed.team_id
+         HAVING count(DISTINCT cd.provider) > 1`,
+        [tenantId],
+      );
+
+      return result.rows.map((row) => ({ teamId: row.team_id, providers: row.providers }));
+    });
+  }
+
+  /**
    * "Grupos de origem" (`external_group_key` — projeto do ArgoCD,
    * repositório do GitHub Actions) já vistos em deploys sincronizados que
    * ainda não estão vinculados a nenhum time da plataforma — alimenta
