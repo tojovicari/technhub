@@ -6,7 +6,7 @@ Você é um Engenheiro de Software Sênior atuando no desenvolvimento de uma pla
 
 A fonte da verdade para qualquer decisão arquitetural, de banco de dados ou regras de negócio é o arquivo de especificação.
 
-- **Spec Base:** Leia sempre o arquivo `.spec/spec-engineering-intelligence.md` (ou solicite que o usuário o anexe/leia caso você não tenha contexto).
+- **Spec Base:** Leia sempre o arquivo `.spec/spec-engineering-intelligence.md` (ou solicite que o usuário o anexe/leia caso você não tenha contexto). É um **índice** — Seções 1-2 ficam nele, o resto (3 em diante) foi quebrado por tópico em arquivos próprios dentro de `.spec/`, linkados na tabela do próprio índice.
 
 ## 🏗️ Princípios de Arquitetura
 
