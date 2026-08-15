@@ -10,7 +10,8 @@ export type ExternalResourceProvider =
   | 'argocd'
   | 'azure_boards'
   | 'azure_repos'
-  | 'azure_pipelines';
+  | 'azure_pipelines'
+  | 'vercel';
 
 /** Tipo de recurso externo vinculável — cada um pertence a um único `ExternalResourceProvider`. */
 export type ExternalResourceType =
@@ -21,7 +22,8 @@ export type ExternalResourceType =
   | 'argocd_project'
   | 'azure_boards_project'
   | 'azure_repos_repository'
-  | 'azure_pipelines_project';
+  | 'azure_pipelines_project'
+  | 'vercel_project';
 
 export interface TeamResourceLink {
   readonly id: string;

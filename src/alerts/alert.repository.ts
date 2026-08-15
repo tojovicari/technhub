@@ -280,6 +280,46 @@ export class AlertRepository {
   }
 
   /**
+   * Time tem mais de um provider de CI/CD distinto gerando deploy de
+   * produção (ex: `github_actions` + `vercel`, que podem representar o
+   * mesmo deploy de verdade) sem ter configurado
+   * `deploymentFrequency.sourceProviders` — `DashboardService.queryDeploymentFrequency`
+   * já devolve `available: false` nesse caso; este alerta é só o aviso
+   * proativo pro time saber que precisa configurar. Resolve sozinho quando
+   * `isConfigured` vira `true` (`sourceProviders` deixou de estar vazio) ou
+   * a ambiguidade deixa de existir (só 1 provider distinto). Nunca lança.
+   */
+  async evaluateDeploymentFrequencySourceAmbiguousAlert(
+    tenantId: string,
+    teamId: string,
+    distinctProviders: readonly string[],
+    isConfigured: boolean,
+  ): Promise<void> {
+    try {
+      const type: AlertType = 'deployment_frequency_source_ambiguous';
+
+      if (isConfigured) {
+        await this.resolveOpenAlerts(tenantId, type, null, teamId);
+        return;
+      }
+      if (await this.hasOpenAlert(tenantId, type, null, teamId)) return;
+
+      await this.create(tenantId, {
+        type,
+        severity: 'warning',
+        title: 'Deployment Frequency pode estar contando deploy duplicado',
+        message: `Este time tem mais de uma integração de CI/CD com deploy de produção registrado (${distinctProviders.join(', ')}) — o mesmo deploy pode estar sendo contado duas vezes. Configure "deploymentFrequency.sourceProviders" pra escolher qual conta.`,
+        teamId,
+        metadata: { distinctProviders },
+      });
+    } catch (error) {
+      console.error(
+        `[AlertRepository] Falha ao avaliar alerta de ambiguidade de Deployment Frequency (time ${teamId}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
    * Alerta de nível de tenant pra teto de recursos do plano
    * (`BillingService.getResourceLimit`) — `type` já distingue qual recurso
    * (usuários/times/integrações), por isso `integrationId`/`teamId` ficam

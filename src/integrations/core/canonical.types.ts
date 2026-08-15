@@ -28,7 +28,7 @@ export type IssueTrackerProvider = 'jira' | 'linear' | 'azure_boards';
 export type VcsProvider = 'github' | 'gitlab' | 'azure_repos';
 
 /** Provedores de CI/CD suportados no MVP. */
-export type CicdProvider = 'github_actions' | 'argocd' | 'azure_pipelines';
+export type CicdProvider = 'github_actions' | 'argocd' | 'azure_pipelines' | 'vercel';
 
 /** Provedores de Incident Management suportados no MVP. */
 export type IncidentProvider = 'waroom' | 'pagerduty';

@@ -15,6 +15,7 @@ import { requireSameTenant } from '../middleware/require-same-tenant';
 const requireAdminOrManager = requireRole('ADMIN', 'GESTOR');
 
 const DEPLOYMENT_FREQUENCY_START_EVENTS = ['CICD_DEPLOY', 'WORKFLOW_DONE_TRANSITION'] as const;
+const CICD_PROVIDERS = ['github_actions', 'argocd', 'azure_pipelines', 'vercel'] as const;
 const LEAD_TIME_START_EVENTS = ['PR_OPENED', 'FIRST_COMMIT'] as const;
 const LEAD_TIME_END_EVENTS = ['PR_MERGED', 'CICD_DEPLOY'] as const;
 const MTTR_START_EVENTS = ['INCIDENT_TRIGGERED', 'INCIDENT_ACKNOWLEDGED'] as const;
@@ -39,10 +40,15 @@ function isValidDeploymentFrequencyConfig(value: unknown): value is DeploymentFr
   if (!DEPLOYMENT_FREQUENCY_START_EVENTS.includes(candidate.startEvent as never)) {
     return false;
   }
-  if (candidate.categoryFilter === undefined) {
+  if (candidate.categoryFilter !== undefined) {
+    if (!Array.isArray(candidate.categoryFilter) || !candidate.categoryFilter.every((c) => SEMANTIC_CATEGORIES.includes(c))) {
+      return false;
+    }
+  }
+  if (candidate.sourceProviders === undefined) {
     return true;
   }
-  return Array.isArray(candidate.categoryFilter) && candidate.categoryFilter.every((c) => SEMANTIC_CATEGORIES.includes(c));
+  return Array.isArray(candidate.sourceProviders) && candidate.sourceProviders.every((p) => CICD_PROVIDERS.includes(p));
 }
 
 function isValidLeadTimeConfig(value: unknown): value is LeadTimeTriggerConfig {

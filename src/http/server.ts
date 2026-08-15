@@ -19,6 +19,8 @@ import '../integrations/providers/azure-boards/azure-boards.provider';
 import '../integrations/providers/azure-repos/azure-repos.provider';
 // Efeito colateral: registra AzurePipelinesProvider no ProviderFactory.
 import '../integrations/providers/azure-pipelines/azure-pipelines.provider';
+// Efeito colateral: registra VercelProvider no ProviderFactory.
+import '../integrations/providers/vercel/vercel.provider';
 // Efeito colateral: registra GitHubAuthProvider no AuthProviderFactory (login).
 import '../auth/providers/github/github-auth.provider';
 // Efeito colateral: registra ResendEmailProvider no NotificationProviderFactory.
