@@ -27,6 +27,10 @@ A fonte da verdade para qualquer decisão arquitetural, de banco de dados ou reg
 - Para rodar linting: `npm run lint`
 - Para compilar: `npm run build`
 
+## 🔀 Fluxo de Git / Deploy
+
+- **Nunca dar push direto na `main`.** Toda mudança que vai pra produção passa por uma branch + Pull Request no GitHub — fica registrado, e dá pra alguém revisar/validar antes de entrar. Criar a branch, dar push nela e abrir o PR (`gh pr create`); não fazer merge sozinho a menos que o usuário peça explicitamente.
+
 ## 🛠️ Stack & Infraestrutura (Backend Only)
 
 - **Ambiente Local:** PostgreSQL nativo/local no OS (sem containerização/Docker).
