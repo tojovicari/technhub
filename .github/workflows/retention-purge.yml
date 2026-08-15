@@ -1,0 +1,22 @@
+name: Data Retention Purge
+
+on:
+  # Semanal, não diário/a cada 4h como os outros dois crons — expurgo não é
+  # urgente como sync/alerta, e é a operação mais pesada no banco entre os
+  # três (DELETE em lote, não só SELECT/INSERT condicional). Domingo de
+  # madrugada, fora do horário comercial.
+  schedule:
+    - cron: '0 3 * * 0'
+  workflow_dispatch: {}
+
+jobs:
+  purge:
+    name: Trigger data retention purge
+    runs-on: ubuntu-latest
+    concurrency: retention-purge
+
+    steps:
+      - name: POST /internal/retention/purge
+        run: |
+          curl -sf -X POST https://api.moasy.tech/internal/retention/purge \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_SYNC_TOKEN }}"

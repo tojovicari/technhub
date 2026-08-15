@@ -218,4 +218,35 @@ export class DeploymentRepository {
       return result.rows.map((row) => row.external_group_key);
     });
   }
+
+  /**
+   * Apaga em lotes de até `batchSize` — `enriched_deployments`
+   * correspondente some junto via `ON DELETE CASCADE`
+   * (`0020_create_enriched_deployments.sql`). Chamado em loop pelo
+   * `RetentionPurgeService` até devolver `0`. `started_at` é a data
+   * "quando isso aconteceu" desta tabela.
+   */
+  async purgeOlderThan(tenantId: string, cutoff: Date, batchSize: number): Promise<number> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `DELETE FROM canonical_deployments
+         WHERE id IN (
+           SELECT id FROM canonical_deployments WHERE tenant_id = $1 AND started_at < $2 LIMIT $3
+         )`,
+        [tenantId, cutoff, batchSize],
+      );
+      return result.rowCount ?? 0;
+    });
+  }
+
+  /** Existe pelo menos 1 registro mais velho que `cutoff`? Usado só pro alerta de aproximação. */
+  async existsOlderThan(tenantId: string, cutoff: Date): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `SELECT 1 FROM canonical_deployments WHERE tenant_id = $1 AND started_at < $2 LIMIT 1`,
+        [tenantId, cutoff],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
 }

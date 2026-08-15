@@ -11,7 +11,11 @@ export type AlertType =
   | 'integrations_limit_reached'
   | 'billing_subscription_confirmed'
   | 'billing_subscription_cancelled'
-  | 'billing_plan_changed_to_free';
+  | 'billing_plan_changed_to_free'
+  | 'data_retention_purge_approaching'
+  | 'users_limit_approaching'
+  | 'teams_limit_approaching'
+  | 'integrations_limit_approaching';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 

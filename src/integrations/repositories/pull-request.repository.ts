@@ -168,4 +168,35 @@ export class PullRequestRepository {
       return result.rows.map((row) => row.repository);
     });
   }
+
+  /**
+   * Apaga em lotes de até `batchSize` — sem contraparte enriquecida (PRs
+   * nunca passaram pela Enriched Layer, dashboards leem esta tabela
+   * direto), nada a cascatear. Chamado em loop pelo `RetentionPurgeService`
+   * até devolver `0`. `opened_at` é a data "quando isso aconteceu" desta
+   * tabela (não `merged_at`/`closed_at`, que podem ser `null`).
+   */
+  async purgeOlderThan(tenantId: string, cutoff: Date, batchSize: number): Promise<number> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `DELETE FROM canonical_pull_requests
+         WHERE id IN (
+           SELECT id FROM canonical_pull_requests WHERE tenant_id = $1 AND opened_at < $2 LIMIT $3
+         )`,
+        [tenantId, cutoff, batchSize],
+      );
+      return result.rowCount ?? 0;
+    });
+  }
+
+  /** Existe pelo menos 1 registro mais velho que `cutoff`? Usado só pro alerta de aproximação. */
+  async existsOlderThan(tenantId: string, cutoff: Date): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `SELECT 1 FROM canonical_pull_requests WHERE tenant_id = $1 AND opened_at < $2 LIMIT 1`,
+        [tenantId, cutoff],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
 }

@@ -30,6 +30,23 @@ export interface CancelSubscriptionResult {
   readonly accessUntil: Date;
 }
 
+/**
+ * Meses de carência entre um tenant cruzar o teto de retenção do plano
+ * (`Plan.dataRetentionMonths`) e o expurgo de verdade acontecer
+ * (`RetentionPurgeService`) — constante global, igual pra todos os planos
+ * (decisão confirmada com o usuário: não é um campo configurável por
+ * plano, pra manter simples de explicar: "seu dado some N meses depois do
+ * limite do seu plano, sempre").
+ */
+const DATA_RETENTION_GRACE_MONTHS = 3;
+
+/** Sem lib de datas neste projeto — subtração de meses simples, usando o próprio `Date` (aceita rollover de mês/ano nativamente). */
+function subtractMonths(date: Date, months: number): Date {
+  const result = new Date(date);
+  result.setMonth(result.getMonth() - months);
+  return result;
+}
+
 /** Extrai as datas do período a partir do primeiro item — Stripe v22+ moveu isso pra fora do objeto Subscription. */
 function extractPeriod(subscription: Stripe.Subscription): { readonly start: Date; readonly end: Date } {
   const item = subscription.items.data[0];
@@ -141,6 +158,29 @@ export class BillingService {
   }
 
   /**
+   * Resolve o plano vigente do tenant — mesma lógica reaproveitada por
+   * `getResourceLimit` (3 tetos de recurso) e pelos métodos de retenção de
+   * dado abaixo. `null` = sem subscription, ou plano não encontrado.
+   *
+   * Assinatura `expired` (terminal, sem Stripe subscription viva por trás)
+   * resolve contra o Free até alguém mover o plano de verdade — sem isso,
+   * um tenant expirado continuaria com o plano pago antigo indefinidamente.
+   * `past_due`/`cancelled` continuam resolvendo pelo plano atual de
+   * propósito: acesso ainda vale durante a graça de pagamento / até
+   * `currentPeriodEnd`.
+   */
+  private async resolvePlan(tenantId: string): Promise<Plan | null> {
+    const subscription = await this.subscriptionRepository.findByTenantId(tenantId);
+    if (!subscription) return null;
+
+    if (subscription.status === 'expired') {
+      return this.planRepository.findByName('free');
+    }
+
+    return this.planRepository.findById(subscription.planId);
+  }
+
+  /**
    * Resolve o teto de recursos do plano vigente do tenant. `null` = sem
    * limite — tanto quando o próprio plano deixa o campo em branco quanto
    * quando não há subscription/plano resolvível (fail-open de propósito: um
@@ -152,24 +192,37 @@ export class BillingService {
     tenantId: string,
     resource: 'maxUsers' | 'maxTeams' | 'maxIntegrations',
   ): Promise<number | null> {
-    const subscription = await this.subscriptionRepository.findByTenantId(tenantId);
-    if (!subscription) return null;
-
-    // Assinatura `expired` (terminal, sem Stripe subscription viva por trás)
-    // resolve contra os limites do Free até alguém mover o plano de
-    // verdade — sem isso, um tenant expirado continuaria com os limites do
-    // plano pago antigo indefinidamente. `past_due`/`cancelled` continuam
-    // resolvendo pelo plano atual de propósito: acesso ainda vale durante a
-    // graça de pagamento / até `currentPeriodEnd`.
-    if (subscription.status === 'expired') {
-      const freePlan = await this.planRepository.findByName('free');
-      return freePlan ? freePlan[resource] : null;
-    }
-
-    const plan = await this.planRepository.findById(subscription.planId);
+    const plan = await this.resolvePlan(tenantId);
     if (!plan) return null;
 
     return plan[resource];
+  }
+
+  /**
+   * Corte de data pra expurgo de verdade (`RetentionPurgeService`):
+   * `agora - (dataRetentionMonths + DATA_RETENTION_GRACE_MONTHS)`. `null` =
+   * retenção ilimitada — plano sem teto configurado, ou sem plano
+   * resolvível (fail-open, mesmo espírito de `getResourceLimit`: billing
+   * malconfigurado não deveria apagar dado de ninguém por engano).
+   */
+  async getDataRetentionPurgeCutoff(tenantId: string): Promise<Date | null> {
+    const plan = await this.resolvePlan(tenantId);
+    if (!plan || plan.dataRetentionMonths === null) return null;
+
+    return subtractMonths(new Date(), plan.dataRetentionMonths + DATA_RETENTION_GRACE_MONTHS);
+  }
+
+  /**
+   * Corte "cruzou a retenção do plano, mas ainda não expurgou" — usado só
+   * pro alerta de aproximação (`alertRepository.evaluateRetentionPurgeApproachingAlert`),
+   * nunca pro expurgo em si. `null` = retenção ilimitada, mesmo racional de
+   * `getDataRetentionPurgeCutoff`.
+   */
+  async getDataRetentionWarningCutoff(tenantId: string): Promise<Date | null> {
+    const plan = await this.resolvePlan(tenantId);
+    if (!plan || plan.dataRetentionMonths === null) return null;
+
+    return subtractMonths(new Date(), plan.dataRetentionMonths);
   }
 
   /**

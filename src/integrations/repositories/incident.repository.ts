@@ -185,4 +185,35 @@ export class IncidentRepository {
       }));
     });
   }
+
+  /**
+   * Apaga em lotes de até `batchSize` — `enriched_incidents`
+   * correspondente some junto via `ON DELETE CASCADE`
+   * (`0021_create_enriched_incidents.sql`). Chamado em loop pelo
+   * `RetentionPurgeService` até devolver `0`. `triggered_at` é a data
+   * "quando isso aconteceu" desta tabela.
+   */
+  async purgeOlderThan(tenantId: string, cutoff: Date, batchSize: number): Promise<number> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `DELETE FROM canonical_incidents
+         WHERE id IN (
+           SELECT id FROM canonical_incidents WHERE tenant_id = $1 AND triggered_at < $2 LIMIT $3
+         )`,
+        [tenantId, cutoff, batchSize],
+      );
+      return result.rowCount ?? 0;
+    });
+  }
+
+  /** Existe pelo menos 1 registro mais velho que `cutoff`? Usado só pro alerta de aproximação. */
+  async existsOlderThan(tenantId: string, cutoff: Date): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `SELECT 1 FROM canonical_incidents WHERE tenant_id = $1 AND triggered_at < $2 LIMIT 1`,
+        [tenantId, cutoff],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
 }

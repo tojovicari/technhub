@@ -290,4 +290,36 @@ export class WorkItemRepository {
       return result.rows.map((row) => row.parent_external_id);
     });
   }
+
+  /**
+   * Apaga em lotes de até `batchSize` (evita lock longo numa tabela
+   * grande) — `enriched_work_items` correspondente some junto via
+   * `ON DELETE CASCADE` (`0014_create_enriched_work_items.sql`), sem
+   * precisar de purge próprio. Chamado em loop pelo `RetentionPurgeService`
+   * até devolver `0`. `created_at` é a data "quando isso aconteceu" desta
+   * tabela — mesma coluna usada em `findByIntegration`/todo o resto.
+   */
+  async purgeOlderThan(tenantId: string, cutoff: Date, batchSize: number): Promise<number> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `DELETE FROM canonical_work_items
+         WHERE id IN (
+           SELECT id FROM canonical_work_items WHERE tenant_id = $1 AND created_at < $2 LIMIT $3
+         )`,
+        [tenantId, cutoff, batchSize],
+      );
+      return result.rowCount ?? 0;
+    });
+  }
+
+  /** Existe pelo menos 1 registro mais velho que `cutoff`? Usado só pro alerta de aproximação (`evaluateRetentionPurgeApproachingAlert`), nunca pro expurgo em si. */
+  async existsOlderThan(tenantId: string, cutoff: Date): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `SELECT 1 FROM canonical_work_items WHERE tenant_id = $1 AND created_at < $2 LIMIT 1`,
+        [tenantId, cutoff],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
 }

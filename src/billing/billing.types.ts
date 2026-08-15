@@ -22,6 +22,8 @@ export interface Plan {
   readonly maxUsers: number | null;
   readonly maxTeams: number | null;
   readonly maxIntegrations: number | null;
+  /** Quantos meses de dado histórico esse plano retém antes do expurgo — ver `BillingService.getDataRetentionPurgeCutoff`. `null` = retenção ilimitada (nunca expurga), mesma convenção dos 3 campos acima. */
+  readonly dataRetentionMonths: number | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

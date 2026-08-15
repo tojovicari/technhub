@@ -119,4 +119,36 @@ export class WorkItemStatusTransitionRepository {
       return result.rows.map((row) => mapRowToTransition(tenantId, provider, row));
     });
   }
+
+  /**
+   * Apaga em lotes de até `batchSize` — **sem FK pra `canonical_work_items`**
+   * (correlaciona por chave natural de propósito, ver docstring da classe),
+   * então não cascateia sozinha quando um work item é expurgado. Purgada
+   * de forma independente, pelo próprio `transitioned_at` — mesmo corte de
+   * data usado pra `canonical_work_items`, mas sem depender do cascade.
+   * Chamado em loop pelo `RetentionPurgeService` até devolver `0`.
+   */
+  async purgeOlderThan(tenantId: string, cutoff: Date, batchSize: number): Promise<number> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `DELETE FROM canonical_work_item_status_transitions
+         WHERE id IN (
+           SELECT id FROM canonical_work_item_status_transitions WHERE tenant_id = $1 AND transitioned_at < $2 LIMIT $3
+         )`,
+        [tenantId, cutoff, batchSize],
+      );
+      return result.rowCount ?? 0;
+    });
+  }
+
+  /** Existe pelo menos 1 registro mais velho que `cutoff`? Usado só pro alerta de aproximação. */
+  async existsOlderThan(tenantId: string, cutoff: Date): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `SELECT 1 FROM canonical_work_item_status_transitions WHERE tenant_id = $1 AND transitioned_at < $2 LIMIT 1`,
+        [tenantId, cutoff],
+      );
+      return (result.rowCount ?? 0) > 0;
+    });
+  }
 }

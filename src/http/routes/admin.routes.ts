@@ -58,6 +58,7 @@ interface CreatePlanBody {
   readonly maxUsers?: number | null;
   readonly maxTeams?: number | null;
   readonly maxIntegrations?: number | null;
+  readonly dataRetentionMonths?: number | null;
 }
 
 interface UpdatePlanBody {
@@ -71,6 +72,7 @@ interface UpdatePlanBody {
   readonly maxUsers?: number | null;
   readonly maxTeams?: number | null;
   readonly maxIntegrations?: number | null;
+  readonly dataRetentionMonths?: number | null;
 }
 
 interface CreateEnterpriseCheckoutLinkBody {
@@ -390,8 +392,20 @@ export function registerAdminRoutes(
     `${prefix}/plans`,
     { preHandler: [requirePlatformOperator] },
     async (request, reply) => {
-      const { name, displayName, priceCents, currency, billingPeriod, trialDays, isPublic, isActive, maxUsers, maxTeams, maxIntegrations } =
-        request.body;
+      const {
+        name,
+        displayName,
+        priceCents,
+        currency,
+        billingPeriod,
+        trialDays,
+        isPublic,
+        isActive,
+        maxUsers,
+        maxTeams,
+        maxIntegrations,
+        dataRetentionMonths,
+      } = request.body;
 
       if (!name || !displayName || priceCents === undefined || !currency || !billingPeriod) {
         return reply.status(400).send({
@@ -411,6 +425,7 @@ export function registerAdminRoutes(
         maxUsers: maxUsers ?? null,
         maxTeams: maxTeams ?? null,
         maxIntegrations: maxIntegrations ?? null,
+        dataRetentionMonths: dataRetentionMonths ?? null,
       };
 
       const plan = await billingService.createPlan(input);

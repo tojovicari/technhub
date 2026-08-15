@@ -4,6 +4,8 @@ import type { AlertEntry, AlertType, CreateAlertInput } from './alert.types';
 
 /** Falhas seguidas de sync até o alerta "precisa reconexão" disparar. */
 export const RECONNECT_FAILURE_THRESHOLD = 3;
+/** % do teto de recurso (usuários/times/integrações) a partir do qual o alerta proativo "chegando perto" dispara. */
+export const RESOURCE_LIMIT_WARNING_THRESHOLD = 0.8;
 
 interface AlertRow {
   readonly id: string;
@@ -307,6 +309,85 @@ export class AlertRepository {
     } catch (error) {
       console.error(
         `[AlertRepository] Falha ao avaliar alerta de limite (tenant ${tenantId}, tipo ${type}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Irmão de `evaluateResourceLimitAlert`, mas proativo: dispara **antes**
+   * do bloqueio de verdade, quando o tenant já está perto do teto
+   * (`RESOURCE_LIMIT_WARNING_THRESHOLD`, 80%) mas ainda não atingiu. Só
+   * chamado pelo scan periódico (`POST /internal/alerts/scan-stale`), não
+   * nos 3 pontos síncronos de bloqueio — é informativo, não protege nada.
+   * Resolve nos dois extremos: abaixo do teto de aviso, ou já no limite de
+   * verdade (aí quem assume é o `*_reached` já existente) — os dois tipos
+   * nunca ficam abertos ao mesmo tempo pro mesmo recurso.
+   */
+  async evaluateResourceLimitApproachingAlert(
+    tenantId: string,
+    type: 'users_limit_approaching' | 'teams_limit_approaching' | 'integrations_limit_approaching',
+    currentCount: number,
+    limit: number | null,
+  ): Promise<void> {
+    try {
+      const warningThreshold = limit !== null ? limit * RESOURCE_LIMIT_WARNING_THRESHOLD : null;
+      const approaching = warningThreshold !== null && currentCount >= warningThreshold && currentCount < limit!;
+
+      if (!approaching) {
+        await this.resolveOpenAlerts(tenantId, type, null);
+        return;
+      }
+      if (await this.hasOpenAlert(tenantId, type, null)) return;
+
+      const copy: Record<typeof type, { readonly title: string; readonly noun: string }> = {
+        users_limit_approaching: { title: 'Chegando perto do limite de usuários', noun: 'usuário(s)' },
+        teams_limit_approaching: { title: 'Chegando perto do limite de times', noun: 'time(s)' },
+        integrations_limit_approaching: { title: 'Chegando perto do limite de integrações', noun: 'integração(ões)' },
+      };
+      const { title, noun } = copy[type];
+
+      await this.create(tenantId, {
+        type,
+        severity: 'info',
+        title,
+        message: `Você está usando ${currentCount} de ${limit} ${noun} permitidos pelo seu plano. Considere fazer upgrade antes de atingir o limite.`,
+        metadata: { currentCount, limit },
+      });
+    } catch (error) {
+      console.error(
+        `[AlertRepository] Falha ao avaliar alerta de aproximação de limite (tenant ${tenantId}, tipo ${type}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * Tenant tem dado que já cruzou o teto de retenção do plano (`Plan.dataRetentionMonths`)
+   * mas ainda não foi expurgado — está na janela de carência
+   * (`DATA_RETENTION_GRACE_MONTHS`). Chamado pelo próprio
+   * `RetentionPurgeService.purgeForTenant` a cada execução, não por um scan
+   * separado — a mesma passada que decide expurgar já sabe se sobrou dado
+   * na carência.
+   */
+  async evaluateRetentionPurgeApproachingAlert(tenantId: string, hasDataInGracePeriod: boolean): Promise<void> {
+    try {
+      const type: AlertType = 'data_retention_purge_approaching';
+
+      if (!hasDataInGracePeriod) {
+        await this.resolveOpenAlerts(tenantId, type, null);
+        return;
+      }
+      if (await this.hasOpenAlert(tenantId, type, null)) return;
+
+      await this.create(tenantId, {
+        type,
+        severity: 'warning',
+        title: 'Dados antigos serão apagados em breve',
+        message:
+          'Você tem dados mais antigos do que o período de retenção do seu plano. Esse histórico será apagado em breve — faça upgrade para preservá-lo.',
+      });
+    } catch (error) {
+      console.error(
+        `[AlertRepository] Falha ao avaliar alerta de retenção (tenant ${tenantId}): ${(error as Error).message}`,
       );
     }
   }

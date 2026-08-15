@@ -5,6 +5,36 @@ um item aqui for pra frente de verdade, o desenho real vai pra
 `.spec/spec-engineering-intelligence.md` (fonte da verdade), não fica só
 aqui.
 
+## Retenção de dados por plano — gaps conhecidos
+
+**Contexto**: `plans.data_retention_months` + `RetentionPurgeService`
+(`POST /internal/retention/purge`, cron semanal) expurgam dado canônico
+mais velho que a retenção do plano + carência (`DATA_RETENTION_GRACE_MONTHS = 3`).
+Validado nesta rodada com um tenant descartável isolado (nunca contra dado
+real — ver nota abaixo), confirmando: purge scoped corretamente por
+`tenant_id`, cascade pra `enriched_*` funciona, `canonical_work_item_status_transitions`
+é purgada explicitamente (sem FK, não cascateia sozinha), e o alerta
+`data_retention_purge_approaching` dispara/resolve certo.
+
+1. **Cron real nunca disparou.** `.github/workflows/retention-purge.yml`
+   existe e segue o mesmo padrão dos outros dois workflows, mas — assim
+   como `sync.yml` — nunca rodou contra produção nesta sessão. O
+   comportamento da rota (`requireInternalToken`, resposta) foi validado
+   só localmente, chamando o serviço direto.
+2. **Volume real de expurgo não foi stress-testado.** O teste desta rodada
+   usou 1 registro por tabela (5 no total). `PURGE_BATCH_SIZE = 1000` e
+   `MAX_PURGE_BATCHES_PER_TABLE` (teto por tabela/execução) são valores
+   conservadores sem carga real pra medir contra — mesmo espírito do que já
+   está registrado abaixo pra `DATABASE_POOL_MAX`/`SYNC_BATCH_CONCURRENCY`,
+   vale reajustar quando houver uma base de tenants de verdade com histórico
+   grande acumulado.
+3. **Sem trava de segurança contra corte de data absurdo.** Se alguém
+   configurar `data_retention_months` muito baixo por engano (ex: `1`) num
+   plano com tenants reais vinculados, o próximo cron expurga de verdade,
+   sem confirmação/preview antes. Não corrigido nesta rodada — considerar
+   um preview ("isso vai apagar N registros de M tenants") antes de uma
+   mudança de retenção entrar em vigor, se isso virar risco real de uso.
+
 ## Quebra de esforço por épico — gaps conhecidos
 
 **Contexto**: `GET /tenants/:tenantId/teams/:teamId/profile/epics` (Time →

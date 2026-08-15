@@ -9,6 +9,7 @@ import { UserRepository } from '../../identity/user.repository';
 import { TeamRepository } from '../../identity/team.repository';
 import { TeamMembershipRepository } from '../../identity/team-membership.repository';
 import { BillingService } from '../../billing/billing.service';
+import { RetentionPurgeService } from '../../retention/retention-purge.service';
 
 /** Integrações mais novas que isso são ignoradas pelo scan de staleness — dá tempo do primeiro sync rodar. */
 const STALE_SCAN_GRACE_PERIOD_MS = 60 * 60 * 1000;
@@ -45,6 +46,7 @@ export function registerInternalRoutes(
   teamRepository: TeamRepository = new TeamRepository(),
   teamMembershipRepository: TeamMembershipRepository = new TeamMembershipRepository(),
   billingService: BillingService = new BillingService(),
+  retentionPurgeService: RetentionPurgeService = new RetentionPurgeService(),
 ): void {
   /**
    * Avança **toda** integração `ACTIVE` *ou* `ERROR` de todo tenant `ACTIVE`
@@ -267,16 +269,24 @@ export function registerInternalRoutes(
             await Promise.all(
               (
                 [
-                  ['users_limit_reached', userCount, maxUsers],
-                  ['teams_limit_reached', teams.length, maxTeams],
-                  ['integrations_limit_reached', integrations.length, maxIntegrations],
+                  ['users_limit_reached', 'users_limit_approaching', userCount, maxUsers],
+                  ['teams_limit_reached', 'teams_limit_approaching', teams.length, maxTeams],
+                  ['integrations_limit_reached', 'integrations_limit_approaching', integrations.length, maxIntegrations],
                 ] as const
-              ).map(async ([type, currentCount, limit]) => {
-                const hadOpen = await alertRepository.hasOpenAlert(tenant.id, type, null);
-                await alertRepository.evaluateResourceLimitAlert(tenant.id, type, currentCount, limit);
-                const stillOpen = await alertRepository.hasOpenAlert(tenant.id, type, null);
+              ).map(async ([reachedType, approachingType, currentCount, limit]) => {
+                const hadOpen = await alertRepository.hasOpenAlert(tenant.id, reachedType, null);
+                await alertRepository.evaluateResourceLimitAlert(tenant.id, reachedType, currentCount, limit);
+                const stillOpen = await alertRepository.hasOpenAlert(tenant.id, reachedType, null);
                 if (!hadOpen && stillOpen) alertsCreated += 1;
                 if (hadOpen && !stillOpen) alertsResolved += 1;
+
+                // Proativo: dispara antes do bloqueio de verdade, quando o
+                // tenant já está perto do teto — ver `evaluateResourceLimitApproachingAlert`.
+                const hadOpenApproaching = await alertRepository.hasOpenAlert(tenant.id, approachingType, null);
+                await alertRepository.evaluateResourceLimitApproachingAlert(tenant.id, approachingType, currentCount, limit);
+                const stillOpenApproaching = await alertRepository.hasOpenAlert(tenant.id, approachingType, null);
+                if (!hadOpenApproaching && stillOpenApproaching) alertsCreated += 1;
+                if (hadOpenApproaching && !stillOpenApproaching) alertsResolved += 1;
               }),
             );
           })(),
@@ -304,5 +314,23 @@ export function registerInternalRoutes(
     return reply
       .status(200)
       .send({ tenantsScanned: tenants.length, integrationsScanned, teamsScanned, alertsCreated, alertsResolved });
+  });
+
+  /**
+   * Expurga dado canônico mais velho que a retenção do plano de cada
+   * tenant (+ carência) — `RetentionPurgeService`/`BillingService.getDataRetentionPurgeCutoff`.
+   * Tenant com retenção ilimitada (plano sem teto configurado) é pulado,
+   * sem custo. Dispara `data_retention_purge_approaching` pra tenants com
+   * dado ainda na janela de carência (cruzou a retenção, não cruzou o
+   * expurgo) — ver `.github/workflows/retention-purge.yml` (cron semanal).
+   */
+  server.post('/internal/retention/purge', { preHandler: [requireInternalToken] }, async (_request, reply) => {
+    const results = await retentionPurgeService.purgeAllTenants();
+
+    return reply.status(200).send({
+      tenantsProcessed: results.length,
+      totalPurged: results.reduce((sum, result) => sum + result.purgedCount, 0),
+      tenantsApproachingLimit: results.filter((result) => result.approachingAlert).length,
+    });
   });
 }
