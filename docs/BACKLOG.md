@@ -32,6 +32,33 @@ que pode mudar.
 - **`configChanges` novo na mesma resposta** — marca quando `mapping_rules`/`metric_triggers` mudou dentro da janela exibida (`TeamMetricConfigHistoryRepository.findChangesInRange`, tabela já existente, sem migration). É anotação de "algo mudou aqui", não afirmação de causa — front decide como visualizar (ex: linha vertical no gráfico).
 - **Fora de escopo, de propósito**: anotação de staleness de sync/reconexão de integração (o item de "correlação evento↔métrica" mais ambicioso que o front sugeriu) — exigiria resolver `integrationId → time(s)` via `team_resource_links`, que hoje não tem caminho direto (staleness é por integração, não por registro individual como deploy/incidente). Revisitar se virar pedido real; até lá, `configChanges` cobre só o sinal mais barato e mais preciso (mudança de regra é sempre 100% atribuível a um time/organização, staleness de integração não necessariamente).
 
+## Timeline de eventos manuais — feito; correlação automática descartada de propósito
+
+**Contexto**: extensão direta do item acima. O usuário queria marcar eventos
+que não vêm de nenhum provider integrado (desligamento, troca de versão,
+reorg, greve...) numa data, pra entender "o que aconteceu ali" ao olhar um
+gráfico temporal. Cogitamos correlacionar automaticamente evento↔métrica,
+mas a decisão final foi **não correlacionar** — só mostrar o marcador visual
+já ajuda, e afirmar causa a partir de coincidência temporal seria o mesmo
+erro que já evitamos com as bandas do DORA (ver item acima).
+
+**Decisão**: `timeline_events` é um recurso independente (CRUD próprio,
+`POST`/`GET`/`DELETE /tenants/:tenantId/timeline-events`), não um campo
+dentro de `/dashboard/dora/history`. Motivo: já existem hoje 3 gráficos
+semanais diferentes (`dora/history`, `profile/history`,
+`profile/contributors/history`) e mais podem vir — acoplar a um resolveria
+só um caso. O front busca os eventos do período uma vez e sobrepõe em
+qualquer gráfico com eixo de tempo. Sem categoria/tipo fixo (Semântica
+Flexível) — `title`/`description` livres. `team_id NULL` = evento de
+organização, aparece em qualquer visão (mesma convenção de
+`team_metric_configuration_history`/`configChanges`). RBAC: `ADMIN`/`GESTOR`
+criam/apagam, os 3 papéis leem (mesma regra dos outros endpoints de
+dashboard). Ver `docs/dashboard-api.md`.
+
+**Fora de escopo, de propósito**: correlação automática (decisão acima);
+edição de evento (só criar/apagar — evento errado se recria); categoria/tipo
+fixo.
+
 ## Retenção de dados por plano — gaps conhecidos
 
 **Contexto**: `plans.data_retention_months` + `RetentionPurgeService`
