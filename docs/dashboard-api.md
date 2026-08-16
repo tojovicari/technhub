@@ -1,12 +1,12 @@
 # API de Dashboard — referência pro time de front
 
-Os três endpoints de leitura agregada disponíveis hoje: DORA, o histórico semanal de DORA e Flow Metrics. É a primeira camada de leitura do sistema — tudo mais na API é escrita (cadastro de integrações, disparo de sync, configuração de regras).
+Os três endpoints de leitura agregada disponíveis hoje: DORA, o histórico semanal de DORA e Flow Metrics — mais `/timeline-events`, um recurso à parte (tem escrita, não só leitura) pra marcar eventos manuais (desligamento, troca de versão, reorg...) que o front sobrepõe visualmente em qualquer um desses gráficos. É a primeira camada de leitura do sistema — tudo mais na API é escrita (cadastro de integrações, disparo de sync, configuração de regras).
 
 ## Autenticação
 
 Todo endpoint aqui exige `Authorization: Bearer <accessToken>` (o mesmo token retornado no login — ver fluxo de auth). Sem token válido: `401`. Token de um tenant diferente do `:tenantId` da URL: `403`.
 
-**RBAC**: os 3 papéis (`ADMIN`, `GESTOR`, `USUARIO`) podem acessar os três endpoints — dashboard é visualização, não tem restrição de papel.
+**RBAC**: os 3 papéis (`ADMIN`, `GESTOR`, `USUARIO`) podem **ler** os quatro endpoints — dashboard é visualização, não tem restrição de papel. Exceção: criar/apagar `timeline-events` exige `ADMIN`/`GESTOR` (é escrita de dado compartilhado da organização, mesmo tier de `team-resource-links`) — ver seção própria abaixo.
 
 ## O padrão `available: false`
 
@@ -192,6 +192,61 @@ Authorization: Bearer <accessToken>
 
 ---
 
+## `/tenants/:tenantId/timeline-events`
+
+Eventos manuais que não vêm de nenhum provider integrado — desligamento, troca de versão, reorg, greve, o que for — marcados numa data pelo usuário, pra sobrepor como marcador visual em cima de qualquer gráfico temporal (`/dashboard/dora/history`, `/teams/:teamId/profile/history`, etc.). **Sem correlação automática com métrica nenhuma** — decisão deliberada: o julgamento de "isso explica aquela variação" fica com quem está lendo o gráfico, o backend só guarda e devolve o marcador. Por isso é um recurso independente, não um campo dentro de `/dashboard/dora/history` — já existem vários gráficos temporais diferentes hoje, e mais podem vir; um endpoint próprio, filtrável por período, cobre todos de uma vez.
+
+Sem categoria/tipo fixo: `title`/`description` são texto livre — cor/ícone/agrupamento na UI ficam a critério do front.
+
+### `POST /tenants/:tenantId/timeline-events`
+
+Cria um evento. **`ADMIN`/`GESTOR` apenas** — `403` pra `USUARIO`.
+
+```json
+// Body — "teamId" opcional (ausente = evento de organização, aparece em qualquer visão inclusive filtrada por time)
+{
+  "title": "Reorg do time de plataforma",
+  "description": "Opcional — texto livre",
+  "eventDate": "2026-06-10T12:00:00.000Z",
+  "teamId": "f67b8639-..."
+}
+```
+
+`title`/`eventDate` obrigatórios (`400` se faltar ou se `eventDate` não for ISO 8601 válido). Resposta `201` com o evento criado (mesma forma da listagem abaixo, incluindo `id`/`createdByEmail`).
+
+### `GET /tenants/:tenantId/timeline-events`
+
+Lista eventos. Qualquer papel autenticado do tenant (sem restrição, mesma regra dos outros 3 endpoints acima).
+
+| Query param | Formato  | Obrigatório | Default                                                        |
+| ----------- | -------- | ------------ | --------------------------------------------------------------- |
+| `teamId`    | uuid     | Não          | ausente = só eventos de organização                             |
+| `from`/`to` | ISO 8601 | Não          | ausentes os dois = all-time; **um sem o outro → `400`**         |
+
+Com `teamId`, a resposta traz eventos **daquele time e de organização** (mesma precedência de sempre: organização também vale pro time). Sem `teamId`, só organização — mesmo comportamento de `configChanges` em `/dashboard/dora/history`.
+
+```json
+// GET .../timeline-events?teamId=f67b8639-...&from=2026-01-01&to=2026-12-31
+[
+  {
+    "id": "3e5a...",
+    "teamId": null,
+    "title": "Reorg do time de plataforma",
+    "description": null,
+    "eventDate": "2026-06-10T12:00:00.000Z",
+    "createdByUserId": "a1b2...",
+    "createdByEmail": "gestor@empresa.com",
+    "createdAt": "2026-06-10T12:05:00.000Z"
+  }
+]
+```
+
+### `DELETE /tenants/:tenantId/timeline-events/:eventId`
+
+Apaga um evento. **`ADMIN`/`GESTOR` apenas**. `204` se apagou, `404` se o `id` não existe (ou não pertence a esse tenant). Sem edição — evento errado se apaga e recria.
+
+---
+
 ## Limitações conhecidas
 
 Nenhum campo do DORA fica permanentemente `available: false` nesta versão — `velocity`/`cycleTime` (Flow) e `changeFailureRate` saíram dessa categoria; todos só vêm `available: false` quando a amostra do período é genuinamente zero.
@@ -208,5 +263,9 @@ Nenhum campo do DORA fica permanentemente `available: false` nesta versão — `
 | --- | --- |
 | `400` | `from`/`to` (rotas `/dashboard/dora` **e** `/dashboard/flow`) não são datas ISO 8601 válidas — mesma validação, mesma mensagem nas duas. |
 | `400` | `weeks` (`/dashboard/dora/history`) fora do intervalo 1–52, ou não é inteiro. |
+| `400` | `POST /timeline-events` sem `title`, ou `eventDate` não é ISO 8601 válido. |
+| `400` | `GET /timeline-events` com só `from` ou só `to` (os dois precisam vir juntos, ou nenhum). |
 | `401` | Token ausente/inválido/expirado. |
 | `403` | Token válido, mas de um tenant diferente do `:tenantId` da URL. |
+| `403` | `POST`/`DELETE /timeline-events` com papel `USUARIO`. |
+| `404` | `DELETE /timeline-events/:eventId` — evento não existe (ou não pertence a esse tenant). |

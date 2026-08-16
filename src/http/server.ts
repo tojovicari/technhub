@@ -35,6 +35,7 @@ import { registerMetricTriggerConfigRoutes } from './routes/metric-trigger-confi
 import { registerMetricConfigHistoryRoutes } from './routes/metric-config-history.routes';
 import { registerEnrichmentRoutes } from './routes/enrichment.routes';
 import { registerDashboardRoutes } from './routes/dashboard.routes';
+import { registerTimelineEventRoutes } from './routes/timeline-events.routes';
 import { registerTeamProfileRoutes } from './routes/team-profile.routes';
 import { registerPersonProfileRoutes } from './routes/person-profile.routes';
 import { registerInternalRoutes } from './routes/internal.routes';
@@ -82,6 +83,7 @@ registerMetricTriggerConfigRoutes(server);
 registerMetricConfigHistoryRoutes(server);
 registerEnrichmentRoutes(server);
 registerDashboardRoutes(server);
+registerTimelineEventRoutes(server);
 registerTeamProfileRoutes(server);
 registerPersonProfileRoutes(server);
 registerInternalRoutes(server);
