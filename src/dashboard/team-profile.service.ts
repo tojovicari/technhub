@@ -69,6 +69,19 @@ export interface EpicWorkBreakdown {
   readonly epic: { readonly id: string; readonly name: string | null } | null;
   readonly total: number;
   readonly byCategory: readonly { readonly category: string; readonly count: number; readonly share: number }[];
+  /**
+   * Opcionais: só `TeamProfileService.getEpicBreakdown` preenche (segunda
+   * query, ver lá) — `PersonProfileService.getEpicBreakdown` reaproveita o
+   * mesmo `buildEpicBreakdown`, mas não busca data, então fica `undefined`
+   * pra essa chamada (mudança aditiva, não quebra o formato de lá).
+   * `startedAt` é `MIN(started_working_at)` dos itens do épico (`null` se
+   * nenhum item começou ainda). `completedAt` só vem preenchido quando
+   * **todos** os itens já fecharam — épico com qualquer item ainda aberto
+   * fica `null`, mesmo com itens concluídos (não é "o último a fechar até
+   * agora", é "fechou de vez").
+   */
+  readonly startedAt?: string | null;
+  readonly completedAt?: string | null;
 }
 
 export interface EpicBreakdownMetric {
@@ -344,25 +357,56 @@ export class TeamProfileService {
     }
 
     return withTenantContext(this.pool, tenantId, async (client) => {
-      const result = await client.query<{
-        epic_external_id: string | null;
-        epic_external_name: string | null;
-        semantic_category: string;
-        count: string;
-      }>(
-        `SELECT ewi.epic_external_id, ewi.epic_external_name, ewi.semantic_category, count(*) AS count
-         FROM canonical_work_items cwi
-         JOIN enriched_work_items ewi ON ewi.id = cwi.id
-         WHERE ewi.team_id = $1 AND ewi.is_epic_container = false
-         GROUP BY ewi.epic_external_id, ewi.epic_external_name, ewi.semantic_category`,
-        [teamId],
-      );
+      const [breakdownResult, datesResult] = await Promise.all([
+        client.query<{
+          epic_external_id: string | null;
+          epic_external_name: string | null;
+          semantic_category: string;
+          count: string;
+        }>(
+          `SELECT ewi.epic_external_id, ewi.epic_external_name, ewi.semantic_category, count(*) AS count
+           FROM canonical_work_items cwi
+           JOIN enriched_work_items ewi ON ewi.id = cwi.id
+           WHERE ewi.team_id = $1 AND ewi.is_epic_container = false
+           GROUP BY ewi.epic_external_id, ewi.epic_external_name, ewi.semantic_category`,
+          [teamId],
+        ),
+        // `completed_at` só entra no MAX quando não sobra nenhum item aberto
+        // (FILTER conta os `NULL`) — épico com qualquer item ainda em aberto
+        // fica sem `completed_at`, não é "o último concluído até agora".
+        client.query<{ epic_external_id: string | null; started_at: Date | null; completed_at: Date | null }>(
+          `SELECT ewi.epic_external_id,
+                  min(ewi.started_working_at) AS started_at,
+                  CASE WHEN count(*) FILTER (WHERE ewi.completed_at IS NULL) = 0
+                       THEN max(ewi.completed_at) ELSE NULL END AS completed_at
+           FROM canonical_work_items cwi
+           JOIN enriched_work_items ewi ON ewi.id = cwi.id
+           WHERE ewi.team_id = $1 AND ewi.is_epic_container = false
+           GROUP BY ewi.epic_external_id`,
+          [teamId],
+        ),
+      ]);
 
-      if (result.rows.length === 0) {
+      if (breakdownResult.rows.length === 0) {
         return EPIC_BREAKDOWN_UNAVAILABLE;
       }
 
-      return { available: true, epics: buildEpicBreakdown(result.rows) };
+      const datesByEpicKey = new Map(
+        datesResult.rows.map((row) => [
+          row.epic_external_id ?? '',
+          {
+            startedAt: row.started_at ? row.started_at.toISOString() : null,
+            completedAt: row.completed_at ? row.completed_at.toISOString() : null,
+          },
+        ]),
+      );
+
+      const epics = buildEpicBreakdown(breakdownResult.rows).map((entry) => ({
+        ...entry,
+        ...datesByEpicKey.get(entry.epic?.id ?? ''),
+      }));
+
+      return { available: true, epics };
     });
   }
 

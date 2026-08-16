@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { TeamProfileService } from '../../dashboard/team-profile.service';
+import { TeamTimelineService } from '../../dashboard/team-timeline.service';
 import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
 import { requireSameTenant } from '../middleware/require-same-tenant';
@@ -8,6 +9,8 @@ import { parseOptionalPeriod } from './period-query.util';
 const requireAdminOrManager = requireRole('ADMIN', 'GESTOR');
 const DEFAULT_HISTORY_WEEKS = 12;
 const MAX_HISTORY_WEEKS = 52;
+/** Mesmo fallback all-time de `timeline-events.routes.ts` quando `from`/`to` não são passados. */
+const ALL_TIME_RANGE = { from: new Date(0), to: new Date('9999-12-31T23:59:59.999Z') };
 
 interface TenantTeamParams {
   readonly tenantId: string;
@@ -23,6 +26,11 @@ interface ContributorsQuery {
   readonly to?: string;
 }
 
+interface TimelineQuery {
+  readonly from?: string;
+  readonly to?: string;
+}
+
 /**
  * Registra `GET /tenants/:tenantId/teams/:teamId/profile` — perfil agregado
  * de um time (roster/capacidade + métricas de engenharia), pra alimentar a
@@ -33,6 +41,7 @@ interface ContributorsQuery {
 export function registerTeamProfileRoutes(
   server: FastifyInstance,
   teamProfileService: TeamProfileService = new TeamProfileService(),
+  teamTimelineService: TeamTimelineService = new TeamTimelineService(),
 ): void {
   server.get<{ Params: TenantTeamParams }>(
     '/tenants/:tenantId/teams/:teamId/profile',
@@ -147,6 +156,38 @@ export function registerTeamProfileRoutes(
       }
 
       return reply.status(200).send(breakdown);
+    },
+  );
+
+  /**
+   * Timeline consolidada — marcadores pontuais de 4 fontes (eventos
+   * manuais, mudança de regra, incidentes, início/fim de épico) numa lista
+   * só, ordenada por `date` (ver `TeamTimelineService`). Métricas em série
+   * (`dora/history`/`profile/history`) ficam de fora de propósito — formato
+   * incompatível com "evento pontual", front compõe no cliente. Mesmo RBAC
+   * do `/profile`. `from`/`to` opcionais (mesma regra de `/profile/contributors`
+   * — os dois juntos ou nenhum, all-time se omitidos).
+   */
+  server.get<{ Params: TenantTeamParams; Querystring: TimelineQuery }>(
+    '/tenants/:tenantId/teams/:teamId/profile/timeline',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, teamId } = request.params;
+      const period = parseOptionalPeriod(request.query.from, request.query.to);
+
+      if (period === 'invalid') {
+        return reply
+          .status(400)
+          .send({ error: '"from" e "to" precisam vir juntos, como datas ISO 8601 válidas.' });
+      }
+
+      const range = period ?? ALL_TIME_RANGE;
+      const timeline = await teamTimelineService.getTimeline(tenantId, teamId, range.from, range.to);
+      if (!timeline) {
+        return reply.status(404).send({ error: 'Time não encontrado.' });
+      }
+
+      return reply.status(200).send(timeline);
     },
   );
 }

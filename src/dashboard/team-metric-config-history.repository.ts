@@ -53,6 +53,55 @@ export class TeamMetricConfigHistoryRepository {
   }
 
   /**
+   * Mudanças de `mapping_rules`/`metric_triggers` desde `since` — mescla
+   * organização (`team_id IS NULL`) com o time filtrado, mesmo truque de
+   * `TimelineEventRepository.findInRange` (`h.team_id IS NULL OR h.team_id
+   * = $2`, `$2 = null` já reduz sozinho pra "só organização"). `to`
+   * opcional: `dora/history` (chamador original) sempre olha até "agora",
+   * não precisa de teto; `TeamTimelineService` passa uma janela explícita
+   * no passado, por isso o parâmetro é aditivo, não obrigatório.
+   */
+  async findChangesInRange(
+    tenantId: string,
+    teamId: string | null,
+    since: Date,
+    to?: Date,
+  ): Promise<readonly MetricConfigHistoryEntry[]> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{
+        id: string;
+        team_id: string | null;
+        config_type: MetricConfigType;
+        snapshot: unknown;
+        changed_by_user_id: string;
+        changed_by_email: string;
+        changed_at: Date;
+      }>(
+        `SELECT h.id, h.team_id, h.config_type, h.snapshot, h.changed_by_user_id,
+                u.primary_email AS changed_by_email, h.changed_at
+         FROM team_metric_configuration_history h
+         JOIN users u ON u.id = h.changed_by_user_id
+         WHERE h.tenant_id = $1
+           AND (h.team_id IS NULL OR h.team_id = $2)
+           AND h.changed_at >= $3
+           AND ($4::timestamptz IS NULL OR h.changed_at <= $4)
+         ORDER BY h.changed_at ASC`,
+        [tenantId, teamId, since, to ?? null],
+      );
+
+      return result.rows.map((row) => ({
+        id: row.id,
+        teamId: row.team_id,
+        configType: row.config_type,
+        snapshot: row.snapshot,
+        changedByUserId: row.changed_by_user_id,
+        changedByEmail: row.changed_by_email,
+        changedAt: row.changed_at,
+      }));
+    });
+  }
+
+  /**
    * Histórico recente pra um escopo (organização, `teamId: null`, ou um
    * time específico) — não mescla os dois, mesma convenção de
    * `getOrgRules`/`getTeamRules` (leitura crua por escopo, sem herdar
@@ -85,58 +134,6 @@ export class TeamMetricConfigHistoryRepository {
          ORDER BY h.changed_at DESC
          LIMIT $4`,
         [tenantId, teamId, options.configType ?? null, options.limit],
-      );
-
-      return result.rows.map((row) => ({
-        id: row.id,
-        teamId: row.team_id,
-        configType: row.config_type,
-        snapshot: row.snapshot,
-        changedByUserId: row.changed_by_user_id,
-        changedByEmail: row.changed_by_email,
-        changedAt: row.changed_at,
-      }));
-    });
-  }
-
-  /**
-   * Mudanças dentro de uma janela de tempo, pro escopo relevante a um time
-   * (a própria config do time **e** a de organização, já que organização
-   * também vale pra ele via precedência quando ele não tem override) ou só
-   * de organização quando `teamId` é `null` (visão tenant-wide, mistura
-   * vários times — mudança de um time só não é anotação útil nesse nível).
-   * Usado por `DashboardService.getDoraHistory` pra marcar "algo mudou aqui"
-   * na série histórica do DORA, não pra reconstruir "o que valia em cada
-   * ponto".
-   *
-   * `teamId: null` reduz sozinho pra "só organização": `h.team_id = $2`
-   * nunca bate quando `$2` é `NULL` (comparação SQL), sem precisar de branch
-   * condicional — mesmo truque já usado em `evaluateResourceLimitAlert` etc.
-   */
-  async findChangesInRange(
-    tenantId: string,
-    teamId: string | null,
-    since: Date,
-  ): Promise<readonly MetricConfigHistoryEntry[]> {
-    return withTenantContext(this.pool, tenantId, async (client) => {
-      const result = await client.query<{
-        id: string;
-        team_id: string | null;
-        config_type: MetricConfigType;
-        snapshot: unknown;
-        changed_by_user_id: string;
-        changed_by_email: string;
-        changed_at: Date;
-      }>(
-        `SELECT h.id, h.team_id, h.config_type, h.snapshot, h.changed_by_user_id,
-                u.primary_email AS changed_by_email, h.changed_at
-         FROM team_metric_configuration_history h
-         JOIN users u ON u.id = h.changed_by_user_id
-         WHERE h.tenant_id = $1
-           AND (h.team_id IS NULL OR h.team_id = $2)
-           AND h.changed_at >= $3
-         ORDER BY h.changed_at ASC`,
-        [tenantId, teamId, since],
       );
 
       return result.rows.map((row) => ({
