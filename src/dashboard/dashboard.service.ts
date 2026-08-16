@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { getPool, withTenantContext } from '../database/pool';
 import { MetricTriggerConfigRepository } from './metric-trigger-config.repository';
+import { TeamMetricConfigHistoryRepository, type MetricConfigType } from './team-metric-config-history.repository';
 import type {
   ChangeFailureRateTriggerConfig,
   DeploymentFrequencyTriggerConfig,
@@ -100,11 +101,29 @@ export interface FlowMetrics {
 export interface DoraHistoryPoint {
   readonly date: string;
   readonly deploymentFrequency: DeploymentFrequencyMetric | UnavailableMetric;
+  readonly leadTimeForChanges: AvailableDurationMetric | UnavailableMetric;
+  readonly meanTimeToRestore: AvailableDurationMetric | UnavailableMetric;
   readonly changeFailureRate: AvailableChangeFailureRateMetric | UnavailableMetric;
+}
+
+/**
+ * Marcador de "uma regra semântica/gatilho mudou aqui" — não é "o que valia
+ * em cada ponto", só "quando algo mudou", pro front plotar uma linha
+ * vertical na série. `teamId: null` = mudança de organização (afeta o time
+ * filtrado também, mesma precedência Time > Org de sempre); sem `snapshot`
+ * de propósito — quem quiser o "o quê" busca em `GET .../metric-config-history`,
+ * que já existe, sem duplicar payload aqui.
+ */
+export interface DoraHistoryConfigChange {
+  readonly teamId: string | null;
+  readonly configType: MetricConfigType;
+  readonly changedAt: string;
+  readonly changedByEmail: string;
 }
 
 export interface DoraHistory {
   readonly points: readonly DoraHistoryPoint[];
+  readonly configChanges: readonly DoraHistoryConfigChange[];
 }
 
 /**
@@ -150,6 +169,7 @@ export class DashboardService {
   constructor(
     private readonly pool: Pool = getPool(),
     private readonly metricTriggerConfigRepository: MetricTriggerConfigRepository = new MetricTriggerConfigRepository(),
+    private readonly teamMetricConfigHistoryRepository: TeamMetricConfigHistoryRepository = new TeamMetricConfigHistoryRepository(),
   ) {}
 
   async getDoraMetrics(tenantId: string, from: Date, to: Date, teamId?: string): Promise<DoraMetrics> {
@@ -214,40 +234,68 @@ export class DashboardService {
       teamId ?? null,
     );
 
-    return withTenantContext(this.pool, tenantId, async (client) => {
-      const now = new Date();
-      const pointDates: Date[] = [];
-      for (let i = weeks - 1; i >= 0; i -= 1) {
-        pointDates.push(new Date(now.getTime() - i * DORA_HISTORY_WEEK_MS));
-      }
+    const now = new Date();
+    const pointDates: Date[] = [];
+    for (let i = weeks - 1; i >= 0; i -= 1) {
+      pointDates.push(new Date(now.getTime() - i * DORA_HISTORY_WEEK_MS));
+    }
+    // Início da janela do primeiro ponto — mesmo cálculo que o loop abaixo já
+    // fazia só pro índice 0, extraído aqui pra também servir de `since` do
+    // `findChangesInRange` (cobre a série inteira exibida, não só o ponto mais recente).
+    const seriesStart = new Date(pointDates[0].getTime() - DORA_HISTORY_WEEK_MS);
 
-      const points = await Promise.all(
-        pointDates.map(async (date, index) => {
-          const windowStart = index === 0 ? new Date(date.getTime() - DORA_HISTORY_WEEK_MS) : pointDates[index - 1];
+    const [points, configChangeEntries] = await Promise.all([
+      withTenantContext(this.pool, tenantId, (client) =>
+        Promise.all(
+          pointDates.map(async (date, index) => {
+            const windowStart = index === 0 ? seriesStart : pointDates[index - 1];
 
-          const [deploymentFrequency, changeFailureRate] = await Promise.all([
-            this.queryDeploymentFrequency(
-              client,
-              windowStart,
-              date,
-              teamId,
-              effectiveTriggerConfig.config.deploymentFrequency,
-            ),
-            this.queryChangeFailureRate(
-              client,
-              windowStart,
-              date,
-              teamId,
-              effectiveTriggerConfig.config.changeFailureRate.correlationWindowHours,
-            ),
-          ]);
+            const [deploymentFrequency, leadTimeForChanges, meanTimeToRestore, changeFailureRate] = await Promise.all([
+              this.queryDeploymentFrequency(
+                client,
+                windowStart,
+                date,
+                teamId,
+                effectiveTriggerConfig.config.deploymentFrequency,
+              ),
+              this.queryLeadTime(client, windowStart, date, teamId, effectiveTriggerConfig.config.leadTime),
+              this.queryMeanTimeToRestore(
+                client,
+                windowStart,
+                date,
+                teamId,
+                effectiveTriggerConfig.config.meanTimeToRestore,
+              ),
+              this.queryChangeFailureRate(
+                client,
+                windowStart,
+                date,
+                teamId,
+                effectiveTriggerConfig.config.changeFailureRate.correlationWindowHours,
+              ),
+            ]);
 
-          return { date: date.toISOString().slice(0, 10), deploymentFrequency, changeFailureRate };
-        }),
-      );
+            return {
+              date: date.toISOString().slice(0, 10),
+              deploymentFrequency,
+              leadTimeForChanges,
+              meanTimeToRestore,
+              changeFailureRate,
+            };
+          }),
+        ),
+      ),
+      this.teamMetricConfigHistoryRepository.findChangesInRange(tenantId, teamId ?? null, seriesStart),
+    ]);
 
-      return { points };
-    });
+    const configChanges: DoraHistoryConfigChange[] = configChangeEntries.map((entry) => ({
+      teamId: entry.teamId,
+      configType: entry.configType,
+      changedAt: entry.changedAt.toISOString(),
+      changedByEmail: entry.changedByEmail,
+    }));
+
+    return { points, configChanges };
   }
 
   /**

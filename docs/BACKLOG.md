@@ -5,6 +5,33 @@ um item aqui for pra frente de verdade, o desenho real vai pra
 `.spec/spec-engineering-intelligence.md` (fonte da verdade), não fica só
 aqui.
 
+## Auto-comparação temporal do DORA — feito; bandas Elite/High/Medium/Low descartadas de propósito
+
+**Contexto**: o front pediu contexto pra interpretar número isolado do DORA
+("3.2 deploys/dia — isso é bom?"). Primeira ideia foi replicar as faixas
+Elite/High/Medium/Low do relatório DORA. Pesquisando pra pegar os números
+certos, descobrimos dois problemas: **o próprio DORA descontinuou esse
+modelo no relatório de 2025**, substituído por 7 "arquétipos de time" que
+cruzam performance com fatores humanos (burnout, fricção) — dado que não dá
+pra derivar só de telemetria, precisa de survey qualitativo que esta
+plataforma não coleta e provavelmente nunca vai coletar. E mesmo quando o
+modelo de 4 faixas existia, **os números nunca foram fixos** — eram
+recalculados todo ano via clusterização estatística do survey daquele ano
+(uma fonte usada na pesquisa tinha até erro de transcrição nos limites de
+Change Failure Rate). Hardcodar isso repetiria o problema que "Semântica
+Flexível" (`CLAUDE.md`) existe pra evitar: uma referência externa tratada
+como autoridade fixa, que nem a própria origem trata como fixa.
+
+**Decisão**: em vez de banda contra escala externa, o backend expõe **dado
+bruto mais rico** pra comparação do time contra a própria referência
+histórica — julgamento de "melhor/pior que a baseline" (que estatística,
+qual janela) fica pro front, mesmo espírito de nunca fixar regra de negócio
+que pode mudar.
+
+- **`GET /dashboard/dora/history` ganhou `leadTimeForChanges`/`meanTimeToRestore` por ponto** (antes só `deploymentFrequency`/`changeFailureRate`) — reaproveita `queryLeadTime`/`queryMeanTimeToRestore`, já existiam com a mesma assinatura das outras duas, só nunca tinham entrado no loop semanal. Ver `docs/dashboard-api.md`.
+- **`configChanges` novo na mesma resposta** — marca quando `mapping_rules`/`metric_triggers` mudou dentro da janela exibida (`TeamMetricConfigHistoryRepository.findChangesInRange`, tabela já existente, sem migration). É anotação de "algo mudou aqui", não afirmação de causa — front decide como visualizar (ex: linha vertical no gráfico).
+- **Fora de escopo, de propósito**: anotação de staleness de sync/reconexão de integração (o item de "correlação evento↔métrica" mais ambicioso que o front sugeriu) — exigiria resolver `integrationId → time(s)` via `team_resource_links`, que hoje não tem caminho direto (staleness é por integração, não por registro individual como deploy/incidente). Revisitar se virar pedido real; até lá, `configChanges` cobre só o sinal mais barato e mais preciso (mudança de regra é sempre 100% atribuível a um time/organização, staleness de integração não necessariamente).
+
 ## Retenção de dados por plano — gaps conhecidos
 
 **Contexto**: `plans.data_retention_months` + `RetentionPurgeService`

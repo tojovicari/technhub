@@ -94,11 +94,11 @@ Quando `teamId` é passado, `deploymentFrequency`, `leadTimeForChanges` e `meanT
 
 ## `GET /tenants/:tenantId/dashboard/dora/history`
 
-`deploymentFrequency`/`changeFailureRate` (o par que forma o "quadrante DORA") como série temporal — um ponto por semana, **não cumulativo**: cada ponto é escopado só à sua própria janela `(ponto anterior, este ponto]`. É o campo certo pra plotar tendência ("nossa frequência de deploy tá subindo ou caindo?"), diferente do `/dashboard/dora` de cima, que dá um agregado único pro período inteiro.
+As 4 métricas do DORA como série temporal — um ponto por semana, **não cumulativo**: cada ponto é escopado só à sua própria janela `(ponto anterior, este ponto]`. É o campo certo pra plotar tendência/auto-comparação ("esse time tá melhorando ou piorando comparado com ele mesmo?"), diferente do `/dashboard/dora` de cima, que dá um agregado único pro período inteiro. **Antes só tinha `deploymentFrequency`/`changeFailureRate`** — `leadTimeForChanges`/`meanTimeToRestore` entraram nesta rodada (mesmo formato do `/dashboard/dora`, `AvailableDurationMetric | UnavailableMetric` cada).
 
-`leadTimeForChanges`/`meanTimeToRestore` **não** entram aqui — são distribuições de duração, menos naturais como barra semanal.
+Cada ponto usa a config efetiva de todas as 4 (resolvida uma vez pro `tenantId`/`teamId` da chamada, igual ao `/dashboard/dora`) — mas **sem** `appliedTriggerConfig` por ponto (seria ruído numa série já densa). Pra saber qual config foi usada na série inteira, consulte `GET /dashboard/dora` (mesmo `teamId`) e leia `appliedTriggerConfig` de lá.
 
-Cada ponto usa a config efetiva de `deploymentFrequency`/`changeFailureRate` (resolvida uma vez pro `tenantId`/`teamId` da chamada, igual ao `/dashboard/dora`) — mas **sem** `appliedTriggerConfig` por ponto (seria ruído numa série já densa). Pra saber qual config foi usada na série inteira, consulte `GET /dashboard/dora` (mesmo `teamId`) e leia `appliedTriggerConfig` de lá.
+**Novo — `configChanges`**: lista de "quando uma regra semântica/gatilho mudou" dentro da janela exibida (`mapping_rules`/`metric_triggers`, fonte: `team_metric_configuration_history`) — pensado pra anotar a série ("CFR caiu bem nessa semana — repare que a regra de `incidentSeverity` mudou logo antes"), não pra afirmar causa. **Deliberadamente não inclui staleness de sync/reconexão de integração** — exigiria resolver `integrationId → time(s)` via `team_resource_links`, sem caminho direto hoje; gap documentado, não esquecimento. Com `teamId` na query, traz mudanças daquele time **e** de organização (organização também vale pro time por precedência); sem `teamId` (tenant-wide), só mudanças de organização — mudança de um time só não é anotação útil num agregado que mistura todos. Sem `snapshot` (o "o que mudou" de verdade) — busque em `GET .../metric-config-history` se precisar do detalhe, aqui é só o marcador temporal.
 
 ```
 GET /tenants/:tenantId/dashboard/dora/history?weeks=12&teamId=<uuid opcional>
@@ -112,10 +112,20 @@ GET /tenants/:tenantId/dashboard/dora/history?weeks=12&teamId=<uuid opcional>
 Mesmo RBAC do `/dashboard/dora` (sem restrição de papel, os 3 papéis podem ver).
 
 ```json
-// Resposta 200 (real, capturado em teste, weeks=8, sem teamId)
+// Resposta 200 (formato esperado, weeks=8, com teamId)
 {
   "points": [
-    { "date": "2026-06-12", "deploymentFrequency": { "total": 0, "byDay": [] }, "changeFailureRate": { "available": false, "reason": "Nenhum deploy de produção bem-sucedido neste período." } }
+    {
+      "date": "2026-06-12",
+      "deploymentFrequency": { "total": 0, "byDay": [] },
+      "leadTimeForChanges": { "available": true, "avgHours": null, "medianHours": null, "sampleSize": 0, "scope": "team" },
+      "meanTimeToRestore": { "available": true, "avgHours": null, "sampleSize": 0, "scope": "team" },
+      "changeFailureRate": { "available": false, "reason": "Nenhum deploy de produção bem-sucedido neste período." }
+    }
+  ],
+  "configChanges": [
+    { "teamId": "f67b8639-...", "configType": "mapping_rules", "changedAt": "2026-06-10T14:00:00.000Z", "changedByEmail": "gestor@empresa.com" },
+    { "teamId": null, "configType": "metric_triggers", "changedAt": "2026-06-08T09:00:00.000Z", "changedByEmail": "admin@empresa.com" }
   ]
 }
 ```
