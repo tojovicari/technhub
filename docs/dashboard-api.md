@@ -1,12 +1,12 @@
 # API de Dashboard — referência pro time de front
 
-Os três endpoints de leitura agregada disponíveis hoje: DORA, o histórico semanal de DORA e Flow Metrics — mais `/timeline-events`, um recurso à parte (tem escrita, não só leitura) pra marcar eventos manuais (desligamento, troca de versão, reorg...) que o front sobrepõe visualmente em qualquer um desses gráficos. É a primeira camada de leitura do sistema — tudo mais na API é escrita (cadastro de integrações, disparo de sync, configuração de regras).
+Os três endpoints de leitura agregada disponíveis hoje: DORA, o histórico semanal de DORA e Flow Metrics — mais `/timeline-events` (recurso à parte, tem escrita) pra marcar eventos manuais (desligamento, troca de versão, reorg...), e `/teams/:teamId/profile/timeline`, que consolida esses eventos manuais com mudança de regra, incidentes e início/fim de épico numa timeline só por time. É a primeira camada de leitura do sistema — tudo mais na API é escrita (cadastro de integrações, disparo de sync, configuração de regras).
 
 ## Autenticação
 
 Todo endpoint aqui exige `Authorization: Bearer <accessToken>` (o mesmo token retornado no login — ver fluxo de auth). Sem token válido: `401`. Token de um tenant diferente do `:tenantId` da URL: `403`.
 
-**RBAC**: os 3 papéis (`ADMIN`, `GESTOR`, `USUARIO`) podem **ler** os quatro endpoints — dashboard é visualização, não tem restrição de papel. Exceção: criar/apagar `timeline-events` exige `ADMIN`/`GESTOR` (é escrita de dado compartilhado da organização, mesmo tier de `team-resource-links`) — ver seção própria abaixo.
+**RBAC**: os 3 papéis (`ADMIN`, `GESTOR`, `USUARIO`) podem **ler** `/dashboard/*` e `/timeline-events` — dashboard é visualização, não tem restrição de papel. Exceções, ambas `ADMIN`/`GESTOR`-only: criar/apagar `timeline-events` (escrita de dado compartilhado da organização, mesmo tier de `team-resource-links`); e **qualquer coisa em `/teams/:teamId/profile/*`** — inclusive leitura, mesma régua de `GET .../teams/:teamId/members` (payload mais sensível que um dashboard agregado).
 
 ## O padrão `available: false`
 
@@ -247,6 +247,74 @@ Apaga um evento. **`ADMIN`/`GESTOR` apenas**. `204` se apagou, `404` se o `id` n
 
 ---
 
+## `GET /tenants/:tenantId/teams/:teamId/profile/epics`
+
+Sem mudança de rota — **ganhou 2 campos novos** por épico: `startedAt`/`completedAt`. `startedAt` é a data em que o primeiro item do épico começou a ser trabalhado (`MIN(started_working_at)`, `null` se nenhum item começou ainda). `completedAt` só vem preenchido quando **todos** os itens do épico já fecharam (`MAX(completed_at)` só se não sobrar nenhum item aberto) — um épico com qualquer item ainda em progresso fica com `completedAt: null`, mesmo que já tenha itens concluídos; não é "o último a fechar até agora", é "fechou de vez". Campos ausentes do bucket "sem épico" (`epic: null`) — não faz sentido falar em início/fim de "não-épico".
+
+```json
+// GET .../profile/epics — trecho (campos novos em destaque)
+{
+  "available": true,
+  "epics": [
+    {
+      "epic": { "id": "EPIC-1", "name": "Épico Um" },
+      "total": 2,
+      "byCategory": [ { "category": "BUG", "count": 1, "share": 0.5 }, { "category": "FEATURE", "count": 1, "share": 0.5 } ],
+      "startedAt": "2026-06-05T10:00:00.000Z",
+      "completedAt": null
+    }
+  ]
+}
+```
+
+Mesmo RBAC de sempre (`ADMIN`/`GESTOR`).
+
+---
+
+## `GET /tenants/:tenantId/teams/:teamId/profile/timeline`
+
+Timeline consolidada — marcadores **pontuais** de 4 fontes numa lista só, ordenada por `date` ascendente: eventos manuais (`timeline-events`), mudança de regra semântica/gatilho (mesma fonte de `configChanges` em `dora/history`), incidentes, e início/fim de épico (mesmos dados de `/profile/epics` acima, um item por lado que cai na janela pedida). Existe pra evitar que a tela precise de uma chamada paralela por fonte — busca isto uma vez por janela, em vez de 4 chamadas separadas.
+
+**Métricas ficam de fora de propósito** (`dora/history`, `profile/history`) — são série contínua, formato incompatível com "evento pontual". Ligar/desligar uma métrica junto dos marcadores na mesma timeline é composição no front (buscar os 2-3 endpoints e renderizar junto), não precisa de contrato novo.
+
+### Query params
+
+| Nome   | Formato  | Obrigatório | Default                                          |
+| ------ | -------- | ------------ | ------------------------------------------------- |
+| `from` | ISO 8601 | Não          | ausente + `to` ausente = all-time                  |
+| `to`   | ISO 8601 | Não          | ausente + `from` ausente = all-time                |
+
+Um presente sem o outro → `400`. Mesmo RBAC do `/profile` (`ADMIN`/`GESTOR`). `404` se o time não existe.
+
+### `type` de cada item (união discriminada)
+
+| `type`            | Campos extras                                              | `date` é...                          |
+| ------------------ | ----------------------------------------------------------- | -------------------------------------- |
+| `manual_event`      | `teamId`, `title`, `description`, `createdByEmail`         | `eventDate` do evento                  |
+| `config_change`     | `teamId`, `configType` (`mapping_rules`\|`metric_triggers`), `changedByEmail` | `changedAt`      |
+| `incident`          | `title`, `severity`, `status`, `resolvedAt`                | `triggeredAt` do incidente              |
+| `epic_started`      | `epicId`, `epicName`                                        | `startedAt` do épico                   |
+| `epic_completed`    | `epicId`, `epicName`                                        | `completedAt` do épico                 |
+
+`manual_event`/`config_change` com `teamId: null` = marcador de organização (também vale pro time filtrado, mesma precedência de sempre). `incident`/`epic_started`/`epic_completed` são sempre do time da URL — não têm conceito de "organização".
+
+```json
+// GET .../profile/timeline?from=2026-06-01T00:00:00.000Z&to=2026-07-01T00:00:00.000Z
+{
+  "items": [
+    { "type": "manual_event", "date": "2026-06-03T10:00:00.000Z", "teamId": null, "title": "Evento de organização", "description": null, "createdByEmail": "admin@empresa.com" },
+    { "type": "epic_started", "date": "2026-06-05T10:00:00.000Z", "epicId": "EPIC-1", "epicName": "Épico Um" },
+    { "type": "manual_event", "date": "2026-06-08T10:00:00.000Z", "teamId": "f67b8639-...", "title": "Evento de time", "description": null, "createdByEmail": "gestor@empresa.com" },
+    { "type": "incident", "date": "2026-06-12T10:00:00.000Z", "title": "Incidente teste", "severity": "SEV2", "status": "RESOLVED", "resolvedAt": "2026-06-12T12:00:00.000Z" },
+    { "type": "epic_started", "date": "2026-06-15T10:00:00.000Z", "epicId": "EPIC-2", "epicName": "Épico Dois" },
+    { "type": "config_change", "date": "2026-06-18T10:00:00.000Z", "teamId": "f67b8639-...", "configType": "mapping_rules", "changedByEmail": "admin@empresa.com" },
+    { "type": "epic_completed", "date": "2026-06-20T10:00:00.000Z", "epicId": "EPIC-2", "epicName": "Épico Dois" }
+  ]
+}
+```
+
+---
+
 ## Limitações conhecidas
 
 Nenhum campo do DORA fica permanentemente `available: false` nesta versão — `velocity`/`cycleTime` (Flow) e `changeFailureRate` saíram dessa categoria; todos só vêm `available: false` quando a amostra do período é genuinamente zero.
@@ -269,3 +337,6 @@ Nenhum campo do DORA fica permanentemente `available: false` nesta versão — `
 | `403` | Token válido, mas de um tenant diferente do `:tenantId` da URL. |
 | `403` | `POST`/`DELETE /timeline-events` com papel `USUARIO`. |
 | `404` | `DELETE /timeline-events/:eventId` — evento não existe (ou não pertence a esse tenant). |
+| `400` | `GET /profile/timeline` com só `from` ou só `to`. |
+| `403` | `GET /profile/timeline`/`GET /profile/epics` com papel `USUARIO` (mesma régua de todo `/profile/*`). |
+| `404` | `GET /profile/timeline`/`GET /profile/epics` — time não existe (ou não pertence a esse tenant). |

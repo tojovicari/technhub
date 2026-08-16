@@ -154,6 +154,54 @@ export class IncidentRepository {
   }
 
   /**
+   * Incidente a incidente (não agregado, diferente de
+   * `DashboardService.queryMeanTimeToRestore`) dentro de uma janela, filtrado
+   * por time via `enriched_incidents.team_id` — mesmo join, granularidade
+   * diferente. Usado só por `TeamTimelineService` (ver plano: sem rota HTTP
+   * própria, pra não recriar o problema de "mais uma chamada" que o
+   * endpoint consolidado existe pra evitar).
+   */
+  async findInRangeByTeam(
+    tenantId: string,
+    teamId: string,
+    from: Date,
+    to: Date,
+  ): Promise<
+    readonly {
+      readonly title: string;
+      readonly severity: CanonicalIncident['severity'];
+      readonly status: CanonicalIncident['status'];
+      readonly triggeredAt: Date;
+      readonly resolvedAt: Date | null;
+    }[]
+  > {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{
+        title: string;
+        severity: CanonicalIncident['severity'];
+        status: CanonicalIncident['status'];
+        triggered_at: Date;
+        resolved_at: Date | null;
+      }>(
+        `SELECT ci.title, ci.severity, ci.status, ci.triggered_at, ci.resolved_at
+         FROM canonical_incidents ci
+         JOIN enriched_incidents ei ON ei.id = ci.id
+         WHERE ei.team_id = $1 AND ci.triggered_at BETWEEN $2 AND $3
+         ORDER BY ci.triggered_at ASC`,
+        [teamId, from, to],
+      );
+
+      return result.rows.map((row) => ({
+        title: row.title,
+        severity: row.severity,
+        status: row.status,
+        triggeredAt: row.triggered_at,
+        resolvedAt: row.resolved_at,
+      }));
+    });
+  }
+
+  /**
    * Times externos (`external_team_id`/`external_team_name`, resolvidos via
    * Waroom service→team) já vistos em incidentes sincronizados que ainda
    * não estão vinculados a nenhum time da plataforma — alimenta

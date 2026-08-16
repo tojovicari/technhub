@@ -59,6 +59,50 @@ dashboard). Ver `docs/dashboard-api.md`.
 edição de evento (só criar/apagar — evento errado se recria); categoria/tipo
 fixo.
 
+## Timeline consolidada do time — feito (épicos + incidentes + eventos + config changes); membership adiado, gap real
+
+**Contexto**: extensão direta do item acima, a pedido de uma proposta formal
+do front (`cto_ai_front/.spec/proposals/team-timeline.md`) — aba "Timeline"
+na página do time, juntando tudo que "aconteceu, e quando". A proposta
+original pedia 4 fontes novas: épicos com data, incidentes, membership, e um
+endpoint consolidado. Decidimos entregar 3 das 4 nesta rodada.
+
+**Decisão — o que foi consolidado, e por quê**: `GET
+.../teams/:teamId/profile/timeline` junta eventos manuais
+(`timeline-events`), mudança de regra (mesma fonte de `configChanges`),
+incidentes e início/fim de épico numa lista só, ordenada por `date`. Métrica
+em série (`dora/history`, `profile/history`) ficou de fora de propósito —
+formato incompatível com "evento pontual", front compõe as duas no cliente
+sem precisar de contrato novo. Sem o consolidado, a tela cresceria uma
+chamada paralela por fonte nova adicionada (já seriam 4-5 hoje); consolidado
+mantém em 3 chamadas totais pra tela inteira e não cresce mais conforme
+fontes futuras entrarem. `GET .../profile/epics` ganhou `startedAt`/
+`completedAt` por épico (reaproveitado pelo consolidado, não duplicado) —
+`completedAt` só preenche quando **todos** os itens do épico já fecharam,
+não é "o último a fechar até agora". Ver `docs/dashboard-api.md`.
+
+**Membership fica de fora — gap real, não corte por prioridade**: hoje não
+existe `DELETE`/remoção de membro no produto (`TeamMembershipRepository` só
+tem `create`/`update`/leitura, `TeamMembership` não tem `status`/
+`removedAt` no schema) — "sair do time" não é uma ação que o backend sabe
+fazer ainda. O pedido de histórico de membership da proposta do front
+(quem entrou/saiu, e quando) fica **bloqueado** até essa decisão de escopo
+maior ser tomada à parte: precisa decidir entre hard delete (perde o
+registro de quem já saiu antes de qualquer histórico existir) ou soft
+delete com `removedAt`/tabela de auditoria (mesmo espírito de
+`team_metric_configuration_history`) — e se essa decisão vem acompanhada de
+rastrear também troca de % de alocação/papel (a proposta pergunta isso
+também) ou só entrada/saída no primeiro corte. Revisitar quando "remover
+membro" virar pedido de produto por si só, não só um pré-requisito da
+timeline.
+
+**Fora de escopo, de propósito, no que foi entregue**: rota HTTP separada
+pra "incidentes por período" (só existe como método de repositório,
+consumido pelo consolidado — expor como rota própria recriaria o problema
+de "mais uma chamada" que o consolidado existe pra evitar); qualquer
+classificação "melhor/pior" dos itens da timeline (front decide como exibir
+cada `type`).
+
 ## Retenção de dados por plano — gaps conhecidos
 
 **Contexto**: `plans.data_retention_months` + `RetentionPurgeService`
