@@ -209,18 +209,38 @@ ancestral marcado como fronteira de épico (`epicGrouping` em
    longo de várias syncs, não instantâneo numa execução só — cadeias de
    vários saltos (comum no Azure Boards: Task→Story→Feature→Epic) podem
    levar mais de uma sync pra resolver de vez, decisão deliberada pra
-   manter o passo simples. **Não verificado ao vivo** (mesma ressalva do
-   item 1) — testado estruturalmente: a query de órfãos foi validada contra
-   dado real de produção (achou 104 órfãos distintos, respeitou o teto),
-   `markSyncOutcome`/`getDecryptedCredentialsById` foram validados end-to-end
-   contra o banco real, mas a chamada de `fetchByExternalIds` em si (JQL
-   `key in (...)` do Jira, `workitemsbatch` do Azure) não foi exercitada
-   contra API real nesta sessão.
+   manter o passo simples. **`fetchByExternalIds`/JQL `key in (...)` do
+   Jira agora verificado ao vivo** (rodada seguinte, ver item 5 abaixo) —
+   funciona certinho contra o site real. Azure Boards (`workitemsbatch`)
+   continua sem verificação ao vivo.
 4. **Azure Boards `$expand: 'relations'` não verificado ao vivo** — mesma
    ressalva já registrada pros outros pontos incertos do conector
    (`azure-boards.provider.ts`). Não confirmado se a API realmente devolve
    o link `System.LinkTypes.Hierarchy-Reverse` no formato assumido, nem se
    o id do pai sempre aparece como último segmento numérico da `url`.
+5. **Coluna nova sem backfill retroativo (`parent_external_id`, migration
+   0054) deixava item antigo preso pra sempre — corrigido com
+   `POST .../integrations/:integrationId/resync`.** Achado investigando um
+   caso real (tenant Akad, projeto Jira "Emissão & Resseguro"): itens não
+   editados no Jira desde antes da migration que criou a coluna nunca eram
+   re-tocados por sync incremental (`updated >= since` nunca bate pra item
+   parado) — o vínculo existia de verdade na origem
+   (confirmado ao vivo: `JiraProvider.fetchByExternalIds` buscou o item
+   direto e voltou com `parentExternalId` preenchido), só nunca tinha sido
+   re-buscado. `ProviderIntegrationRepository.resetSyncState` zera
+   `last_cursor`/`last_synced_at` (só esses dois — não mexe em
+   `epic_link_field_id`, já resolvido), fazendo a próxima
+   `POST .../sync` cair em modo backfill completo de novo, sem tocar em
+   nenhuma lógica de sync existente. Só reseta integração com backfill já
+   **terminado** (`last_synced_at IS NOT NULL`) — protege contra reset
+   duplicado perder progresso de um backfill forçado ainda em andamento
+   (`409` nesse caso). **Validado ao vivo, ponta a ponta, no dev, contra o
+   Jira real do tenant Akad**: `resync` → várias `sync` → item antigo
+   (`EM-167`) ganhou `parent_external_id` de verdade → reprocessamento →
+   `GET .../profile/epics` passou a mostrar o grupo de épico
+   corretamente. É o remédio geral pra esse tipo de gap — qualquer coluna
+   nova futura que a Enriched Layer precisar vai ter o mesmo problema,
+   mesma correção.
 
 ## Painel do gestor do SaaS — o que já existe e o que ainda falta
 
