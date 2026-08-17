@@ -259,6 +259,42 @@ export function registerIntegrationRoutes(
     },
   );
 
+  /**
+   * Força a integração a rodar backfill completo de novo na próxima sync —
+   * ver `ProviderIntegrationRepository.resetSyncState`. `requireAdmin`
+   * (não `requireAdminOrManager` como `/sync`): ação mais cara (revarre a
+   * integração inteira, bem mais requests no provider) e com efeito
+   * colateral visível (`sync_stale` dispara até o backfill terminar de
+   * novo), mesmo tier de registrar/editar/apagar integração.
+   */
+  server.post<{ Params: TenantIntegrationParams }>(
+    '/tenants/:tenantId/integrations/:integrationId/resync',
+    { preHandler: [requireAuth, requireAdmin, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, integrationId } = request.params;
+
+      if (!isValidUuid(integrationId)) {
+        return reply.status(404).send({ error: 'Integração não encontrada para este tenant.' });
+      }
+
+      const outcome = await integrationRepository.resetSyncState(tenantId, integrationId);
+
+      if (outcome === 'not_found') {
+        return reply.status(404).send({ error: 'Integração não encontrada para este tenant.' });
+      }
+      if (outcome === 'in_progress') {
+        return reply
+          .status(409)
+          .send({ error: 'Já existe um backfill em andamento nesta integração — aguarde terminar antes de forçar outro.' });
+      }
+
+      return reply.status(200).send({
+        message:
+          'Estado de sincronização resetado — a próxima sync (manual ou automática) vai revarrer todo o histórico dentro da janela de backfill.',
+      });
+    },
+  );
+
   server.get<{ Params: TenantIntegrationParams }>(
     '/tenants/:tenantId/integrations/:integrationId/run-history',
     { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },

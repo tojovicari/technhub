@@ -298,4 +298,41 @@ export class ProviderIntegrationRepository {
       return { consecutiveFailures: result.rows[0]?.consecutive_failures ?? 0 };
     });
   }
+
+  /**
+   * Força a integração a rodar backfill completo de novo — só zera
+   * `last_cursor`/`last_synced_at` (o par que `SyncContext.since`/`cursor`
+   * usa pra escolher `syncSincePage`/`syncBackfillPage`, ver
+   * `integrations.routes.ts`/`internal.routes.ts`), sem mexer em
+   * `epic_link_field_id`/`epic_link_field_resolved` (já resolvido, não
+   * precisa de nova descoberta) nem em `status`/`consecutive_failures`
+   * (isto não é uma falha). Existe pra recapturar campos novos que uma
+   * migration adicionou (`parent_external_id`, ver migration 0054, "sem
+   * backfill") em itens que nenhuma sync incremental jamais voltaria a
+   * tocar sozinha (só re-busca o que mudou no provider desde `since`).
+   *
+   * Só reseta uma integração que já **terminou** um backfill
+   * (`last_synced_at IS NOT NULL`, condição no `WHERE`) — nunca reseta um
+   * backfill em andamento, senão perde o progresso do cursor e reinicia
+   * do zero pra sempre se chamado de novo antes de terminar.
+   */
+  async resetSyncState(tenantId: string, integrationId: string): Promise<'reset' | 'in_progress' | 'not_found'> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `UPDATE provider_integrations SET last_cursor = NULL, last_synced_at = NULL, updated_at = NOW()
+         WHERE tenant_id = $1 AND id = $2 AND last_synced_at IS NOT NULL`,
+        [tenantId, integrationId],
+      );
+
+      if ((result.rowCount ?? 0) > 0) {
+        return 'reset';
+      }
+
+      const exists = await client.query(`SELECT 1 FROM provider_integrations WHERE tenant_id = $1 AND id = $2`, [
+        tenantId,
+        integrationId,
+      ]);
+      return (exists.rowCount ?? 0) > 0 ? 'in_progress' : 'not_found';
+    });
+  }
 }
