@@ -84,6 +84,66 @@ export class MappingRulesRepository {
   }
 
   /**
+   * Remove a configuração de organização — `rules` volta a `NULL`, nunca
+   * `DELETE FROM team_metric_configurations` (a linha pode ainda guardar
+   * `metric_triggers`, coluna independente desde a migration 0043). Depois
+   * disso, todo time sem override próprio cai direto pro Fallback do
+   * Sistema. `false` se não havia nada configurado neste nível (idempotente,
+   * sem grava histórico à toa). `snapshot: null` no histórico marca remoção
+   * de verdade — distinto de uma regra vazia salva por engano
+   * (`snapshot: { workItemType: [], ... }`), que continua contando como
+   * "nível configurado" pra precedência (motivo desta rodada existir: uma
+   * regra de time vazia bloqueava organização inteira, sem jeito de
+   * verdade de desfazer isso até agora).
+   */
+  async deleteOrgRules(tenantId: string, changedByUserId: string): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `UPDATE team_metric_configurations SET rules = NULL, updated_at = NOW()
+         WHERE tenant_id = $1 AND team_id IS NULL AND rules IS NOT NULL`,
+        [tenantId],
+      );
+      const deleted = (result.rowCount ?? 0) > 0;
+
+      if (deleted) {
+        await this.historyRepository.record(client, {
+          tenantId,
+          teamId: null,
+          configType: 'mapping_rules',
+          snapshot: null,
+          changedByUserId,
+        });
+      }
+
+      return deleted;
+    });
+  }
+
+  /** Remove a configuração de um time específico — mesma forma de `deleteOrgRules`, ver lá. */
+  async deleteTeamRules(tenantId: string, teamId: string, changedByUserId: string): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `UPDATE team_metric_configurations SET rules = NULL, updated_at = NOW()
+         WHERE tenant_id = $1 AND team_id = $2 AND rules IS NOT NULL`,
+        [tenantId, teamId],
+      );
+      const deleted = (result.rowCount ?? 0) > 0;
+
+      if (deleted) {
+        await this.historyRepository.record(client, {
+          tenantId,
+          teamId,
+          configType: 'mapping_rules',
+          snapshot: null,
+          changedByUserId,
+        });
+      }
+
+      return deleted;
+    });
+  }
+
+  /**
    * Resolve as regras efetivas pra um time: configuração do time, senão da
    * organização, senão o Fallback do Sistema (hardcoded, não vem do banco).
    *

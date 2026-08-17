@@ -84,6 +84,20 @@ Toda integração cujo dado resolve, mesmo que parcialmente, pra um time
 **sem** override (ou pra `team_id: null`) precisa reprocessar depois de uma
 mudança de organização.
 
+**Regra de time vazia (não removida) conta como override** — pegadinha real,
+já causou incidente em produção. Salvar uma regra de time com tudo vazio
+(`workItemType: []`, etc.) ainda deixa `rules IS NOT NULL` naquela linha —
+pra fins de precedência, isso **bloqueia organização por inteiro**, do
+mesmo jeito que uma regra de time completa bloquearia. Não existia jeito de
+desfazer isso até `DELETE /tenants/:tenantId/teams/:teamId/mapping-rules`/
+`DELETE /tenants/:tenantId/mapping-rules` (e o par equivalente em
+`/metric-triggers`) — antes, "deletar" pela tela só reenviava um `POST`
+vazio, que não resolve porque vazio ainda é "tem override". Apagar de
+verdade (`rules` volta a `NULL`) também **não é retroativo** — é a mesma
+categoria da linha 35 da tabela acima, precisa de
+`POST .../enrichment/:integrationId/run` depois pra refletir no dado já
+sincronizado.
+
 ## Limite conhecido, à parte (não é sobre reprocessamento)
 
 `resolveEpicGroup` (`src/enrichment/epic-resolver.ts`) só sobe a cadeia de
