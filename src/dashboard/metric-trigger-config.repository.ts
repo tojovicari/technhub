@@ -80,6 +80,59 @@ export class MetricTriggerConfigRepository {
   }
 
   /**
+   * Remove o gatilho de organização — `metric_triggers` volta a `NULL`,
+   * nunca `DELETE FROM team_metric_configurations` (mesma ressalva de
+   * `MappingRulesRepository.deleteOrgRules`: a linha pode ainda guardar
+   * `rules`). `false` se não havia nada configurado neste nível.
+   */
+  async deleteOrgTriggers(tenantId: string, changedByUserId: string): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `UPDATE team_metric_configurations SET metric_triggers = NULL, updated_at = NOW()
+         WHERE tenant_id = $1 AND team_id IS NULL AND metric_triggers IS NOT NULL`,
+        [tenantId],
+      );
+      const deleted = (result.rowCount ?? 0) > 0;
+
+      if (deleted) {
+        await this.historyRepository.record(client, {
+          tenantId,
+          teamId: null,
+          configType: 'metric_triggers',
+          snapshot: null,
+          changedByUserId,
+        });
+      }
+
+      return deleted;
+    });
+  }
+
+  /** Remove o gatilho de um time específico — mesma forma de `deleteOrgTriggers`, ver lá. */
+  async deleteTeamTriggers(tenantId: string, teamId: string, changedByUserId: string): Promise<boolean> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query(
+        `UPDATE team_metric_configurations SET metric_triggers = NULL, updated_at = NOW()
+         WHERE tenant_id = $1 AND team_id = $2 AND metric_triggers IS NOT NULL`,
+        [tenantId, teamId],
+      );
+      const deleted = (result.rowCount ?? 0) > 0;
+
+      if (deleted) {
+        await this.historyRepository.record(client, {
+          tenantId,
+          teamId,
+          configType: 'metric_triggers',
+          snapshot: null,
+          changedByUserId,
+        });
+      }
+
+      return deleted;
+    });
+  }
+
+  /**
    * Resolve a config efetiva pra um time: config do time (se
    * `metric_triggers IS NOT NULL` ali), senão da organização, senão o
    * Fallback do Sistema. `teamId` nulo pula direto pra organização/fallback

@@ -145,6 +145,26 @@ export function registerMetricTriggerConfigRoutes(
     },
   );
 
+  /**
+   * Remove o gatilho de organização — volta a `NULL`, todo time sem
+   * override próprio cai pro Fallback do Sistema. `204` se removeu, `404`
+   * se não havia nada configurado neste nível (idempotente).
+   */
+  server.delete<{ Params: TenantParams }>(
+    '/tenants/:tenantId/metric-triggers',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId } = request.params;
+      const deleted = await metricTriggerConfigRepository.deleteOrgTriggers(tenantId, request.user!.userId);
+
+      if (!deleted) {
+        return reply.status(404).send({ error: 'Nenhum gatilho de organização configurado para este tenant.' });
+      }
+
+      return reply.status(204).send();
+    },
+  );
+
   /** Configuração de um time específico — maior precedência (Seção 6). */
   server.post<{ Params: TenantTeamParams; Body: UpsertMetricTriggerConfigBody }>(
     '/tenants/:tenantId/teams/:teamId/metric-triggers',
@@ -186,6 +206,28 @@ export function registerMetricTriggerConfigRoutes(
       }
 
       return reply.status(200).send({ tenantId, teamId, metricTriggers: effective.config });
+    },
+  );
+
+  /**
+   * Remove o gatilho de um time específico — volta a `NULL`, o time passa a
+   * herdar organização/fallback de novo. `204` se removeu, `404` se não
+   * havia nada configurado neste nível (idempotente). Mesmo racional de
+   * `mapping-rules.routes.ts`: gatilho de time vazio bloqueava organização
+   * inteira sem jeito de desfazer, antes desta rota.
+   */
+  server.delete<{ Params: TenantTeamParams }>(
+    '/tenants/:tenantId/teams/:teamId/metric-triggers',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, teamId } = request.params;
+      const deleted = await metricTriggerConfigRepository.deleteTeamTriggers(tenantId, teamId, request.user!.userId);
+
+      if (!deleted) {
+        return reply.status(404).send({ error: 'Nenhum gatilho configurado para este time.' });
+      }
+
+      return reply.status(204).send();
     },
   );
 }

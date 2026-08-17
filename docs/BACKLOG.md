@@ -5,6 +5,42 @@ um item aqui for pra frente de verdade, o desenho real vai pra
 `.spec/spec-engineering-intelligence.md` (fonte da verdade), não fica só
 aqui.
 
+## Incidente: regra de time vazia bloqueava organização inteira, sem jeito de desfazer — `DELETE` de `mapping-rules`/`metric-triggers` (feito)
+
+**Contexto**: investigando por que o time "Apólices" (tenant real de
+produção) não classificava `TOIL` nem preenchia `started_working_at`/
+`completed_at`, apesar de a regra de organização estar certa (`mapping_rules`
+com `TOIL` batendo o `issue_type` real do projeto Jira). Achado: o time
+tinha uma regra **própria** salva com tudo vazio (`workItemType: []`,
+`workflowStates: []`, ...) — pela precedência Time > Organização > Sistema,
+**tudo-ou-nada por nível**, isso bloqueava completamente a regra de
+organização pra esse time, mesmo ela estando correta. O usuário tentou
+"deletar" a regra pela tela do front pra corrigir — não adiantou, porque
+**não existia `DELETE` nenhum no backend** pra `mapping_rules`/
+`metric_triggers`. O botão "deletar" do front, sem endpoint de verdade pra
+chamar, reenviava um `POST` com estrutura vazia — que não resolve nada,
+porque "vazio" ainda conta como "este nível tem config própria" pra fins de
+precedência. Só zerar a coluna de verdade (`NULL`) faz o nível voltar a
+herdar do superior.
+
+**Correção**: 4 rotas novas, simétricas — `DELETE /tenants/:tenantId/mapping-rules`,
+`DELETE /tenants/:tenantId/teams/:teamId/mapping-rules`, e o par
+equivalente pra `/metric-triggers`. Implementação faz `UPDATE
+team_metric_configurations SET rules = NULL` (ou `metric_triggers = NULL`),
+**nunca `DELETE FROM`** — a linha pode ainda ser necessária pra guardar a
+outra coluna (`rules`/`metric_triggers` são colunas independentes desde a
+migration 0043). `204` se removeu, `404` se não havia nada configurado
+nesse nível (idempotente). Cada remoção grava uma entrada em
+`team_metric_configuration_history` com `snapshot: null` — distingue "regra
+removida de propósito" de "regra vazia salva por engano" (que teria
+`snapshot: { workItemType: [], ... }`, não `null`), útil pra investigação
+futura do mesmo tipo. Ver `docs/reprocessing-guide.md` (deletar regra
+também não é retroativo, precisa reprocessar) e front `admin-semantic-config.md`.
+
+**Fora de escopo**: corrigir o botão "deletar" do front pra chamar o
+`DELETE` de verdade em vez do `POST` vazio — código do front, documentado
+pra eles aplicarem.
+
 ## Auto-comparação temporal do DORA — feito; bandas Elite/High/Medium/Low descartadas de propósito
 
 **Contexto**: o front pediu contexto pra interpretar número isolado do DORA

@@ -145,6 +145,26 @@ export function registerMappingRulesRoutes(
     },
   );
 
+  /**
+   * Remove a configuração de organização — volta a `NULL`, todo time sem
+   * override próprio cai pro Fallback do Sistema. `204` se removeu, `404`
+   * se não havia nada configurado neste nível (idempotente).
+   */
+  server.delete<{ Params: TenantParams }>(
+    '/tenants/:tenantId/mapping-rules',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId } = request.params;
+      const deleted = await mappingRulesRepository.deleteOrgRules(tenantId, request.user!.userId);
+
+      if (!deleted) {
+        return reply.status(404).send({ error: 'Nenhuma regra de organização configurada para este tenant.' });
+      }
+
+      return reply.status(204).send();
+    },
+  );
+
   /** Configuração de um time específico — maior precedência (Seção 3). */
   server.post<{ Params: TenantTeamParams; Body: UpsertMappingRulesBody }>(
     '/tenants/:tenantId/teams/:teamId/mapping-rules',
@@ -185,6 +205,29 @@ export function registerMappingRulesRoutes(
       }
 
       return reply.status(200).send({ tenantId, teamId, rules: effective.rules });
+    },
+  );
+
+  /**
+   * Remove a configuração de um time específico — volta a `NULL`, o time
+   * passa a herdar organização/fallback de novo. `204` se removeu, `404` se
+   * não havia nada configurado neste nível (idempotente). Existe
+   * especificamente porque uma regra de time **vazia** (não removida)
+   * bloqueia organização por inteiro pela precedência tudo-ou-nada — antes
+   * desta rota, não tinha como desfazer isso de verdade.
+   */
+  server.delete<{ Params: TenantTeamParams }>(
+    '/tenants/:tenantId/teams/:teamId/mapping-rules',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, teamId } = request.params;
+      const deleted = await mappingRulesRepository.deleteTeamRules(tenantId, teamId, request.user!.userId);
+
+      if (!deleted) {
+        return reply.status(404).send({ error: 'Nenhuma regra configurada para este time.' });
+      }
+
+      return reply.status(204).send();
     },
   );
 }
