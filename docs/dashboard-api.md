@@ -267,7 +267,11 @@ Sem mudança de rota — **ganhou 2 campos novos** por épico: `startedAt`/`comp
 }
 ```
 
-Mesmo RBAC de sempre (`ADMIN`/`GESTOR`).
+Mesmo RBAC de sempre (`ADMIN`/`GESTOR`). **Sem filtro de período** — sempre o histórico inteiro do time (diferente de `/profile/timeline` abaixo, que aceita `from`/`to`).
+
+### `?status=open|completed` (novo)
+
+Reduz a lista sem precisar de data — pensado pro Gantt do front, que cresce sem limite conforme o time acumula épico concluído há anos. `open` = só épicos com `completedAt: null` (inclui os que ainda nem começaram); `completed` = só os que fecharam de vez (`completedAt` preenchido). Sem o parâmetro, comportamento de sempre (tudo). `400` se vier outro valor. O bucket "sem épico" (`epic: null`) nunca aparece quando `status` é passado — não tem conceito de conclusão, só faz sentido na resposta sem filtro.
 
 ---
 
@@ -340,3 +344,4 @@ Nenhum campo do DORA fica permanentemente `available: false` nesta versão — `
 | `400` | `GET /profile/timeline` com só `from` ou só `to`. |
 | `403` | `GET /profile/timeline`/`GET /profile/epics` com papel `USUARIO` (mesma régua de todo `/profile/*`). |
 | `404` | `GET /profile/timeline`/`GET /profile/epics` — time não existe (ou não pertence a esse tenant). |
+| `400` | `GET /profile/epics?status=` com valor diferente de `open`/`completed`. |

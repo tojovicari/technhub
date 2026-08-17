@@ -31,6 +31,10 @@ interface TimelineQuery {
   readonly to?: string;
 }
 
+interface EpicsQuery {
+  readonly status?: string;
+}
+
 /**
  * Registra `GET /tenants/:tenantId/teams/:teamId/profile` — perfil agregado
  * de um time (roster/capacidade + métricas de engenharia), pra alimentar a
@@ -143,19 +147,40 @@ export function registerTeamProfileRoutes(
   /**
    * Quebra de `semantic_category` por épico (Time → Projeto → Épico →
    * Item) — ver `src/enrichment/epic-resolver.ts`. Mesmo RBAC do `/profile`.
+   * Sem filtro de período — sempre o histórico inteiro do time (diferente
+   * de `/profile/timeline`, que aceita `from`/`to`); `?status=` existe pra
+   * reduzir a lista sem precisar de data (pensado pro Gantt do front, que
+   * cresce sem limite conforme o time acumula épico concluído há anos).
    */
-  server.get<{ Params: TenantTeamParams }>(
+  server.get<{ Params: TenantTeamParams; Querystring: EpicsQuery }>(
     '/tenants/:tenantId/teams/:teamId/profile/epics',
     { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
     async (request, reply) => {
       const { tenantId, teamId } = request.params;
+      const { status } = request.query;
+
+      if (status !== undefined && status !== 'open' && status !== 'completed') {
+        return reply.status(400).send({ error: '"status" precisa ser "open" ou "completed".' });
+      }
 
       const breakdown = await teamProfileService.getEpicBreakdown(tenantId, teamId);
       if (!breakdown) {
         return reply.status(404).send({ error: 'Time não encontrado.' });
       }
 
-      return reply.status(200).send(breakdown);
+      if (!status || !breakdown.available) {
+        return reply.status(200).send(breakdown);
+      }
+
+      // O bucket "sem épico" (`epic: null`) não tem `completedAt`/`startedAt`
+      // — não tem conceito de conclusão, então fica de fora sempre que um
+      // filtro é pedido (só aparece na resposta sem filtro, comportamento
+      // de sempre).
+      const filteredEpics = breakdown.epics.filter(
+        (entry) => entry.epic !== null && (status === 'completed' ? entry.completedAt != null : entry.completedAt == null),
+      );
+
+      return reply.status(200).send({ ...breakdown, epics: filteredEpics });
     },
   );
 
