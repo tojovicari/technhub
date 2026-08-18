@@ -23,6 +23,9 @@ import '../integrations/providers/azure-pipelines/azure-pipelines.provider';
 import '../integrations/providers/vercel/vercel.provider';
 // Efeito colateral: registra GitHubAuthProvider no AuthProviderFactory (login).
 import '../auth/providers/github/github-auth.provider';
+import '../auth/providers/google/google-auth.provider';
+import '../auth/providers/microsoft/microsoft-auth.provider';
+import '../auth/providers/slack/slack-auth.provider';
 // Efeito colateral: registra ResendEmailProvider no NotificationProviderFactory.
 import '../notifications/providers/resend/resend-email.provider';
 import { registerTenantRoutes } from './routes/tenants.routes';
