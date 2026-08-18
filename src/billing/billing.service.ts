@@ -56,6 +56,32 @@ function extractPeriod(subscription: Stripe.Subscription): { readonly start: Dat
   };
 }
 
+/**
+ * Campos de trial pro Checkout Session — sem cartão exigido quando o plano
+ * tem trial (`payment_method_collection: 'if_required'`, só nesse caso;
+ * plano sem trial fica `undefined` = padrão `'always'` do Stripe, sem
+ * mudança). `trial_settings.end_behavior.missing_payment_method: 'cancel'`
+ * decide o desfecho se ninguém colocar cartão até o trial acabar —
+ * `'create_invoice'`/`'pause'` ainda tentam cobrar/aguardar cartão, não é
+ * "sem exigir" de verdade. Sem essa chave, a Subscription resultante nem
+ * teria `trial_settings`, o Stripe recusa o cancelamento automático.
+ */
+function buildTrialCheckoutParams(
+  plan: Plan,
+): Pick<Stripe.Checkout.SessionCreateParams, 'payment_method_collection' | 'subscription_data'> {
+  if (plan.trialDays <= 0) {
+    return {};
+  }
+
+  return {
+    payment_method_collection: 'if_required',
+    subscription_data: {
+      trial_period_days: plan.trialDays,
+      trial_settings: { end_behavior: { missing_payment_method: 'cancel' } },
+    },
+  };
+}
+
 /** Stripe v22+: o id da assinatura de uma invoice mora em `parent.subscription_details.subscription`, não em `invoice.subscription`. */
 function extractSubscriptionId(invoice: Stripe.Invoice): string | null {
   const details = invoice.parent?.subscription_details;
@@ -276,7 +302,7 @@ export class BillingService {
       customer: existingSubscription?.providerCustomerId ?? undefined,
       customer_email: existingSubscription?.providerCustomerId ? undefined : requesterEmail,
       line_items: [{ price: plan.stripePriceId, quantity: 1 }],
-      subscription_data: plan.trialDays > 0 ? { trial_period_days: plan.trialDays } : undefined,
+      ...buildTrialCheckoutParams(plan),
       success_url: successUrl,
       cancel_url: cancelUrl,
     });
@@ -321,7 +347,7 @@ export class BillingService {
       metadata: { tenantId, planId, source: 'enterprise_link' },
       customer_email: contactEmail,
       line_items: [{ price: plan.stripePriceId, quantity: 1 }],
-      subscription_data: plan.trialDays > 0 ? { trial_period_days: plan.trialDays } : undefined,
+      ...buildTrialCheckoutParams(plan),
       success_url: `${frontendUrl}/billing/success?tenantId=${tenantId}`,
       cancel_url: `${frontendUrl}/billing/canceled?tenantId=${tenantId}`,
     });
@@ -511,6 +537,9 @@ export class BillingService {
       case 'customer.subscription.deleted':
         await this.onSubscriptionDeleted(event, event.data.object);
         break;
+      case 'customer.subscription.trial_will_end':
+        await this.onTrialWillEnd(event, event.data.object);
+        break;
       default:
         // Outros tipos de evento são ignorados de propósito nesta fase.
         break;
@@ -610,6 +639,7 @@ export class BillingService {
 
     const current = await this.subscriptionRepository.findByTenantId(tenantId);
     const wasPastDue = current?.status === 'past_due';
+    const wasTrialing = current?.status === 'trialing';
 
     const updated = await this.subscriptionRepository.update(tenantId, { status: 'active', pastDueSince: null });
     if (!updated) return;
@@ -625,6 +655,12 @@ export class BillingService {
         reason: 'payment_recovered',
       });
       await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_past_due', null);
+    }
+
+    // Trial converteu pra pago (primeira cobrança bem-sucedida depois do
+    // trial) — o aviso de "trial acabando" não faz mais sentido aberto.
+    if (wasTrialing) {
+      await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_trial_ending_soon', null);
     }
 
     await this.billingEventRepository.create(tenantId, {
@@ -740,8 +776,44 @@ export class BillingService {
       message: 'A assinatura foi cancelada ou expirada. Acesse o billing para reativar.',
       metadata: { planId: updated.planId, reason: 'stripe_subscription_deleted' },
     });
+    // Cobre o caso de trial cancelado automaticamente por falta de cartão
+    // (`trial_settings.end_behavior: 'cancel'`) — o aviso de "trial
+    // acabando" não faz mais sentido aberto, o desfecho já aconteceu.
+    await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_trial_ending_soon', null);
     await this.billingEventRepository.create(tenantId, {
       eventType: 'customer.subscription.deleted',
+      provider: 'stripe',
+      providerEventId: event.id,
+    });
+  }
+
+  /**
+   * `customer.subscription.trial_will_end` — o Stripe dispara sozinho
+   * ~3 dias antes do trial acabar (não configurável do nosso lado). Só
+   * alerta interno nesta rodada, sem e-mail (nenhum evento de billing
+   * manda e-mail hoje — ligar isso é decisão maior, à parte). Resolvido em
+   * `onInvoicePaid` (trial converteu pra pago) e `onSubscriptionDeleted`
+   * (trial cancelou sem cartão) — os dois desfechos possíveis do trial.
+   */
+  private async onTrialWillEnd(event: Stripe.Event, stripeSubscription: Stripe.Subscription): Promise<void> {
+    const tenantId = await this.stripeIndexRepository.findTenantId(stripeSubscription.id);
+    if (!tenantId) return;
+    if (await this.alreadyProcessed(tenantId, event.id)) return;
+
+    const trialEndsAt = stripeSubscription.trial_end ? new Date(stripeSubscription.trial_end * 1000) : null;
+
+    await this.alertRepository.create(tenantId, {
+      type: 'billing_trial_ending_soon',
+      severity: 'warning',
+      title: 'Trial terminando em breve',
+      message: trialEndsAt
+        ? `Seu período de teste termina em ${trialEndsAt.toLocaleDateString('pt-BR')}. Cadastre um cartão para continuar com acesso depois disso.`
+        : 'Seu período de teste está terminando em breve.',
+      metadata: { trialEndsAt },
+    });
+
+    await this.billingEventRepository.create(tenantId, {
+      eventType: 'customer.subscription.trial_will_end',
       provider: 'stripe',
       providerEventId: event.id,
     });

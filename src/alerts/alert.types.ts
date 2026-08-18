@@ -12,6 +12,7 @@ export type AlertType =
   | 'billing_subscription_confirmed'
   | 'billing_subscription_cancelled'
   | 'billing_plan_changed_to_free'
+  | 'billing_trial_ending_soon'
   | 'data_retention_purge_approaching'
   | 'users_limit_approaching'
   | 'teams_limit_approaching'
