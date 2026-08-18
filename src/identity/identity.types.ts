@@ -42,6 +42,9 @@ export interface User {
 /** Ciclo de planejamento usado no cálculo de capacidade do time. */
 export type PlanningCycle = 'MONTHLY' | 'WEEKLY' | 'BIWEEKLY_SPRINT';
 
+/** Status de ciclo de vida de um time — arquivar é soft delete, não apaga nada (ver `TeamRepository.archive`). */
+export type TeamStatus = 'ACTIVE' | 'ARCHIVED';
+
 /** Time com parametrização de capacidade (Seção 4.1). */
 export interface Team {
   readonly id: string;
@@ -50,6 +53,9 @@ export interface Team {
   readonly defaultMonthlyCapacityHours: number;
   readonly planningCycle: PlanningCycle;
   readonly workingDaysPerWeek: number;
+  readonly status: TeamStatus;
+  /** Data do último arquivamento — não é limpo num `unarchive`, fica como registro histórico. */
+  readonly archivedAt: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

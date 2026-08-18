@@ -75,6 +75,10 @@ interface UpdateTeamBody {
   readonly workingDaysPerWeek?: number;
 }
 
+interface ListTeamsQuery {
+  readonly includeArchived?: string;
+}
+
 interface UpdateMembershipBody {
   readonly roleInTeam?: string;
   readonly capacityAllocationPercent?: number;
@@ -304,13 +308,22 @@ export function registerTeamRoutes(
     },
   );
 
-  server.get<{ Params: TenantParams }>(
+  /**
+   * `?includeArchived=true` opcional — sem ele, times `ARCHIVED` somem da
+   * lista (é o "esconder do picker" que dá a sensação de "deletado" sem
+   * apagar nada). Filtro em JS, não em SQL: volume de times por tenant é
+   * sempre pequeno, travado pelo `maxTeams` do plano.
+   */
+  server.get<{ Params: TenantParams; Querystring: ListTeamsQuery }>(
     '/tenants/:tenantId/teams',
     { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
     async (request, reply) => {
       const { tenantId } = request.params;
       const teams = await teamRepository.findAllByTenant(tenantId);
-      return reply.status(200).send(teams);
+      const visibleTeams =
+        request.query.includeArchived === 'true' ? teams : teams.filter((team) => team.status === 'ACTIVE');
+
+      return reply.status(200).send(visibleTeams);
     },
   );
 
@@ -339,6 +352,90 @@ export function registerTeamRoutes(
       }
 
       return reply.status(200).send(team);
+    },
+  );
+
+  /**
+   * "Deletar" um time é arquivar, não `DELETE FROM teams` — o schema tem
+   * FKs que fariam isso apagar histórico enriquecido em cascata (work
+   * items, deploys, incidentes) ou falhar com erro de FK dependendo do
+   * que estiver vinculado ao time. Arquivar é um flip de status puro:
+   * **não guarda nem exporta nada** — o dado bruto do time segue a
+   * mesma política de retenção de sempre (`RetentionPurgeService`) e será
+   * expurgado no prazo normal do plano. Se quiser um registro permanente,
+   * o front deve chamar `GET .../profile` (todas as métricas all-time) e
+   * montar um export **antes** de chamar este endpoint — o backend não
+   * promete guardar nada disso.
+   *
+   * `200` com o time atualizado (não `204`) — diferente de
+   * `DELETE .../aliases/:aliasId` (apaga de verdade, nada útil a
+   * devolver), aqui o front quer ver `status: "ARCHIVED"` na hora sem
+   * precisar de um `GET` extra.
+   *
+   * Sem pré-condição bloqueante (integrações/membros vinculados não
+   * impedem arquivar) — arquivar não é destrutivo, não há razão de
+   * segurança pra travar.
+   */
+  server.delete<{ Params: TenantTeamParams }>(
+    '/tenants/:tenantId/teams/:teamId',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, teamId } = request.params;
+
+      const existing = await teamRepository.findById(tenantId, teamId);
+      if (!existing) {
+        return reply.status(404).send({ error: 'Time não encontrado.' });
+      }
+      if (existing.status === 'ARCHIVED') {
+        return reply.status(409).send({ error: 'Time já está arquivado.' });
+      }
+
+      const archived = await teamRepository.archive(tenantId, teamId);
+      if (!archived) {
+        return reply.status(409).send({ error: 'Time já está arquivado.' });
+      }
+
+      await alertRepository.create(tenantId, {
+        type: 'team_archived',
+        severity: 'info',
+        title: `Time "${archived.name}" arquivado`,
+        message:
+          'Nenhum dado foi salvo neste processo — os dados brutos deste time seguem a política de retenção normal do plano e serão expurgados no prazo de sempre. Se precisar de um registro permanente, exporte o perfil do time antes de arquivar.',
+        teamId,
+      });
+
+      return reply.status(200).send(archived);
+    },
+  );
+
+  /**
+   * Reativa um time arquivado — mesmo RBAC, mesmo formato de resposta do
+   * `DELETE` acima. Resolve o alerta `team_archived` aberto (mesmo padrão
+   * de auto-resolução usado pelo resto do módulo de alertas: a causa
+   * desapareceu, o alerta não precisa mais ficar aberto).
+   */
+  server.post<{ Params: TenantTeamParams }>(
+    '/tenants/:tenantId/teams/:teamId/unarchive',
+    { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, teamId } = request.params;
+
+      const existing = await teamRepository.findById(tenantId, teamId);
+      if (!existing) {
+        return reply.status(404).send({ error: 'Time não encontrado.' });
+      }
+      if (existing.status === 'ACTIVE') {
+        return reply.status(409).send({ error: 'Time não está arquivado.' });
+      }
+
+      const unarchived = await teamRepository.unarchive(tenantId, teamId);
+      if (!unarchived) {
+        return reply.status(409).send({ error: 'Time não está arquivado.' });
+      }
+
+      await alertRepository.resolveOpenAlerts(tenantId, 'team_archived', null, teamId);
+
+      return reply.status(200).send(unarchived);
     },
   );
 
