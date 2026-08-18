@@ -5,6 +5,40 @@ um item aqui for pra frente de verdade, o desenho real vai pra
 `.spec/spec-engineering-intelligence.md` (fonte da verdade), não fica só
 aqui.
 
+## Trial sem cartão de crédito + aviso de trial acabando — feito
+
+**Contexto**: configurando Stripe em produção, decisão de produto de que
+trial não deveria exigir cartão de crédito no checkout — só cobrar (ou
+pedir cartão) quando o trial de fato terminar. Por padrão, o Stripe
+Checkout Session exige cartão mesmo em assinatura com `trial_period_days`
+(`payment_method_collection: 'always'` implícito).
+
+**Decisão**: `payment_method_collection: 'if_required'` nos dois pontos
+que criam Checkout Session (`createCheckoutSession` — self-service — e
+`createEnterpriseCheckoutLink` — link gerado pelo gestor do SaaS), só
+quando o plano tem `trialDays > 0` (plano sem trial continua exigindo
+cartão como sempre). Junto, `subscription_data.trial_settings.end_behavior.missing_payment_method: 'cancel'`
+— dos 3 valores possíveis do SDK (`'cancel' | 'create_invoice' | 'pause'`),
+`'cancel'` é o único alinhado com "sem cartão de verdade": os outros dois
+ainda tentam cobrar ou esperam cartão aparecer, não é bem "dispensar
+cartão". **Sem config nenhuma do lado do Stripe** pra essa parte — são
+parâmetros de API puros, diferente do Customer Portal (que exige
+configuração salva no Dashboard antes de funcionar).
+
+**Gap achado no processo, corrigido junto**: não existia nenhum aviso —
+nem alerta interno, nem e-mail — antes do trial acabar. Sem cartão
+exigido, quem nunca cadastra cartão só saberia que perdeu acesso depois
+que a assinatura já tinha cancelado sozinha. Novo evento escutado,
+`customer.subscription.trial_will_end` (nativo do Stripe, dispara ~3 dias
+antes, não configurável do nosso lado) → novo `AlertType`
+`billing_trial_ending_soon` (`severity: 'warning'`), resolvido nos dois
+desfechos possíveis do trial (`onInvoicePaid` se converteu pra pago,
+`onSubscriptionDeleted` se cancelou por falta de cartão) — mesmo padrão
+de resolução automática já usado pelos outros 5 tipos de alerta de
+billing. **Sem e-mail** — nenhum evento de billing manda notificação
+externa hoje (só alerta in-app), ligar isso é decisão maior, deixada de
+fora de propósito desta rodada.
+
 ## Incidente: regra de time vazia bloqueava organização inteira, sem jeito de desfazer — `DELETE` de `mapping-rules`/`metric-triggers` (feito)
 
 **Contexto**: investigando por que o time "Apólices" (tenant real de
