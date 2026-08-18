@@ -144,6 +144,7 @@ async function finishLoginForTenant(
   refreshTokenRepository: RefreshTokenRepository,
   tenantId: string,
   user: User,
+  provider: string,
 ): Promise<FastifyReply> {
   if (user.status === 'DISABLED') {
     return redirectToFrontendWithError(reply, 'Usuário desabilitado.');
@@ -155,7 +156,7 @@ async function finishLoginForTenant(
     );
   }
 
-  const activeUser = await userRepository.markLoggedIn(tenantId, user.id);
+  const activeUser = await userRepository.markLoggedIn(tenantId, user.id, provider);
   const accessToken = issueAccessToken(activeUser);
   const { token: refreshToken } = await refreshTokenRepository.issue(activeUser.tenantId, activeUser.id);
 
@@ -277,7 +278,7 @@ export function registerAuthRoutes(
             'Nenhum usuário com este email foi convidado para este tenant. Peça a um ADMIN para te cadastrar primeiro.',
           );
         }
-        return finishLoginForTenant(reply, userRepository, refreshTokenRepository, statePayload.tenantId, user);
+        return finishLoginForTenant(reply, userRepository, refreshTokenRepository, statePayload.tenantId, user, provider);
       }
 
       // Login normal (SSO-first): resolve via user_email_directory quais
@@ -292,7 +293,7 @@ export function registerAuthRoutes(
       }
       if (loginableCandidates.length === 1) {
         const { tenantId, user } = loginableCandidates[0];
-        return finishLoginForTenant(reply, userRepository, refreshTokenRepository, tenantId, user);
+        return finishLoginForTenant(reply, userRepository, refreshTokenRepository, tenantId, user, provider);
       }
 
       const tenants = await tenantRepository.findManyByIds(loginableCandidates.map((candidate) => candidate.tenantId));
@@ -327,7 +328,7 @@ export function registerAuthRoutes(
       return reply.status(403).send({ error: 'Este tenant não é uma opção válida para este login.' });
     }
 
-    const activeUser = await userRepository.markLoggedIn(tenantId, user.id);
+    const activeUser = await userRepository.markLoggedIn(tenantId, user.id, payload.provider);
     const accessToken = issueAccessToken(activeUser);
     const { token: refreshToken } = await refreshTokenRepository.issue(activeUser.tenantId, activeUser.id);
 

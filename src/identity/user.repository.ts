@@ -11,9 +11,14 @@ interface UserRow {
   readonly avatar_url: string | null;
   readonly system_role: SystemRole;
   readonly status: UserStatus;
+  readonly last_login_at: Date | null;
+  readonly last_login_provider: string | null;
   readonly created_at: Date;
   readonly updated_at: Date;
 }
+
+const USER_COLUMNS =
+  'id, tenant_id, primary_email, full_name, avatar_url, system_role, status, last_login_at, last_login_provider, created_at, updated_at';
 
 function mapRowToUser(row: UserRow): User {
   return {
@@ -24,6 +29,8 @@ function mapRowToUser(row: UserRow): User {
     avatarUrl: row.avatar_url,
     systemRole: row.system_role,
     status: row.status,
+    lastLoginAt: row.last_login_at,
+    lastLoginProvider: row.last_login_provider,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -69,7 +76,7 @@ export class UserRepository {
       const result = await client.query<UserRow>(
         `INSERT INTO users (tenant_id, primary_email, full_name, avatar_url, system_role, status)
          VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, tenant_id, primary_email, full_name, avatar_url, system_role, status, created_at, updated_at`,
+         RETURNING ${USER_COLUMNS}`,
         [
           tenantId,
           input.primaryEmail,
@@ -95,7 +102,7 @@ export class UserRepository {
   async findByEmail(tenantId: string, email: string): Promise<User | null> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<UserRow>(
-        `SELECT id, tenant_id, primary_email, full_name, avatar_url, system_role, status, created_at, updated_at
+        `SELECT ${USER_COLUMNS}
          FROM users
          WHERE tenant_id = $1 AND primary_email = $2`,
         [tenantId, email],
@@ -109,7 +116,7 @@ export class UserRepository {
   async findById(tenantId: string, userId: string): Promise<User | null> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<UserRow>(
-        `SELECT id, tenant_id, primary_email, full_name, avatar_url, system_role, status, created_at, updated_at
+        `SELECT ${USER_COLUMNS}
          FROM users
          WHERE tenant_id = $1 AND id = $2`,
         [tenantId, userId],
@@ -120,25 +127,28 @@ export class UserRepository {
   }
 
   /**
-   * Registra um login bem-sucedido: avança `INVITED` para `ACTIVE` e
-   * atualiza `last_login_at`. Não mexe em `status` se já for `ACTIVE` ou
-   * `DISABLED` — desabilitar um usuário é decisão explícita de um ADMIN,
-   * login nunca reverte isso. `DISCOVERED` também não avança aqui — nunca
-   * deveria chegar até este ponto (o callback OAuth barra antes, ver
-   * `auth.routes.ts`), mas o `CASE` já reflete a regra por segurança:
-   * materializar uma identidade rastreada (`POST .../discovered-users/materialize`)
-   * não deve, por si só, virar acesso à plataforma.
+   * Registra um login bem-sucedido: avança `INVITED` para `ACTIVE`,
+   * atualiza `last_login_at` e grava qual `AuthProvider` foi usado
+   * (`last_login_provider`, ex: 'github'/'google'/'microsoft'/'slack').
+   * Não mexe em `status` se já for `ACTIVE` ou `DISABLED` — desabilitar um
+   * usuário é decisão explícita de um ADMIN, login nunca reverte isso.
+   * `DISCOVERED` também não avança aqui — nunca deveria chegar até este
+   * ponto (o callback OAuth barra antes, ver `auth.routes.ts`), mas o
+   * `CASE` já reflete a regra por segurança: materializar uma identidade
+   * rastreada (`POST .../discovered-users/materialize`) não deve, por si
+   * só, virar acesso à plataforma.
    */
-  async markLoggedIn(tenantId: string, userId: string): Promise<User> {
+  async markLoggedIn(tenantId: string, userId: string, provider: string): Promise<User> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<UserRow>(
         `UPDATE users
          SET status = CASE WHEN status = 'INVITED' THEN 'ACTIVE' ELSE status END,
              last_login_at = NOW(),
+             last_login_provider = $3,
              updated_at = NOW()
          WHERE tenant_id = $1 AND id = $2
-         RETURNING id, tenant_id, primary_email, full_name, avatar_url, system_role, status, created_at, updated_at`,
-        [tenantId, userId],
+         RETURNING ${USER_COLUMNS}`,
+        [tenantId, userId, provider],
       );
 
       return mapRowToUser(result.rows[0]);
@@ -157,7 +167,7 @@ export class UserRepository {
         `UPDATE users
          SET status = 'INVITED', updated_at = NOW()
          WHERE tenant_id = $1 AND id = $2 AND status = 'DISCOVERED'
-         RETURNING id, tenant_id, primary_email, full_name, avatar_url, system_role, status, created_at, updated_at`,
+         RETURNING ${USER_COLUMNS}`,
         [tenantId, userId],
       );
 
@@ -169,7 +179,7 @@ export class UserRepository {
   async findAllByTenant(tenantId: string): Promise<readonly User[]> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<UserRow>(
-        `SELECT id, tenant_id, primary_email, full_name, avatar_url, system_role, status, created_at, updated_at
+        `SELECT ${USER_COLUMNS}
          FROM users
          WHERE tenant_id = $1
          ORDER BY full_name`,
