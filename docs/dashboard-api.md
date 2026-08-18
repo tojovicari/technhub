@@ -138,13 +138,14 @@ Flow Metrics (Distribution, Load/WIP, Velocity, Cycle Time). `distribution`/`wip
 
 ### Query params
 
-| Nome     | Formato      | Obrigatório | Default                                    |
-| -------- | ------------ | ----------- | ------------------------------------------- |
-| `teamId` | uuid         | Não         | tenant inteiro (sem filtro)                 |
-| `from`   | ISO 8601     | Não         | 30 dias atrás (mesmo default do DORA)       |
-| `to`     | ISO 8601     | Não         | agora                                       |
+| Nome        | Formato      | Obrigatório | Default                                    |
+| ----------- | ------------ | ----------- | ------------------------------------------- |
+| `teamId`    | uuid         | Não         | tenant inteiro (sem filtro)                 |
+| `from`      | ISO 8601     | Não         | 30 dias atrás (mesmo default do DORA)       |
+| `to`        | ISO 8601     | Não         | agora                                       |
+| `staleDays` | inteiro      | Não         | 30 (1–365, `400` fora disso)                |
 
-`from`/`to` só afetam `velocity`/`cycleTime` — `distribution`/`wip` continuam ignorando período, sempre o estado atual.
+`from`/`to` só afetam `velocity`/`cycleTime` — `distribution`/`wip`/`backlogHealth.aging`/`backlogHealth.stale` continuam ignorando período, sempre o estado atual (`backlogHealth.runway` é a exceção — ver abaixo). `staleDays` só afeta `backlogHealth.stale`.
 
 Filtra `distribution`/`wip` por `enriched_work_items.team_id`. Depende de como a integração Jira/Linear foi cadastrada:
 
@@ -173,6 +174,18 @@ Authorization: Bearer <accessToken>
   "period": { "from": "2026-06-28T15:24:27.040Z", "to": "2026-07-28T15:24:27.040Z" },
   "velocity": { "total": 0, "byDay": [], "scope": "team" },
   "cycleTime": { "available": false, "reason": "Nenhum work item concluído (completed_at) neste período ainda." },
+  "backlogHealth": {
+    "totalBacklog": 42,
+    "aging": [
+      { "label": "0-7d", "count": 5 },
+      { "label": "7-30d", "count": 12 },
+      { "label": "30-90d", "count": 14 },
+      { "label": "90-180d", "count": 8 },
+      { "label": "180d+", "count": 3 }
+    ],
+    "stale": { "thresholdDays": 30, "count": 25 },
+    "runway": { "available": false, "reason": "Nenhum item concluído no período — não dá pra estimar quanto tempo o backlog atual levaria." }
+  },
   "scope": "team"
 }
 ```
@@ -187,8 +200,13 @@ Authorization: Bearer <accessToken>
 - **`velocity`** — mesmo formato de `deploymentFrequency` no DORA (`total`/`byDay`/`scope?`): quantos work items foram concluídos (`completed_at`) no período, por dia. Não é mais sempre `available: false` — populado a partir do changelog de status do Jira/Linear.
 - **`cycleTime`** — mesmo formato de Lead Time/MTTR no DORA. Horas entre `started_working_at` (primeira vez que o item entrou num estado que conta como trabalho ativo) e `completed_at` (primeira vez que chegou em `DONE`) — "primeira", não "última", cobre reabertura sem contar tempo extra.
 - **`scope`** — presente só quando `?teamId=` é passado (`"team"`). Ausente na resposta tenant-wide.
+- **`backlogHealth`** (novo) — 3 sinais de "saúde do backlog", só sobre itens em `semantic_state = 'BACKLOG'` (mesma classificação configurável de sempre, `mapping_rules.workflowStates`). Deliberadamente sem nada de prioridade/esforço/story points — esses campos não existem no modelo canônico, forçar isso quebraria a mesma Semântica Flexível já seguida em `workItemType`/`workflowStates`. Só agregados (contagem), nunca lista de item individual.
+  - **`totalBacklog`** — quantos itens estão em `BACKLOG` agora.
+  - **`aging`** — distribuição por "há quanto tempo cada item está parado" (`created_at`), em 5 buckets fixos e não-configuráveis (`0-7d`/`7-30d`/`30-90d`/`90-180d`/`180d+` — corte de gráfico, não regra de negócio). Bucket sem nenhum item ainda aparece com `count: 0` (diferente de `distribution`, que omite categoria vazia).
+  - **`stale`** — quantos itens em `BACKLOG` não têm nenhum `updated_at` mais recente que `staleDays` (default 30) — "provavelmente esquecido". `thresholdDays` ecoa o valor efetivamente usado.
+  - **`runway`** — única peça de `backlogHealth` que depende de `period`: `totalBacklog` dividido pela velocidade média semanal do período (`velocity.total / semanas do período`). `available: false` quando `velocity.total` é `0` no período — dividir por zero seria `Infinity`, número enganoso; mesmo padrão de "nunca inventar um número" já usado em `changeFailureRate`/`cycleTime`.
 
-**Nota de configuração, não bug**: `velocity`/`cycleTime` dependem de `mapping_rules.workflowStates` cobrir os nomes de status reais usados no Jira/Linear daquele tenant. Um board cujos status não batem com nenhuma regra configurada fica com esses campos zerados/`available: false` mesmo tendo dado real — é sinal de regra semântica não configurada, não erro do sistema.
+**Nota de configuração, não bug**: `velocity`/`cycleTime`/`backlogHealth` dependem de `mapping_rules.workflowStates` cobrir os nomes de status reais usados no Jira/Linear daquele tenant. Um board cujos status não batem com nenhuma regra configurada fica com esses campos zerados/`available: false` mesmo tendo dado real — é sinal de regra semântica não configurada, não erro do sistema.
 
 ---
 
@@ -335,6 +353,7 @@ Nenhum campo do DORA fica permanentemente `available: false` nesta versão — `
 | --- | --- |
 | `400` | `from`/`to` (rotas `/dashboard/dora` **e** `/dashboard/flow`) não são datas ISO 8601 válidas — mesma validação, mesma mensagem nas duas. |
 | `400` | `weeks` (`/dashboard/dora/history`) fora do intervalo 1–52, ou não é inteiro. |
+| `400` | `staleDays` (`/dashboard/flow`) fora do intervalo 1–365, ou não é inteiro. |
 | `400` | `POST /timeline-events` sem `title`, ou `eventDate` não é ISO 8601 válido. |
 | `400` | `GET /timeline-events` com só `from` ou só `to` (os dois precisam vir juntos, ou nenhum). |
 | `401` | Token ausente/inválido/expirado. |

@@ -17,6 +17,7 @@ interface FlowQuery {
   readonly teamId?: string;
   readonly from?: string;
   readonly to?: string;
+  readonly staleDays?: string;
 }
 
 interface DoraHistoryQuery {
@@ -28,6 +29,9 @@ const DEFAULT_RANGE_DAYS = 30;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_HISTORY_WEEKS = 12;
 const MAX_HISTORY_WEEKS = 52;
+/** Limiar de "backlog parado" (`backlogHealth.stale`) — mesmo padrão de default/teto de `weeks`. */
+const DEFAULT_STALE_DAYS = 30;
+const MAX_STALE_DAYS = 365;
 
 function parseDateOrDefault(value: string | undefined, fallback: Date): Date | null {
   if (!value) {
@@ -105,7 +109,14 @@ export function registerDashboardRoutes(
         return reply.status(400).send({ error: '"from"/"to" precisam ser datas ISO 8601 válidas.' });
       }
 
-      const metrics = await dashboardService.getFlowMetrics(tenantId, from, to, request.query.teamId);
+      const parsedStaleDays = request.query.staleDays ? Number(request.query.staleDays) : DEFAULT_STALE_DAYS;
+      if (!Number.isInteger(parsedStaleDays) || parsedStaleDays < 1 || parsedStaleDays > MAX_STALE_DAYS) {
+        return reply
+          .status(400)
+          .send({ error: `"staleDays" precisa ser um inteiro entre 1 e ${MAX_STALE_DAYS}.` });
+      }
+
+      const metrics = await dashboardService.getFlowMetrics(tenantId, from, to, request.query.teamId, parsedStaleDays);
       return reply.status(200).send(metrics);
     },
   );
