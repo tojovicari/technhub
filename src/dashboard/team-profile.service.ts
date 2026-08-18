@@ -89,9 +89,16 @@ export interface EpicBreakdownMetric {
   readonly epics: readonly EpicWorkBreakdown[];
 }
 
+export interface TeamProfilePeriod {
+  readonly from: string;
+  readonly to: string;
+}
+
 export interface TeamProfile {
   readonly team: Team;
   readonly roster: readonly TeamMembershipWithUser[];
+  /** Eco do período efetivamente aplicado — `null` quando nenhum `from`/`to` foi passado (all-time, comportamento original). `wip`/`distribution`/`toilRatio` nunca respeitam o período (ver doc de `getContributors`). */
+  readonly period: TeamProfilePeriod | null;
   readonly wip: { readonly count: number; readonly perMember: number | null };
   readonly distribution: readonly FlowDistributionEntry[];
   readonly incidentsBySeverity: readonly { readonly severity: string; readonly count: number }[];
@@ -301,15 +308,22 @@ export class TeamProfileService {
     private readonly mappingRulesRepository: MappingRulesRepository = new MappingRulesRepository(),
   ) {}
 
-  async getProfile(tenantId: string, teamId: string): Promise<TeamProfile | null> {
+  async getProfile(
+    tenantId: string,
+    teamId: string,
+    period?: { readonly from: Date; readonly to: Date } | null,
+  ): Promise<TeamProfile | null> {
     const team = await this.teamRepository.findById(tenantId, teamId);
     if (!team) {
       return null;
     }
 
+    const periodFrom = period?.from ?? null;
+    const periodTo = period?.to ?? null;
+
     const [roster, aggregates] = await Promise.all([
       this.teamMembershipRepository.findByTeamWithUser(tenantId, teamId),
-      this.queryAggregates(tenantId, teamId),
+      this.queryAggregates(tenantId, teamId, periodFrom, periodTo),
     ]);
 
     const {
@@ -324,9 +338,15 @@ export class TeamProfileService {
       reworkRate,
     } = aggregates;
 
+    const resolvedPeriod: TeamProfilePeriod | null =
+      periodFrom !== null && periodTo !== null
+        ? { from: periodFrom.toISOString(), to: periodTo.toISOString() }
+        : null;
+
     return {
       team,
       roster,
+      period: resolvedPeriod,
       wip: { count: wipCount, perMember: roster.length > 0 ? wipCount / roster.length : null },
       distribution,
       incidentsBySeverity,
@@ -441,6 +461,8 @@ export class TeamProfileService {
   private async queryAggregates(
     tenantId: string,
     teamId: string,
+    periodFrom: Date | null,
+    periodTo: Date | null,
   ): Promise<{
     readonly wipCount: number;
     readonly distribution: readonly FlowDistributionEntry[];
@@ -488,9 +510,10 @@ export class TeamProfileService {
                FROM canonical_incidents ci
                JOIN enriched_incidents ei ON ei.id = ci.id
                WHERE ei.team_id = $1
+                 AND ($2::timestamptz IS NULL OR ci.triggered_at BETWEEN $2 AND $3)
                GROUP BY ci.severity
                ORDER BY ci.severity`,
-              [teamId],
+              [teamId, periodFrom, periodTo],
             )
             .then((result) => result.rows.map((row) => ({ severity: row.severity, count: Number(row.count) }))),
           client
@@ -499,8 +522,9 @@ export class TeamProfileService {
                FROM canonical_deployments cd
                JOIN enriched_deployments ed ON ed.id = cd.id
                WHERE ed.team_id = $1
+                 AND ($2::timestamptz IS NULL OR cd.started_at BETWEEN $2 AND $3)
                GROUP BY cd.status`,
-              [teamId],
+              [teamId, periodFrom, periodTo],
             )
             .then((result): DeploymentSuccessRateMetric | UnavailableMetric => {
               const success = Number(result.rows.find((row) => row.status === 'SUCCESS')?.count ?? 0);
@@ -522,8 +546,9 @@ export class TeamProfileService {
                  ON trl.provider = cpr.provider
                  AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
                  AND trl.external_resource_id = cpr.repository
-               WHERE cpr.state = 'MERGED' AND trl.team_id = $1`,
-              [teamId],
+               WHERE cpr.state = 'MERGED' AND trl.team_id = $1
+                 AND ($2::timestamptz IS NULL OR cpr.merged_at BETWEEN $2 AND $3)`,
+              [teamId, periodFrom, periodTo],
             )
             .then((result): PullRequestReviewHealthMetric | UnavailableMetric => {
               const totalMerged = Number(result.rows[0].total_merged);
@@ -543,9 +568,10 @@ export class TeamProfileService {
                FROM canonical_work_items cwi
                JOIN enriched_work_items ewi ON ewi.id = cwi.id
                WHERE ewi.team_id = $1 AND cwi.assignee_external_id IS NOT NULL
+                 AND ($2::timestamptz IS NULL OR (ewi.completed_at IS NOT NULL AND ewi.completed_at BETWEEN $2 AND $3))
                GROUP BY cwi.assignee_external_id
                ORDER BY count(*) DESC`,
-              [teamId],
+              [teamId, periodFrom, periodTo],
             )
             .then((result): ContributionConcentrationMetric | UnavailableMetric => {
               if (result.rows.length === 0) {
@@ -566,9 +592,10 @@ export class TeamProfileService {
                  AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
                  AND trl.external_resource_id = cpr.repository
                WHERE trl.team_id = $1 AND cpr.state = 'MERGED' AND cpr.author_external_id IS NOT NULL
+                 AND ($2::timestamptz IS NULL OR cpr.merged_at BETWEEN $2 AND $3)
                GROUP BY cpr.author_external_id
                ORDER BY count(*) DESC`,
-              [teamId],
+              [teamId, periodFrom, periodTo],
             )
             .then((result): ContributionConcentrationMetric | UnavailableMetric => {
               if (result.rows.length === 0) {
@@ -601,6 +628,7 @@ export class TeamProfileService {
                    AND trl.resource_type = (CASE cpr.provider WHEN 'github' THEN 'github_repository' WHEN 'azure_repos' THEN 'azure_repos_repository' ELSE NULL END)
                    AND trl.external_resource_id = cpr.repository
                  WHERE trl.team_id = $1 AND cpr.state = 'MERGED' AND cpr.merged_at IS NOT NULL
+                   AND ($2::timestamptz IS NULL OR cpr.merged_at BETWEEN $2 AND $3)
                )
                SELECT
                  SUM(mp.lines_added) AS total_lines,
@@ -613,7 +641,7 @@ export class TeamProfileService {
                      AND later.changed_files && mp.changed_files
                  )) AS churned_lines
                FROM merged_prs mp`,
-              [teamId],
+              [teamId, periodFrom, periodTo],
             )
             .then((result): ReworkRateMetric | UnavailableMetric => {
               const totalLinesAdded = Number(result.rows[0].total_lines ?? 0);

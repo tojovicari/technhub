@@ -21,6 +21,11 @@ interface ProfileHistoryQuery {
   readonly weeks?: string;
 }
 
+interface ProfileQuery {
+  readonly from?: string;
+  readonly to?: string;
+}
+
 interface ContributorsQuery {
   readonly from?: string;
   readonly to?: string;
@@ -41,19 +46,33 @@ interface EpicsQuery {
  * página de perfil de time do front. `ADMIN`/`GESTOR`-only, mesma régua de
  * `GET .../teams/:teamId/members` (o payload inclui o roster completo, com
  * capacidade/alocação por pessoa — mais sensível que um dashboard).
+ *
+ * `from`/`to` opcionais (os dois juntos ou nenhum) — mesmo espírito de
+ * `/profile/contributors`: aplicam a `deploymentSuccessRate`,
+ * `pullRequestReviewHealth`, `contributionConcentration` e `reworkRate`, e a
+ * `incidentsBySeverity`. Sem período, comportamento all-time original.
+ * `wip`/`distribution` (retrato de "agora") e `toilRatio` (travado no mês
+ * corrente) nunca respeitam o período.
  */
 export function registerTeamProfileRoutes(
   server: FastifyInstance,
   teamProfileService: TeamProfileService = new TeamProfileService(),
   teamTimelineService: TeamTimelineService = new TeamTimelineService(),
 ): void {
-  server.get<{ Params: TenantTeamParams }>(
+  server.get<{ Params: TenantTeamParams; Querystring: ProfileQuery }>(
     '/tenants/:tenantId/teams/:teamId/profile',
     { preHandler: [requireAuth, requireAdminOrManager, requireSameTenant] },
     async (request, reply) => {
       const { tenantId, teamId } = request.params;
+      const period = parseOptionalPeriod(request.query.from, request.query.to);
 
-      const profile = await teamProfileService.getProfile(tenantId, teamId);
+      if (period === 'invalid') {
+        return reply
+          .status(400)
+          .send({ error: '"from" e "to" precisam vir juntos, como datas ISO 8601 válidas.' });
+      }
+
+      const profile = await teamProfileService.getProfile(tenantId, teamId, period);
       if (!profile) {
         return reply.status(404).send({ error: 'Time não encontrado.' });
       }
