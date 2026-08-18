@@ -99,7 +99,7 @@ primary_region = "gru"
 
 > A rota `/health` retorna `200 { "status": "ok" }` — implementada em `src/http/server.ts`. Só confirma que o processo está de pé, não checa dependências (Postgres etc.).
 
-> Se um domínio próprio (ex: `api.moasy.tech`) for configurado depois, atualizar `PUBLIC_API_URL` e `GITHUB_OAUTH_CALLBACK_URL` — e o callback registrado no GitHub OAuth App.
+> Se um domínio próprio (ex: `api.moasy.tech`) for configurado depois, atualizar `PUBLIC_API_URL` e `*_OAUTH_CALLBACK_URL` de cada provider (`GITHUB_OAUTH_CALLBACK_URL`, `GOOGLE_OAUTH_CALLBACK_URL`, `MICROSOFT_OAUTH_CALLBACK_URL`, `SLACK_OAUTH_CALLBACK_URL`) — e o callback registrado no app OAuth de cada um.
 
 ---
 
@@ -120,6 +120,12 @@ fly secrets set \
   INTEGRATION_ENCRYPTION_KEY="..." \
   GITHUB_OAUTH_CLIENT_ID="..." \
   GITHUB_OAUTH_CLIENT_SECRET="..." \
+  GOOGLE_OAUTH_CLIENT_ID="..." \
+  GOOGLE_OAUTH_CLIENT_SECRET="..." \
+  MICROSOFT_OAUTH_CLIENT_ID="..." \
+  MICROSOFT_OAUTH_CLIENT_SECRET="..." \
+  SLACK_OAUTH_CLIENT_ID="..." \
+  SLACK_OAUTH_CLIENT_SECRET="..." \
   RESEND_API_KEY="..." \
   RESEND_FROM_EMAIL="..." \
   STRIPE_SECRET_KEY="..." \
@@ -145,6 +151,12 @@ O Fly redeploya automaticamente após `fly secrets set`.
 | `INTEGRATION_ENCRYPTION_KEY`  | ✅          | Chave usada por `pgp_sym_encrypt`/`pgp_sym_decrypt` pra criptografar credenciais de integrações no banco (32 chars, aleatório) |
 | `GITHUB_OAUTH_CLIENT_ID`      | ✅          | Client ID do GitHub OAuth App usado pro social login                                                                          |
 | `GITHUB_OAUTH_CLIENT_SECRET`  | ✅          | Client Secret do mesmo GitHub OAuth App                                                                                       |
+| `GOOGLE_OAUTH_CLIENT_ID`      | ✅          | Client ID do app OAuth do Google Cloud Console usado pro social login                                                         |
+| `GOOGLE_OAUTH_CLIENT_SECRET`  | ✅          | Client Secret do mesmo app do Google                                                                                          |
+| `MICROSOFT_OAUTH_CLIENT_ID`   | ✅          | Client ID (Application ID) do App Registration no Azure/Entra ID usado pro social login                                      |
+| `MICROSOFT_OAUTH_CLIENT_SECRET` | ✅        | Client Secret do mesmo App Registration                                                                                       |
+| `SLACK_OAUTH_CLIENT_ID`       | ✅          | Client ID do Slack App ("Sign in with Slack" / OIDC) usado pro social login                                                   |
+| `SLACK_OAUTH_CLIENT_SECRET`   | ✅          | Client Secret do mesmo Slack App                                                                                              |
 | `RESEND_API_KEY`              | ✅          | API key do Resend (envio de e-mail — convites, etc.)                                                                          |
 | `RESEND_FROM_EMAIL`           | ✅          | Remetente usado nos e-mails enviados via Resend                                                                               |
 | `STRIPE_SECRET_KEY`           | ✅          | Chave secreta do Stripe (`sk_live_...` em produção)                                                                           |
@@ -192,6 +204,12 @@ fly secrets set \
   INTEGRATION_ENCRYPTION_KEY="$(openssl rand -hex 16)" \
   GITHUB_OAUTH_CLIENT_ID="..." \
   GITHUB_OAUTH_CLIENT_SECRET="..." \
+  GOOGLE_OAUTH_CLIENT_ID="..." \
+  GOOGLE_OAUTH_CLIENT_SECRET="..." \
+  MICROSOFT_OAUTH_CLIENT_ID="..." \
+  MICROSOFT_OAUTH_CLIENT_SECRET="..." \
+  SLACK_OAUTH_CLIENT_ID="..." \
+  SLACK_OAUTH_CLIENT_SECRET="..." \
   RESEND_API_KEY="re_..." \
   RESEND_FROM_EMAIL="no-reply@moasy.tech" \
   STRIPE_SECRET_KEY="sk_live_..." \
@@ -291,6 +309,7 @@ fly postgres connect --app cto-ai-db
 - [ ] `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` com valores de **produção**
 - [ ] Endpoint de webhook registrado no Stripe Dashboard apontando para `https://cto-ai-api.fly.dev/webhooks/billing/stripe`
 - [ ] GitHub OAuth App com o callback de produção registrado (`GITHUB_OAUTH_CALLBACK_URL`)
+- [ ] Google/Microsoft/Slack OAuth Apps com o callback de produção registrado em cada um (`GOOGLE_OAUTH_CALLBACK_URL`, `MICROSOFT_OAUTH_CALLBACK_URL`, `SLACK_OAUTH_CALLBACK_URL`) — só marcar depois de validar cada provider de ponta a ponta
 - [ ] Migrations validadas antes de produção
 - [ ] `/health` retornando 200
 - [ ] `FLY_API_TOKEN` válido nos secrets do GitHub Actions
