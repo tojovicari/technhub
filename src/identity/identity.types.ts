@@ -31,6 +31,10 @@ export interface User {
   readonly avatarUrl: string | null;
   readonly systemRole: SystemRole;
   readonly status: UserStatus;
+  /** `null` pra quem nunca logou ainda (DISCOVERED/INVITED). */
+  readonly lastLoginAt: Date | null;
+  /** Provider (`AuthProvider.providerName`) usado no login mais recente — `null` junto com `lastLoginAt`. */
+  readonly lastLoginProvider: string | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }

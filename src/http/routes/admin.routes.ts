@@ -729,8 +729,10 @@ export function registerAdminRoutes(
    * impersona, não só o que o usuário-alvo teria. `id`/`primaryEmail`/
    * `avatarUrl` no `user` da resposta continuam sendo os da pessoa de
    * verdade — é só o `systemRole` do token que é elevado.
-   * `markLoggedIn`/`last_login_at` não são tocados: isso não é um login de
-   * verdade do usuário-alvo.
+   * `markLoggedIn`/`last_login_at`/`last_login_provider` não são tocados:
+   * isso não é um login de verdade do usuário-alvo — os dois campos no
+   * `user` da resposta refletem o histórico real da pessoa, sem mudar por
+   * causa desta impersonation.
    *
    * `Body.reason` é **opcional** por enquanto (decisão deliberada — não
    * quebra um front que ainda não manda corpo nenhum nessa rota); quando
