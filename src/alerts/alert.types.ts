@@ -17,7 +17,8 @@ export type AlertType =
   | 'users_limit_approaching'
   | 'teams_limit_approaching'
   | 'integrations_limit_approaching'
-  | 'deployment_frequency_source_ambiguous';
+  | 'deployment_frequency_source_ambiguous'
+  | 'team_archived';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical';
 
