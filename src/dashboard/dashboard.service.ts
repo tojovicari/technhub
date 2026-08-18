@@ -67,6 +67,28 @@ export interface FlowDistributionEntry {
   readonly count: number;
 }
 
+/** Corte de gráfico (aging do backlog), não regra de negócio — por isso fixo, não configurável por tenant (diferente de `epicGrouping`/`workItemType`). */
+export interface BacklogAgingBucket {
+  readonly label: '0-7d' | '7-30d' | '30-90d' | '90-180d' | '180d+';
+  readonly count: number;
+}
+
+/**
+ * "Saúde do backlog" — 3 conceitos praticamente de graça em cima do que já
+ * sincronizamos (sem coluna nova, sem regra nova). `totalBacklog`/`aging`/
+ * `stale` são retrato de agora (mesmo espírito de `distribution`/`wip`,
+ * ignoram `period`). `runway` é a única peça que usa `period` — reaproveita
+ * `velocity.total` já calculado na mesma chamada, sem query extra.
+ */
+export interface BacklogHealthMetric {
+  readonly totalBacklog: number;
+  readonly aging: readonly BacklogAgingBucket[];
+  /** Itens em `BACKLOG` sem nenhum update (`updated_at`) há mais de `thresholdDays` — "provavelmente esquecido". */
+  readonly stale: { readonly thresholdDays: number; readonly count: number };
+  /** Quantas semanas o backlog de hoje representa, no ritmo de conclusão do período (`totalBacklog / velocidade semanal média`). `available: false` sem nenhum item concluído no período — não dá pra estimar. */
+  readonly runway: { readonly available: true; readonly weeks: number } | UnavailableMetric;
+}
+
 export interface FlowMetrics {
   readonly distribution: readonly FlowDistributionEntry[];
   readonly wip: { readonly count: number };
@@ -79,6 +101,7 @@ export interface FlowMetrics {
   readonly period: { readonly from: string; readonly to: string };
   readonly velocity: DeploymentFrequencyMetric;
   readonly cycleTime: AvailableDurationMetric | UnavailableMetric;
+  readonly backlogHealth: BacklogHealthMetric;
   /**
    * Presente só quando `teamId` é passado. As 4 métricas de Flow
    * (`distribution`/`wip`/`velocity`/`cycleTime`) compartilham o mesmo
@@ -308,14 +331,35 @@ export class DashboardService {
    * número é filtrado e pode estar artificialmente baixo/zerado por falta de
    * vínculo, não só por ausência real de dado.
    */
-  async getFlowMetrics(tenantId: string, from: Date, to: Date, teamId?: string): Promise<FlowMetrics> {
+  async getFlowMetrics(
+    tenantId: string,
+    from: Date,
+    to: Date,
+    teamId: string | undefined,
+    staleDays: number,
+  ): Promise<FlowMetrics> {
     return withTenantContext(this.pool, tenantId, async (client) => {
-      const [distribution, wip, velocity, cycleTime] = await Promise.all([
+      const [distribution, wip, velocity, cycleTime, backlog] = await Promise.all([
         this.queryDistribution(client, teamId),
         this.queryWip(client, teamId),
         this.queryVelocity(client, from, to, teamId),
         this.queryCycleTime(client, from, to, teamId),
+        this.queryBacklogHealth(client, teamId, staleDays),
       ]);
+
+      // Semanas do período pedido (fracionário — não trunca) pra achar a
+      // velocidade média semanal a partir do total já calculado, sem query
+      // extra. `available: false` sem nenhum item concluído: dividir
+      // `totalBacklog` por zero seria `Infinity`, número enganoso.
+      const periodWeeks = (to.getTime() - from.getTime()) / (7 * 24 * 60 * 60 * 1000);
+      const weeklyVelocity = periodWeeks > 0 ? velocity.total / periodWeeks : 0;
+      const runway: BacklogHealthMetric['runway'] =
+        weeklyVelocity > 0
+          ? { available: true, weeks: backlog.totalBacklog / weeklyVelocity }
+          : {
+              available: false,
+              reason: 'Nenhum item concluído no período — não dá pra estimar quanto tempo o backlog atual levaria.',
+            };
 
       return {
         distribution,
@@ -323,6 +367,7 @@ export class DashboardService {
         period: { from: from.toISOString(), to: to.toISOString() },
         velocity,
         cycleTime,
+        backlogHealth: { totalBacklog: backlog.totalBacklog, aging: backlog.aging, stale: backlog.stale, runway },
         ...(teamId ? { scope: 'team' as const } : {}),
       };
     });
@@ -787,5 +832,66 @@ export class DashboardService {
     );
 
     return { count: Number(result.rows[0].count) };
+  }
+
+  /**
+   * Mesmo padrão de `getEpicBreakdown` — `created_at`/`updated_at` só
+   * existem em `canonical_work_items`, não em `enriched_work_items`, daí o
+   * `JOIN`. Buckets de aging + contagem de `stale` numa query só (`FILTER`),
+   * mesmo truque de `queryChangeFailureRate` pra índice de parâmetro
+   * condicional de `teamId`.
+   */
+  private async queryBacklogHealth(
+    client: PoolClient,
+    teamId: string | undefined,
+    staleDays: number,
+  ): Promise<{
+    readonly totalBacklog: number;
+    readonly aging: readonly BacklogAgingBucket[];
+    readonly stale: { readonly thresholdDays: number; readonly count: number };
+  }> {
+    const teamParamIndex = 1;
+    const staleParamIndex = teamId ? 2 : 1;
+    const params: unknown[] = [];
+    if (teamId) params.push(teamId);
+    params.push(staleDays);
+
+    const result = await client.query<{
+      bucket_0_7: string;
+      bucket_7_30: string;
+      bucket_30_90: string;
+      bucket_90_180: string;
+      bucket_180_plus: string;
+      stale_count: string;
+      total: string;
+    }>(
+      `SELECT
+         count(*) FILTER (WHERE cwi.created_at >= now() - interval '7 days') AS bucket_0_7,
+         count(*) FILTER (WHERE cwi.created_at < now() - interval '7 days' AND cwi.created_at >= now() - interval '30 days') AS bucket_7_30,
+         count(*) FILTER (WHERE cwi.created_at < now() - interval '30 days' AND cwi.created_at >= now() - interval '90 days') AS bucket_30_90,
+         count(*) FILTER (WHERE cwi.created_at < now() - interval '90 days' AND cwi.created_at >= now() - interval '180 days') AS bucket_90_180,
+         count(*) FILTER (WHERE cwi.created_at < now() - interval '180 days') AS bucket_180_plus,
+         count(*) FILTER (WHERE cwi.updated_at < now() - make_interval(days => $${staleParamIndex})) AS stale_count,
+         count(*) AS total
+       FROM canonical_work_items cwi
+       JOIN enriched_work_items ewi ON ewi.id = cwi.id
+       WHERE ewi.semantic_state = 'BACKLOG'
+       ${teamId ? `AND ewi.team_id = $${teamParamIndex}` : ''}`,
+      params,
+    );
+
+    const row = result.rows[0];
+
+    return {
+      totalBacklog: Number(row.total),
+      aging: [
+        { label: '0-7d', count: Number(row.bucket_0_7) },
+        { label: '7-30d', count: Number(row.bucket_7_30) },
+        { label: '30-90d', count: Number(row.bucket_30_90) },
+        { label: '90-180d', count: Number(row.bucket_90_180) },
+        { label: '180d+', count: Number(row.bucket_180_plus) },
+      ],
+      stale: { thresholdDays: staleDays, count: Number(row.stale_count) },
+    };
   }
 }
