@@ -46,6 +46,7 @@ import { registerBillingRoutes } from './routes/billing.routes';
 import { registerBillingWebhookRoutes } from './routes/billing-webhook.routes';
 import { registerAlertRoutes } from './routes/alerts.routes';
 import { registerAdminRoutes } from './routes/admin.routes';
+import { registerFeedbackRoutes } from './routes/feedback.routes';
 import { getPool } from '../database/pool';
 
 const server = Fastify({ logger: true });
@@ -94,6 +95,7 @@ registerBillingRoutes(server);
 registerBillingWebhookRoutes(server);
 registerAlertRoutes(server);
 registerAdminRoutes(server);
+registerFeedbackRoutes(server);
 
 const port = Number(process.env.PORT ?? 3000);
 

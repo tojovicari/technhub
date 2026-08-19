@@ -11,6 +11,8 @@ import { EnterpriseCheckoutLinkRepository } from './enterprise-checkout-link.rep
 import { AlertRepository } from '../alerts/alert.repository';
 import { BillingError } from './billing-errors';
 import type { EnterpriseCheckoutLink, Plan, Subscription } from './billing.types';
+import { SlackOpsNotifier, buildEventNotification } from '../ops-notifications/slack-ops-notifier';
+import { TenantRepository } from '../identity/tenant.repository';
 
 /** `stripePriceId` não entra aqui — sempre calculado internamente (`createPlan`/`updatePlan`), nunca aceito de fora. */
 export type CreatePlanServiceInput = Omit<CreatePlanInput, 'stripePriceId'>;
@@ -104,7 +106,40 @@ export class BillingService {
     private readonly stripeIndexRepository: StripeSubscriptionIndexRepository = new StripeSubscriptionIndexRepository(),
     private readonly alertRepository: AlertRepository = new AlertRepository(),
     private readonly enterpriseCheckoutLinkRepository: EnterpriseCheckoutLinkRepository = new EnterpriseCheckoutLinkRepository(),
+    private readonly slackOpsNotifier: SlackOpsNotifier = new SlackOpsNotifier(),
+    private readonly tenantRepository: TenantRepository = new TenantRepository(),
   ) {}
+
+  /**
+   * Notificação best-effort pro Slack de billing do operador
+   * (`SLACK_OPS_BILLING_CHANNEL_ID`) — nunca lança, billing já é fato
+   * consumado no banco neste ponto do código; Slack aqui é só um "heads
+   * up" secundário, mesmo espírito do email de convite
+   * (`sendInviteEmailBestEffort`, `users.routes.ts`). Chamado só nas
+   * transições notáveis (as mesmas que já geram um `AlertType` in-app),
+   * não em todo webhook — uma renovação mensal rotineira não deveria virar
+   * ruído no Slack.
+   */
+  private async notifyBillingSlack(
+    tenantId: string,
+    event: { readonly emoji: string; readonly title: string; readonly fields?: Readonly<Record<string, string>> },
+  ): Promise<void> {
+    const channelId = process.env.SLACK_OPS_BILLING_CHANNEL_ID;
+    if (!channelId) return;
+
+    const tenants = await this.tenantRepository.findManyByIds([tenantId]);
+    const tenantName = tenants[0]?.name ?? tenantId;
+    const { text, blocks } = buildEventNotification({
+      emoji: event.emoji,
+      title: event.title,
+      fields: { Tenant: tenantName, ...event.fields },
+    });
+
+    const result = await this.slackOpsNotifier.postMessage(channelId, text, blocks);
+    if (!result.success) {
+      console.error(`[BillingService] Falha ao notificar Slack de billing: ${result.error}`);
+    }
+  }
 
   async listPlans(): Promise<readonly Plan[]> {
     return this.planRepository.findPublicActive();
@@ -424,6 +459,11 @@ export class BillingService {
       message: `Sua assinatura foi cancelada. O acesso continua disponível até ${updated.currentPeriodEnd.toISOString()}.`,
       metadata: { planId: updated.planId, accessUntil: updated.currentPeriodEnd },
     });
+    await this.notifyBillingSlack(tenantId, {
+      emoji: '❌',
+      title: 'Assinatura cancelada',
+      fields: { Plano: updated.planId, 'Acesso até': updated.currentPeriodEnd.toLocaleDateString('pt-BR') },
+    });
 
     return { subscription: updated, accessUntil: updated.currentPeriodEnd };
   }
@@ -496,6 +536,11 @@ export class BillingService {
       title: 'Plano alterado',
       message: `Seu plano foi alterado para "${plan.displayName}" (sem cobrança).`,
       metadata: { planId },
+    });
+    await this.notifyBillingSlack(tenantId, {
+      emoji: '🆓',
+      title: 'Movido para o plano gratuito',
+      fields: { Plano: plan.displayName },
     });
 
     // Nenhum desses alertas ainda faz sentido depois da troca pra um plano
@@ -597,6 +642,14 @@ export class BillingService {
       message: `Sua assinatura foi confirmada no plano "${plan?.displayName ?? updated.planId}".`,
       metadata: { planId: updated.planId },
     });
+    await this.notifyBillingSlack(tenantId, {
+      emoji: '🎉',
+      title: 'Nova assinatura confirmada',
+      fields: {
+        Plano: plan?.displayName ?? updated.planId,
+        Valor: plan ? `${(plan.priceCents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}/mês` : '',
+      },
+    });
     // Uma confirmação nova supera qualquer aviso de cancelamento em aberto
     // — mesmo espírito de `onInvoicePaid` resolvendo `billing_past_due`.
     await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_subscription_cancelled', null);
@@ -655,12 +708,22 @@ export class BillingService {
         reason: 'payment_recovered',
       });
       await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_past_due', null);
+      await this.notifyBillingSlack(tenantId, {
+        emoji: '💰',
+        title: 'Pagamento recuperado',
+        fields: { Plano: updated.planId, Status: 'Assinatura voltou a ficar em dia' },
+      });
     }
 
     // Trial converteu pra pago (primeira cobrança bem-sucedida depois do
     // trial) — o aviso de "trial acabando" não faz mais sentido aberto.
     if (wasTrialing) {
       await this.alertRepository.resolveOpenAlerts(tenantId, 'billing_trial_ending_soon', null);
+      await this.notifyBillingSlack(tenantId, {
+        emoji: '🎉',
+        title: 'Trial converteu para pago',
+        fields: { Plano: updated.planId, Status: 'Primeira cobrança bem-sucedida' },
+      });
     }
 
     await this.billingEventRepository.create(tenantId, {
@@ -704,6 +767,11 @@ export class BillingService {
         message: 'O pagamento da assinatura falhou. Regularize a cobrança para evitar suspensão do acesso.',
         metadata: { planId: updated.planId, pastDueSince: updated.pastDueSince },
       });
+      await this.notifyBillingSlack(tenantId, {
+        emoji: '⚠️',
+        title: 'Pagamento falhou',
+        fields: { Plano: updated.planId },
+      });
     }
 
     await this.billingEventRepository.create(tenantId, {
@@ -743,6 +811,11 @@ export class BillingService {
         message: `Sua assinatura foi cancelada. O acesso continua disponível até ${updated.currentPeriodEnd.toISOString()}.`,
         metadata: { planId: updated.planId, accessUntil: updated.currentPeriodEnd },
       });
+      await this.notifyBillingSlack(tenantId, {
+        emoji: '❌',
+        title: 'Assinatura cancelada via Stripe Portal',
+        fields: { Plano: updated.planId, 'Acesso até': updated.currentPeriodEnd.toLocaleDateString('pt-BR') },
+      });
     }
 
     await this.billingEventRepository.create(tenantId, {
@@ -775,6 +848,11 @@ export class BillingService {
       title: 'Assinatura cancelada/expirada',
       message: 'A assinatura foi cancelada ou expirada. Acesse o billing para reativar.',
       metadata: { planId: updated.planId, reason: 'stripe_subscription_deleted' },
+    });
+    await this.notifyBillingSlack(tenantId, {
+      emoji: '💀',
+      title: 'Assinatura expirou / cancelada de vez',
+      fields: { Plano: updated.planId },
     });
     // Cobre o caso de trial cancelado automaticamente por falta de cartão
     // (`trial_settings.end_behavior: 'cancel'`) — o aviso de "trial
@@ -810,6 +888,11 @@ export class BillingService {
         ? `Seu período de teste termina em ${trialEndsAt.toLocaleDateString('pt-BR')}. Cadastre um cartão para continuar com acesso depois disso.`
         : 'Seu período de teste está terminando em breve.',
       metadata: { trialEndsAt },
+    });
+    await this.notifyBillingSlack(tenantId, {
+      emoji: '⏰',
+      title: 'Trial acabando em breve',
+      fields: { 'Termina em': trialEndsAt ? trialEndsAt.toLocaleDateString('pt-BR') : '' },
     });
 
     await this.billingEventRepository.create(tenantId, {

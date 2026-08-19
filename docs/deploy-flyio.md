@@ -126,6 +126,7 @@ fly secrets set \
   MICROSOFT_OAUTH_CLIENT_SECRET="..." \
   SLACK_OAUTH_CLIENT_ID="..." \
   SLACK_OAUTH_CLIENT_SECRET="..." \
+  SLACK_OPS_BOT_TOKEN="xoxb-..." \
   RESEND_API_KEY="..." \
   RESEND_FROM_EMAIL="..." \
   STRIPE_SECRET_KEY="..." \
@@ -157,6 +158,7 @@ O Fly redeploya automaticamente após `fly secrets set`.
 | `MICROSOFT_OAUTH_CLIENT_SECRET` | ✅        | Client Secret do mesmo App Registration                                                                                       |
 | `SLACK_OAUTH_CLIENT_ID`       | ✅          | Client ID do Slack App ("Sign in with Slack" / OIDC) usado pro social login                                                   |
 | `SLACK_OAUTH_CLIENT_SECRET`   | ✅          | Client Secret do mesmo Slack App                                                                                              |
+| `SLACK_OPS_BOT_TOKEN`         | ✅          | Bot Token (`xoxb-...`) de um Slack App **à parte** do login — posta feedback/eventos de billing no Slack do operador (`chat:write`/`files:write`). Não confundir com `SLACK_OAUTH_*` acima. |
 | `RESEND_API_KEY`              | ✅          | API key do Resend (envio de e-mail — convites, etc.)                                                                          |
 | `RESEND_FROM_EMAIL`           | ✅          | Remetente usado nos e-mails enviados via Resend                                                                               |
 | `STRIPE_SECRET_KEY`           | ✅          | Chave secreta do Stripe (`sk_live_...` em produção)                                                                           |
@@ -210,6 +212,7 @@ fly secrets set \
   MICROSOFT_OAUTH_CLIENT_SECRET="..." \
   SLACK_OAUTH_CLIENT_ID="..." \
   SLACK_OAUTH_CLIENT_SECRET="..." \
+  SLACK_OPS_BOT_TOKEN="xoxb-..." \
   RESEND_API_KEY="re_..." \
   RESEND_FROM_EMAIL="no-reply@moasy.tech" \
   STRIPE_SECRET_KEY="sk_live_..." \
