@@ -12,8 +12,8 @@ primary_region = "gru"
   SLACK_OAUTH_CALLBACK_URL   = "https://api.moasy.tech/auth/slack/callback"
   # IDs de canal, não segredo (o Bot Token que autentica é secret, ver
   # docs/deploy-flyio.md) — Slack App à parte do "Sign in with Slack" acima.
-  SLACK_OPS_FEEDBACK_CHANNEL_ID = "C0000000001"
-  SLACK_OPS_BILLING_CHANNEL_ID  = "C0000000002"
+  SLACK_OPS_FEEDBACK_CHANNEL_ID = "C0BR8LF7AG2"
+  SLACK_OPS_BILLING_CHANNEL_ID  = "C0BR2ED0CE7"
   AUTH_DEFAULT_LOGIN_PROVIDER = "github"
   NOTIFICATION_EMAIL_PROVIDER = "resend"
   # Sem isso explícito, cada máquina do app cai no default do código (20,
