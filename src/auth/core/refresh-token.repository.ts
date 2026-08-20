@@ -76,4 +76,22 @@ export class RefreshTokenRepository {
       ),
     );
   }
+
+  /**
+   * Revoga todos os refresh tokens de um usuário — usado por
+   * `UserRepository.disable` (`users.routes.ts`), pra barrar qualquer
+   * `POST /auth/refresh` futuro na hora. O `accessToken` já emitido
+   * continua válido até expirar sozinho (JWT stateless, TTL de 1h,
+   * `requireAuth` nunca consulta o banco) — mesma janela de exposição já
+   * aceita pra impersonation nesta base de código.
+   */
+  async revokeAllForUser(tenantId: string, userId: string): Promise<void> {
+    await withTenantContext(this.pool, tenantId, (client) =>
+      client.query(
+        `UPDATE refresh_tokens SET revoked_at = NOW()
+         WHERE tenant_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+        [tenantId, userId],
+      ),
+    );
+  }
 }

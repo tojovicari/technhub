@@ -201,4 +201,65 @@ export class UserRepository {
       return Number(result.rows[0].count);
     });
   }
+
+  /**
+   * Cancela um convite pendente (`INVITED`) ou desabilita um usuário
+   * ativo (`ACTIVE`) — mesma ação em pontos diferentes do ciclo de vida,
+   * daí um método só. `finishLoginForTenant` (`auth.routes.ts`) já
+   * bloqueia login pra `DISABLED`, isso só grava o status. `null` se não
+   * achar ou já estiver `DISABLED`.
+   */
+  async disable(tenantId: string, userId: string): Promise<User | null> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<UserRow>(
+        `UPDATE users
+         SET status = 'DISABLED', updated_at = NOW()
+         WHERE tenant_id = $1 AND id = $2 AND status != 'DISABLED'
+         RETURNING ${USER_COLUMNS}`,
+        [tenantId, userId],
+      );
+
+      return result.rows.length === 0 ? null : mapRowToUser(result.rows[0]);
+    });
+  }
+
+  /**
+   * Reverte um `disable` — restaura pro status certo, não sempre
+   * `ACTIVE`: quem nunca chegou a logar (convite cancelado antes de
+   * aceitar) volta pra `INVITED` (ainda precisa aceitar o convite); quem
+   * já tinha acesso de verdade (`last_login_at` preenchido) volta direto
+   * pra `ACTIVE`. `null` se não achar ou não estiver `DISABLED`.
+   */
+  async enable(tenantId: string, userId: string): Promise<User | null> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<UserRow>(
+        `UPDATE users
+         SET status = CASE WHEN last_login_at IS NOT NULL THEN 'ACTIVE' ELSE 'INVITED' END,
+             updated_at = NOW()
+         WHERE tenant_id = $1 AND id = $2 AND status = 'DISABLED'
+         RETURNING ${USER_COLUMNS}`,
+        [tenantId, userId],
+      );
+
+      return result.rows.length === 0 ? null : mapRowToUser(result.rows[0]);
+    });
+  }
+
+  /**
+   * Usado só pelo guard de "não desabilitar o último ADMIN" em
+   * `disable` (rota) — sem isso, um tenant pode ficar travado pra
+   * sempre (bootstrap só reabre com `countByTenant === 0`, e um usuário
+   * `DISABLED` ainda conta pra esse total).
+   */
+  async countActiveAdmins(tenantId: string): Promise<number> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM users
+         WHERE tenant_id = $1 AND system_role = 'ADMIN' AND status != 'DISABLED'`,
+        [tenantId],
+      );
+
+      return Number(result.rows[0].count);
+    });
+  }
 }
