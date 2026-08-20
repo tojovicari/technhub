@@ -455,3 +455,34 @@ quando houver uma base de tenants de verdade pra medir contra. O cron de
 `.github/workflows/sync.yml` continua desligado (só `workflow_dispatch`) por
 uma decisão à parte (frequência, não escala) — religar é uma ação separada,
 não decorre automaticamente deste fix.
+
+## Vercel: `external_group_key` era o `projectId` opaco, não o nome do projeto — corrigido
+
+**Contexto**: usuário reportou a tela de "vincular time" (candidatos de
+`GET .../team-resource-links/candidates?provider=vercel`) mostrando IDs
+crus (`prj_1vfLsOVNjHEu3X1liMN4KZuy1D7z`) em vez de nome de projeto — sem
+contexto nenhum pra escolher qual projeto é qual. Causa: `VercelProvider`
+(`src/integrations/providers/vercel/vercel.provider.ts`) usava
+`deployment.projectId` como `externalGroupKey`, diferente de GitHub/Jira/
+Linear/ArgoCD, onde esse identificador já é naturalmente legível (nome do
+repo, chave do projeto). A Vercel preenche `deployment.name` com o **nome
+do projeto** (não um nome de deployment à parte — já era usado assim em
+`serviceName` no mesmo arquivo), então a correção foi trocar
+`externalGroupKey` pra usar esse campo em vez do `projectId`.
+
+Mesmo trade-off que já existe pro nome de repo do GitHub (também pode ser
+renomeado, quebrando um vínculo já feito) — não é uma categoria de risco
+nova, é a mesma escolha "identificador legível, não 100% imutável" já
+aceita pro resto dos conectores.
+
+**Sem migration/backfill**: não havia nenhum `team_resource_links` de
+Vercel ainda em nenhum tenant no momento do fix (confirmado via query
+direta), então não existe vínculo velho pra quebrar. Só afeta
+`canonical_deployments` já sincronizados **antes** do fix, que ficam com
+`external_group_key = projectId` (o valor antigo) até o próximo sync —
+como não incrementa `updated_at` de forma que force reprocessamento
+automático, um `/resync` (force backfill, `POST .../integrations/:id/resync`,
+ver PR #10 desta sessão) nas 2 integrações Vercel já existentes é
+recomendado pra deixar o dado histórico consistente com o novo formato,
+mas não é bloqueante — o problema só apareceria de fato se alguém tivesse
+vinculado um time usando o `projectId` antigo, o que não tinha acontecido.

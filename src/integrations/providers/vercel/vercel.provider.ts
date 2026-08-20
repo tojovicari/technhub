@@ -58,7 +58,9 @@ interface VercelDeploymentsResponse {
  * `credentials.extra.projectId` **opcional**: informado, sincroniza só
  * aquele projeto Vercel; omitido, sincroniza todos os projetos visíveis ao
  * token e o time é resolvido depois via vínculo pós-sync (`vercel`+`vercel_project`,
- * `externalGroupKey = projectId`). `credentials.extra.vercelTeamId` também
+ * `externalGroupKey = deployment.name`, o nome do projeto — não
+ * `projectId`, que é opaco e apareceria cru na tela de vínculo).
+ * `credentials.extra.vercelTeamId` também
  * opcional — só necessário se o token for de conta pessoal usada num
  * contexto de time/org da Vercel (nome deliberadamente diferente de
  * `teamId`, que já é o time da nossa própria plataforma).
@@ -222,8 +224,15 @@ export class VercelProvider extends BaseProvider {
       startedAt: new Date(deployment.createdAt),
       finishedAt: this.isTerminalState(deployment.readyState) && deployment.ready ? new Date(deployment.ready) : null,
       // Projeto Vercel — mesmo padrão de `spec.project` do ArgoCD, alimenta
-      // o vínculo pós-sync (`vercel`+`vercel_project`).
-      externalGroupKey: deployment.projectId,
+      // o vínculo pós-sync (`vercel`+`vercel_project`). Usa `deployment.name`
+      // (a Vercel preenche isso com o nome do projeto, não um nome de
+      // deployment à parte — mesmo valor já usado em `serviceName` acima),
+      // não `deployment.projectId` — o `projectId` é opaco (`prj_...`),
+      // apareceria cru na tela de "vincular time" sem nenhum contexto,
+      // diferente do repo do GitHub/chave do Jira, que já são legíveis por
+      // natureza. Mesmo trade-off que já existe pro nome de repo do GitHub
+      // (também pode ser renomeado) — não é uma categoria de risco nova.
+      externalGroupKey: deployment.name,
     };
   }
 
