@@ -7,7 +7,8 @@ export interface InviteEmailContent {
 export interface BuildInviteEmailInput {
   readonly recipientName: string;
   readonly tenantName: string;
-  readonly loginUrl: string;
+  /** URL da tela de aceite do front (`/accept-invite?tenantId=`) — a pessoa escolhe entre os providers disponíveis lá, não é mais um link direto pra um provider fixo. */
+  readonly acceptInviteUrl: string;
 }
 
 function escapeHtml(value: string): string {
@@ -52,8 +53,8 @@ export function buildInviteEmailContent(input: BuildInviteEmailInput): InviteEma
     '',
     `Você foi convidado a entrar no workspace "${input.tenantName}" na moasy, a plataforma de Engineering Governance da sua equipe.`,
     '',
-    'Aceite o convite pelo link abaixo (entrada via GitHub):',
-    input.loginUrl,
+    'Aceite o convite pelo link abaixo:',
+    input.acceptInviteUrl,
     '',
     'Se você não esperava este convite, pode ignorar este email com segurança — nenhuma conta é criada até o link ser aberto.',
   ].join('\n');
@@ -92,9 +93,9 @@ export function buildInviteEmailContent(input: BuildInviteEmailInput): InviteEma
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                   <tr>
                     <td style="border-radius:8px; background-color:${COLOR_PRIMARY};">
-                      <a href="${input.loginUrl}"
+                      <a href="${input.acceptInviteUrl}"
                          style="display:inline-block; padding:12px 24px; font-size:15px; font-weight:600; color:${COLOR_PRIMARY_FOREGROUND}; text-decoration:none; border-radius:8px;">
-                        Aceitar convite com GitHub
+                        Aceitar convite
                       </a>
                     </td>
                   </tr>

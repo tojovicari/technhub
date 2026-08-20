@@ -19,14 +19,14 @@ class CapturingProvider extends NotificationProvider {
 NotificationProviderFactory.register('fake-capture', CapturingProvider);
 
 describe('NotificationService.sendInviteEmail', () => {
-  it('monta assunto/corpo com o loginUrl e delega ao provider configurado', async () => {
+  it('monta assunto/corpo com o acceptInviteUrl e delega ao provider configurado', async () => {
     const service = new NotificationService('fake-capture');
 
     const result = await service.sendInviteEmail({
       to: 'dev@example.com',
       recipientName: 'Dev Exemplo',
       tenantName: 'Acme Inc',
-      loginUrl: 'http://127.0.0.1:3000/auth/github/login?tenantId=abc-123',
+      acceptInviteUrl: 'http://localhost:5183/accept-invite?tenantId=abc-123',
     });
 
     assert.equal(result.success, true);
