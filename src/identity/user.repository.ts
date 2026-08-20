@@ -51,6 +51,19 @@ export interface CreateUserInput {
 }
 
 /**
+ * Atualização parcial (PATCH): só sobrescreve os campos presentes em
+ * `input`, via `COALESCE` contra o valor já gravado — mesmo padrão de
+ * `TeamRepository.update`. `primaryEmail` de propósito fora daqui (chave
+ * de casamento do login + dual-write em `user_email_directory`, trocar
+ * exigiria um fluxo próprio, não cabe numa edição simples de perfil).
+ */
+export interface UpdateUserInput {
+  readonly fullName?: string;
+  readonly avatarUrl?: string;
+  readonly systemRole?: SystemRole;
+}
+
+/**
  * Persistência da tabela `users` (`db/migrations/0006_create_users.sql`).
  *
  * `users` é tenant-scoped: toda escrita roda dentro de `withTenantContext`
@@ -95,6 +108,30 @@ export class UserRepository {
       });
 
       return user;
+    });
+  }
+
+  /**
+   * Atualização parcial: só sobrescreve o que vier em `input`. `null`
+   * quando o usuário não existe neste tenant. Trocar `systemRole` aqui
+   * não tem guard nenhum embutido — quem chama (`users.routes.ts`) já
+   * checa "não rebaixar o último ADMIN" antes de chegar aqui, mesmo
+   * espírito de `disable`.
+   */
+  async update(tenantId: string, userId: string, input: UpdateUserInput): Promise<User | null> {
+    return withTenantContext(this.pool, tenantId, async (client) => {
+      const result = await client.query<UserRow>(
+        `UPDATE users
+         SET full_name = COALESCE($3, full_name),
+             avatar_url = COALESCE($4, avatar_url),
+             system_role = COALESCE($5, system_role),
+             updated_at = NOW()
+         WHERE tenant_id = $1 AND id = $2
+         RETURNING ${USER_COLUMNS}`,
+        [tenantId, userId, input.fullName ?? null, input.avatarUrl ?? null, input.systemRole ?? null],
+      );
+
+      return result.rows.length === 0 ? null : mapRowToUser(result.rows[0]);
     });
   }
 
