@@ -25,6 +25,12 @@ interface CreateUserBody {
   readonly systemRole?: string;
 }
 
+interface UpdateUserBody {
+  readonly fullName?: string;
+  readonly avatarUrl?: string;
+  readonly systemRole?: string;
+}
+
 interface CreateAliasBody {
   readonly provider?: string;
   readonly externalUserId?: string;
@@ -195,6 +201,52 @@ export function registerUserRoutes(
       const { tenantId } = request.params;
       const users = await userRepository.findAllByTenant(tenantId);
       return reply.status(200).send(users);
+    },
+  );
+
+  /**
+   * Edita papel/nome/avatar de um usuário já existente — não existia
+   * nenhuma forma de trocar `systemRole` depois da criação até agora
+   * (só `POST /users`/`.../materialize` aceitavam esse campo). Mesmo
+   * RBAC de criar/convidar — trocar o papel de alguém é pelo menos tão
+   * sensível quanto criar. `primaryEmail` não é editável aqui de
+   * propósito (ver `UserRepository.update`).
+   *
+   * Mesmo guard do último ADMIN já usado em `disable`: rebaixar o único
+   * `ADMIN` do tenant deixaria ele sem ninguém com acesso de ADMIN, sem
+   * caminho de volta.
+   */
+  server.patch<{ Params: TenantUserParams; Body: UpdateUserBody }>(
+    '/tenants/:tenantId/users/:userId',
+    { preHandler: [requireAuth, requireAdmin, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, userId } = request.params;
+      const { fullName, avatarUrl, systemRole } = request.body;
+
+      if (systemRole !== undefined && !isSystemRole(systemRole)) {
+        return reply
+          .status(400)
+          .send({ error: `"systemRole" inválido. Use um de: ${VALID_SYSTEM_ROLES.join(', ')}.` });
+      }
+
+      const existing = await userRepository.findById(tenantId, userId);
+      if (!existing) {
+        return reply.status(404).send({ error: 'Usuário não encontrado.' });
+      }
+
+      if (systemRole !== undefined && systemRole !== 'ADMIN' && existing.systemRole === 'ADMIN') {
+        const activeAdmins = await userRepository.countActiveAdmins(tenantId);
+        if (activeAdmins <= 1) {
+          return reply.status(409).send({ error: 'Não é possível rebaixar o único ADMIN do tenant.' });
+        }
+      }
+
+      const updated = await userRepository.update(tenantId, userId, { fullName, avatarUrl, systemRole });
+      if (!updated) {
+        return reply.status(404).send({ error: 'Usuário não encontrado.' });
+      }
+
+      return reply.status(200).send(updated);
     },
   );
 
