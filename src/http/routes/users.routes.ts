@@ -12,6 +12,7 @@ import { NotificationService } from '../../notifications/notification.service';
 import { getFrontendUrl } from '../../config/frontend-url';
 import { BillingService } from '../../billing/billing.service';
 import { AlertRepository } from '../../alerts/alert.repository';
+import { RefreshTokenRepository } from '../../auth/core/refresh-token.repository';
 
 const VALID_SYSTEM_ROLES: readonly SystemRole[] = ['ADMIN', 'GESTOR', 'USUARIO'];
 const requireAdmin = requireRole('ADMIN');
@@ -121,6 +122,7 @@ export function registerUserRoutes(
   tenantRepository: TenantRepository = new TenantRepository(),
   billingService: BillingService = new BillingService(),
   alertRepository: AlertRepository = new AlertRepository(),
+  refreshTokenRepository: RefreshTokenRepository = new RefreshTokenRepository(),
 ): void {
   server.post<{ Params: TenantParams; Body: CreateUserBody }>(
     '/tenants/:tenantId/users',
@@ -301,6 +303,105 @@ export function registerUserRoutes(
       sendInviteEmailBestEffort(notificationService, tenantRepository, tenantId, invited);
 
       return reply.status(200).send(invited);
+    },
+  );
+
+  /**
+   * Reenvia o email de convite pra alguém já `INVITED` — perdeu o email,
+   * ou o link antigo não funcionava (achado investigando um caso real de
+   * produção). Não muda estado nenhum, só dispara o mesmo email de novo
+   * (reaproveita `sendInviteEmailBestEffort`, mesma função de sempre).
+   */
+  server.post<{ Params: TenantUserParams }>(
+    '/tenants/:tenantId/users/:userId/resend-invite',
+    { preHandler: [requireAuth, requireAdmin, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, userId } = request.params;
+
+      const existing = await userRepository.findById(tenantId, userId);
+      if (!existing) {
+        return reply.status(404).send({ error: 'Usuário não encontrado.' });
+      }
+      if (existing.status !== 'INVITED') {
+        return reply.status(409).send({
+          error: `Usuário está em status "${existing.status}" — só é possível reenviar convite pra quem está em "INVITED".`,
+        });
+      }
+
+      sendInviteEmailBestEffort(notificationService, tenantRepository, tenantId, existing);
+
+      return reply.status(204).send();
+    },
+  );
+
+  /**
+   * Cancela um convite pendente (`INVITED`) ou desabilita um usuário
+   * ativo (`ACTIVE`) — mesma ação em pontos diferentes do ciclo de vida.
+   * `finishLoginForTenant` (`auth.routes.ts`) já bloqueia login pra
+   * `DISABLED`, isso só grava o status + revoga qualquer refresh token
+   * já emitido (`accessToken` já emitido continua válido até expirar
+   * sozinho, TTL de 1h — ver `RefreshTokenRepository.revokeAllForUser`).
+   *
+   * Bloqueia desabilitar o **último `ADMIN`** do tenant — sem isso, o
+   * tenant fica travado pra sempre (bootstrap só reabre com
+   * `countByTenant === 0`, e um `DISABLED` ainda conta pra esse total).
+   */
+  server.post<{ Params: TenantUserParams }>(
+    '/tenants/:tenantId/users/:userId/disable',
+    { preHandler: [requireAuth, requireAdmin, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, userId } = request.params;
+
+      const existing = await userRepository.findById(tenantId, userId);
+      if (!existing) {
+        return reply.status(404).send({ error: 'Usuário não encontrado.' });
+      }
+      if (existing.status === 'DISABLED') {
+        return reply.status(409).send({ error: 'Usuário já está desabilitado.' });
+      }
+      if (existing.systemRole === 'ADMIN') {
+        const activeAdmins = await userRepository.countActiveAdmins(tenantId);
+        if (activeAdmins <= 1) {
+          return reply.status(409).send({ error: 'Não é possível desabilitar o único ADMIN do tenant.' });
+        }
+      }
+
+      const disabled = await userRepository.disable(tenantId, userId);
+      if (!disabled) {
+        return reply.status(409).send({ error: 'Usuário já está desabilitado.' });
+      }
+
+      await refreshTokenRepository.revokeAllForUser(tenantId, userId);
+
+      return reply.status(200).send(disabled);
+    },
+  );
+
+  /**
+   * Reverte um `disable` — restaura pro status certo (`ACTIVE` se a
+   * pessoa já tinha logado antes, `INVITED` se não), ver
+   * `UserRepository.enable`.
+   */
+  server.post<{ Params: TenantUserParams }>(
+    '/tenants/:tenantId/users/:userId/enable',
+    { preHandler: [requireAuth, requireAdmin, requireSameTenant] },
+    async (request, reply) => {
+      const { tenantId, userId } = request.params;
+
+      const existing = await userRepository.findById(tenantId, userId);
+      if (!existing) {
+        return reply.status(404).send({ error: 'Usuário não encontrado.' });
+      }
+      if (existing.status !== 'DISABLED') {
+        return reply.status(409).send({ error: 'Usuário não está desabilitado.' });
+      }
+
+      const enabled = await userRepository.enable(tenantId, userId);
+      if (!enabled) {
+        return reply.status(409).send({ error: 'Usuário não está desabilitado.' });
+      }
+
+      return reply.status(200).send(enabled);
     },
   );
 
