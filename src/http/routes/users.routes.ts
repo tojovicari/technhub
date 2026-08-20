@@ -9,7 +9,7 @@ import { requireAuth } from '../middleware/require-auth';
 import { requireRole } from '../middleware/require-role';
 import { requireSameTenant } from '../middleware/require-same-tenant';
 import { NotificationService } from '../../notifications/notification.service';
-import { getPublicApiUrl } from '../../config/public-api-url';
+import { getFrontendUrl } from '../../config/frontend-url';
 import { BillingService } from '../../billing/billing.service';
 import { AlertRepository } from '../../alerts/alert.repository';
 
@@ -58,6 +58,15 @@ function isSystemRole(value: string): value is SystemRole {
  * a resposta 201 — mesma filosofia de resiliência de
  * `SyncOrchestrator.persist()` (falha de uma etapa não derruba o fluxo
  * principal, só é logada).
+ *
+ * O link aponta pra uma tela do **front** (`/accept-invite?tenantId=`),
+ * não direto pro backend — antes ia hardcoded pro
+ * `AUTH_DEFAULT_LOGIN_PROVIDER` (GitHub em produção), o que deixava
+ * qualquer pessoa sem conta GitHub sem conseguir aceitar o convite de
+ * jeito nenhum (achado investigando um caso real de produção). A tela de
+ * aceite deixa a pessoa escolher entre os 4 providers — `GET
+ * /tenants/:tenantId/public-info` (já existia, nunca tinha sido consumida)
+ * dá o nome do workspace pra essa tela antes de qualquer OAuth acontecer.
  */
 function sendInviteEmailBestEffort(
   notificationService: NotificationService,
@@ -65,8 +74,8 @@ function sendInviteEmailBestEffort(
   tenantId: string,
   user: User,
 ): void {
-  const loginProvider = process.env.AUTH_DEFAULT_LOGIN_PROVIDER ?? 'github';
-  const loginUrl = `${getPublicApiUrl()}/auth/${loginProvider}/login?tenantId=${tenantId}`;
+  const acceptInviteUrl = new URL('/accept-invite', getFrontendUrl());
+  acceptInviteUrl.searchParams.set('tenantId', tenantId);
 
   // Nome do tenant é só pra copy do email (personalização) — busca best-effort
   // igual ao resto desta função: se falhar, cai pra um nome genérico em vez
@@ -76,7 +85,12 @@ function sendInviteEmailBestEffort(
     .then((tenants) => tenants[0]?.name ?? 'sua equipe')
     .catch(() => 'sua equipe')
     .then((tenantName) =>
-      notificationService.sendInviteEmail({ to: user.primaryEmail, recipientName: user.fullName, tenantName, loginUrl }),
+      notificationService.sendInviteEmail({
+        to: user.primaryEmail,
+        recipientName: user.fullName,
+        tenantName,
+        acceptInviteUrl: acceptInviteUrl.toString(),
+      }),
     )
     .then((result) => {
       if (!result.success) {

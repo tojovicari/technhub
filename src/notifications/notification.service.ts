@@ -16,7 +16,8 @@ export interface SendInviteEmailInput {
   readonly to: string;
   readonly recipientName: string;
   readonly tenantName: string;
-  readonly loginUrl: string;
+  /** URL da tela de aceite do front (`/accept-invite?tenantId=`), não um link direto de login — a pessoa escolhe o provider lá. */
+  readonly acceptInviteUrl: string;
 }
 
 export interface SendEnterpriseCheckoutLinkEmailInput {
@@ -64,7 +65,7 @@ export class NotificationService {
     const content = buildInviteEmailContent({
       recipientName: input.recipientName,
       tenantName: input.tenantName,
-      loginUrl: input.loginUrl,
+      acceptInviteUrl: input.acceptInviteUrl,
     });
 
     return this.sendEmail({

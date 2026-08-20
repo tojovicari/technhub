@@ -61,9 +61,7 @@ primary_region = "gru"
   PORT                        = "3000"
   NODE_ENV                    = "production"
   FRONTEND_URL                = "https://app.moasy.tech"
-  PUBLIC_API_URL              = "https://api.moasy.tech"
   GITHUB_OAUTH_CALLBACK_URL   = "https://api.moasy.tech/auth/github/callback"
-  AUTH_DEFAULT_LOGIN_PROVIDER = "github"
   NOTIFICATION_EMAIL_PROVIDER = "resend"
 
 [deploy]
@@ -99,7 +97,7 @@ primary_region = "gru"
 
 > A rota `/health` retorna `200 { "status": "ok" }` — implementada em `src/http/server.ts`. Só confirma que o processo está de pé, não checa dependências (Postgres etc.).
 
-> Se um domínio próprio (ex: `api.moasy.tech`) for configurado depois, atualizar `PUBLIC_API_URL` e `*_OAUTH_CALLBACK_URL` de cada provider (`GITHUB_OAUTH_CALLBACK_URL`, `GOOGLE_OAUTH_CALLBACK_URL`, `MICROSOFT_OAUTH_CALLBACK_URL`, `SLACK_OAUTH_CALLBACK_URL`) — e o callback registrado no app OAuth de cada um.
+> Se um domínio próprio (ex: `api.moasy.tech`) for configurado depois, atualizar `*_OAUTH_CALLBACK_URL` de cada provider (`GITHUB_OAUTH_CALLBACK_URL`, `GOOGLE_OAUTH_CALLBACK_URL`, `MICROSOFT_OAUTH_CALLBACK_URL`, `SLACK_OAUTH_CALLBACK_URL`) — e o callback registrado no app OAuth de cada um.
 
 ---
 
