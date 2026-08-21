@@ -11,7 +11,8 @@ export type ExternalResourceProvider =
   | 'azure_boards'
   | 'azure_repos'
   | 'azure_pipelines'
-  | 'vercel';
+  | 'vercel'
+  | 'incident_io';
 
 /** Tipo de recurso externo vinculável — cada um pertence a um único `ExternalResourceProvider`. */
 export type ExternalResourceType =
@@ -23,7 +24,8 @@ export type ExternalResourceType =
   | 'azure_boards_project'
   | 'azure_repos_repository'
   | 'azure_pipelines_project'
-  | 'vercel_project';
+  | 'vercel_project'
+  | 'incident_io_team';
 
 export interface TeamResourceLink {
   readonly id: string;

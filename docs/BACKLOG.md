@@ -486,3 +486,51 @@ ver PR #10 desta sessão) nas 2 integrações Vercel já existentes é
 recomendado pra deixar o dado histórico consistente com o novo formato,
 mas não é bloqueante — o problema só apareceria de fato se alguém tivesse
 vinculado um time usando o `projectId` antigo, o que não tinha acontecido.
+
+## Conector incident.io (Incident Management) — construído sem credencial real, revisitar no primeiro teste ao vivo
+
+**Contexto**: novo conector pluggable, mesma categoria (`incident`) e
+mesmo alvo canônico (`CanonicalIncident`) do Waroom já existente —
+mirror estrutural direto (`src/integrations/providers/incident-io/incident-io.provider.ts`).
+Pesquisado contra a documentação pública real da incident.io (fetch dos
+docs, não por memória) antes de implementar: autenticação `Authorization:
+Bearer <apiKey>`, paginação por cursor (`page_size`+`after`, o `after` é
+o `id` do último incidente da página anterior), schema do `Incident`
+confirmado (`severity`, `incident_status.category`,
+`incident_role_assignments`). Mesmo regime já aceito pra ArgoCD/Azure
+Boards/Repos/Pipelines: `npm run build` limpo, e um smoke test contra a
+API real da incident.io com uma `apiKey` falsa confirmou que o conector
+alcança `api.incident.io` de verdade (`401 Unauthorized` genuíno, não
+erro de rede/DNS) — mas isso não substitui um teste com dado real.
+
+Três pontos específicos, genuinamente configuráveis por workspace na
+incident.io (não uma lacuna de pesquisa, é como a ferramenta é
+desenhada) — a confirmar/ajustar assim que houver credencial real:
+
+1. **Severidade** (`severity.name`) é nome livre por workspace (defaults
+   comuns "Minor"/"Major"/"Critical", não "SEV1".."4") — normalizado por
+   palavra-chave no nome (`normalizeSeverity`), heurística não verificada
+   contra um workspace real. Se não bater, considerar buscar
+   `GET /v2/severities` e usar `rank` como fallback (não construído
+   ainda).
+2. **`resolvedAt` sem campo fixo na API** — incident.io rastreia isso via
+   `incident_timestamp_values`, também configurável por workspace (sem
+   ID padrão confiável sem uma chamada extra a
+   `GET /v2/incident_timestamps` por workspace). Aproximado por
+   `updated_at` quando `incident_status.category` já é terminal
+   (`learning`/`closed`/`declined`/`canceled`/`merged`), `null` caso
+   contrário.
+3. **Sem resolução de serviço/time** —
+   `serviceName`/`externalTeamId`/`externalTeamName` ficam `null` nesta
+   rodada; incident.io modela isso via Catalog/custom fields
+   configuráveis, sem um campo fixo equivalente ao `service_id` do
+   Waroom. `team-resource-links/candidates?provider=incident_io&resourceType=incident_io_team`
+   já está plugado (reaproveitando `IncidentRepository.findUnlinkedExternalTeams`,
+   agora genérico por provider — corrigido nesta rodada, antes tinha
+   `'waroom'` hardcoded na subquery), só sempre vazio até essa resolução
+   ser construída.
+
+`incident_role_assignments` (papel `lead`/`reporter`/`custom`,
+confirmado como enum fixo) é mais estruturado que o Waroom (que só tinha
+um `userId` cru, formato incerto) — dá pra montar uma identidade
+descoberta com nome/email reais, não só o ID.
