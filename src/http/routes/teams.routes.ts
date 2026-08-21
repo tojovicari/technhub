@@ -31,6 +31,7 @@ const VALID_RESOURCE_PROVIDERS: readonly ExternalResourceProvider[] = [
   'azure_repos',
   'azure_pipelines',
   'vercel',
+  'incident_io',
 ];
 const VALID_RESOURCE_TYPES: readonly ExternalResourceType[] = [
   'waroom_team',
@@ -38,6 +39,7 @@ const VALID_RESOURCE_TYPES: readonly ExternalResourceType[] = [
   'jira_project',
   'linear_team',
   'argocd_project',
+  'incident_io_team',
   'azure_boards_project',
   'azure_repos_repository',
   'azure_pipelines_project',
@@ -149,7 +151,15 @@ export function registerTeamRoutes(
       }
 
       if (provider === 'waroom' && resourceType === 'waroom_team') {
-        const candidates = await incidentRepository.findUnlinkedExternalTeams(tenantId);
+        const candidates = await incidentRepository.findUnlinkedExternalTeams(tenantId, 'waroom', 'waroom_team');
+        return reply.status(200).send(candidates);
+      }
+      if (provider === 'incident_io' && resourceType === 'incident_io_team') {
+        // Sempre vazio nesta rodada — o conector incident.io ainda não
+        // resolve serviço/time (externalTeamId sempre null, ver
+        // incident-io.provider.ts). Já fica plugado pro dia em que essa
+        // resolução existir, sem precisar de mais nada aqui.
+        const candidates = await incidentRepository.findUnlinkedExternalTeams(tenantId, 'incident_io', 'incident_io_team');
         return reply.status(200).send(candidates);
       }
       if (provider === 'github' && resourceType === 'github_repository') {

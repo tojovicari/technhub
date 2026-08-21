@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { getPool, withTenantContext } from '../../database/pool';
-import type { CanonicalIncident } from '../core/canonical.types';
+import type { CanonicalIncident, IncidentProvider } from '../core/canonical.types';
+import type { ExternalResourceType } from '../../identity/team-resource-link.repository';
 
 /** Um `CanonicalIncident` já persistido, com o `id` gerado pelo banco (necessário pra Enriched Layer). */
 export interface PersistedIncident extends CanonicalIncident {
@@ -202,29 +203,36 @@ export class IncidentRepository {
   }
 
   /**
-   * Times externos (`external_team_id`/`external_team_name`, resolvidos via
-   * Waroom service→team) já vistos em incidentes sincronizados que ainda
-   * não estão vinculados a nenhum time da plataforma — alimenta
-   * `GET /team-resource-links/candidates?provider=waroom&resourceType=waroom_team`.
+   * Times externos (`external_team_id`/`external_team_name`) já vistos em
+   * incidentes sincronizados **deste provider** que ainda não estão
+   * vinculados a nenhum time da plataforma — alimenta
+   * `GET /team-resource-links/candidates?provider=<provider>&resourceType=<resourceType>`.
+   * Genérico por provider (`provider`/`resourceType` parametrizados, mesmo
+   * padrão de `WorkItemRepository.findUnlinkedExternalGroups`) — antes só
+   * funcionava pra `waroom`/`waroom_team` hardcoded; corrigido ao adicionar
+   * o conector incident.io, que reaproveita este mesmo método.
    */
   async findUnlinkedExternalTeams(
     tenantId: string,
+    provider: IncidentProvider,
+    resourceType: ExternalResourceType,
   ): Promise<readonly { readonly externalTeamId: string; readonly externalTeamName: string | null }[]> {
     return withTenantContext(this.pool, tenantId, async (client) => {
       const result = await client.query<{ external_team_id: string; external_team_name: string | null }>(
         `SELECT DISTINCT external_team_id, external_team_name
          FROM canonical_incidents ci
          WHERE ci.tenant_id = $1
+           AND ci.provider = $2
            AND ci.external_team_id IS NOT NULL
            AND NOT EXISTS (
              SELECT 1 FROM team_resource_links trl
              WHERE trl.tenant_id = ci.tenant_id
-               AND trl.provider = 'waroom'
-               AND trl.resource_type = 'waroom_team'
+               AND trl.provider = ci.provider
+               AND trl.resource_type = $3
                AND trl.external_resource_id = ci.external_team_id
            )
          ORDER BY external_team_name NULLS LAST, external_team_id`,
-        [tenantId],
+        [tenantId, provider, resourceType],
       );
 
       return result.rows.map((row) => ({

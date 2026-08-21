@@ -9,6 +9,8 @@ import '../integrations/providers/jira/jira.provider';
 import '../integrations/providers/linear/linear.provider';
 // Efeito colateral: registra WaroomProvider no ProviderFactory.
 import '../integrations/providers/waroom/waroom.provider';
+// Efeito colateral: registra IncidentIoProvider no ProviderFactory.
+import '../integrations/providers/incident-io/incident-io.provider';
 // Efeito colateral: registra GitHubActionsProvider no ProviderFactory.
 import '../integrations/providers/github-actions/github-actions.provider';
 // Efeito colateral: registra ArgoCDProvider no ProviderFactory.

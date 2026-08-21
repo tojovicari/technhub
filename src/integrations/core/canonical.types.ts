@@ -31,7 +31,7 @@ export type VcsProvider = 'github' | 'gitlab' | 'azure_repos';
 export type CicdProvider = 'github_actions' | 'argocd' | 'azure_pipelines' | 'vercel';
 
 /** Provedores de Incident Management suportados no MVP. */
-export type IncidentProvider = 'waroom' | 'pagerduty';
+export type IncidentProvider = 'waroom' | 'pagerduty' | 'incident_io';
 
 /** Provedores de Comunicação suportados no MVP. */
 export type CommunicationProvider = 'slack' | 'teams';
